@@ -16,6 +16,8 @@ Do not jump straight to implementation.
 
 Start with a short brainstorming message.
 
+Be verbose enough to make the reasoning clear. Think out loud during brainstorming, planning, trade-off analysis, and implementation updates so the user can follow the decision process.
+
 Wait for explicit approval such as:
 
 ```text
