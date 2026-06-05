@@ -1,10 +1,20 @@
 # Agent Rules
 
-## Project Phase
+## Project Identity And Phase
 
-This project may become a full software system later, but the current phase is focused on the computer vision foundation first.
+This repository is for **Searchable Multi-Camera Event Intelligence**.
 
-For now, prioritize understanding and building the CV parts carefully before moving into product, backend, frontend, deployment, or large architecture work.
+The long-term goal is a full searchable video intelligence system that can turn camera footage into detections, tracks, trajectories, events, evidence, summaries, and searchable insights.
+
+The guiding pipeline is:
+
+```text
+video -> vision -> behavior -> events -> search -> insight
+```
+
+This project may become a full software product later, but the current phase is focused on the computer vision foundation first.
+
+For now, prioritize understanding and building the CV parts carefully before moving into product, backend, frontend, deployment, authentication, complex database design, or large architecture work.
 
 Do not rush into productization unless the user explicitly asks for it.
 
