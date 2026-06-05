@@ -18,6 +18,71 @@ For now, prioritize understanding and building the CV parts carefully before mov
 
 Do not rush into productization unless the user explicitly asks for it.
 
+## Current CV Focus
+
+The early project work should focus on computer vision capabilities, especially:
+
+- video inspection
+- person detection
+- person tracking
+- trajectory extraction
+- zone and line reasoning
+- dwell-time events
+- visual evidence
+- heatmaps and analytics
+- CV evaluation
+- searchable outputs after the CV outputs are meaningful
+
+Avoid treating the project as a dashboard, backend, or deployment project before the CV system produces useful structured outputs.
+
+## Recommended Phase Roadmap
+
+Build the project in focused phases:
+
+```text
+0. Project foundation
+1. Video inspection
+2. Person detection
+3. Person tracking
+4. Trajectory extraction
+5. Zone and line reasoning
+6. Dwell-time events
+7. Visual evidence
+8. Heatmaps and analytics
+9. CV evaluation
+10. Searchable outputs
+11. Productization later
+```
+
+Do not skip directly to later phases unless the user explicitly changes the project direction.
+
+## CV Subprojects
+
+Use CV subprojects for research-style experiments and milestones.
+
+Recommended pattern:
+
+```text
+cv_projects/
+  <number>_<capability>/
+    README.md
+    notebooks/
+    scripts/
+    configs/
+    outputs/
+    notes.md
+```
+
+Each subproject should focus on one meaningful CV capability, such as video inspection, person detection, person tracking, trajectory extraction, zone reasoning, dwell-time events, heatmap generation, or evaluation.
+
+Use notebooks for exploration, visualization, debugging, and observations.
+
+Use scripts for reproducible experiment runs.
+
+Move cleaned, stable, reusable logic into shared source modules later, after the experiment proves useful.
+
+Keep generated outputs separate from reusable source code.
+
 ## 1. Think First, Code Later
 
 Before writing code, explain what you are about to do, why that approach fits, and what alternatives exist.
