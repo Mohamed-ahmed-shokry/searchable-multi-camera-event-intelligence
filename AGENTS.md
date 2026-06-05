@@ -87,6 +87,8 @@ Keep generated outputs separate from reusable source code.
 
 Before writing code, explain what you are about to do, why that approach fits, and what alternatives exist.
 
+Also explain the smallest useful unit of work, the expected output, and how the change will be verified.
+
 Do not jump straight to implementation.
 
 Start with a short brainstorming message.
@@ -103,13 +105,17 @@ start coding
 
 before writing code.
 
+If the user asks for a plan, stay in planning and do not implement until they explicitly approve implementation.
+
 ## 2. Small Steps Only
 
 Break features into the smallest logical, testable unit.
 
-One step should correspond to one focused change.
+One step should correspond to one focused change that can be reviewed on its own.
 
 Do not bundle multiple unrelated features into one edit.
+
+Do not mix CV experiments, reusable module work, storage, dashboard work, and documentation in one change unless the user explicitly asks for that bundle.
 
 If a change feels large, split it and ask which part to start with.
 
@@ -117,7 +123,11 @@ If a change feels large, split it and ask which part to start with.
 
 For every file or function you add, explain what it does and why it exists.
 
+When changing existing behavior, explain the before/after intent and why the change is needed.
+
 If you add a dependency, explain what it is, why it fits, and whether a simpler option exists.
+
+After implementation, summarize what changed, what was not changed, how it was verified, and any known limitations.
 
 ## 4. Ask Before Assuming
 
@@ -125,11 +135,17 @@ If behavior, UI, shortcuts, library choice, or architecture is unclear, ask.
 
 If you must choose a default, say what default you picked and why.
 
+Important choices to clarify include dataset source, video source, model or tracker choice, event rule behavior, zone or line format, output artifact format, evaluation method, and storage format.
+
 ## 5. Never Delete Or Overwrite Silently
 
 If you need to replace working code, show the before/after intent and explain the reason.
 
 Ask for approval before replacing behavior that already works.
+
+Do not remove generated outputs, sample videos, notebooks, experiment notes, or existing results unless the user explicitly approves.
+
+Do not revert user changes unless the user explicitly asks for that.
 
 ## 6. Smallest-Part Commit Workflow
 
@@ -138,6 +154,10 @@ Commit each logical, testable part separately.
 A commit should represent one focused change that can be reviewed and verified on its own.
 
 Do not bundle unrelated edits into the same commit.
+
+Before committing, check the worktree and make sure only the intended files are staged.
+
+If the user asks for multiple parts, commit after each part before starting the next one.
 
 ## 7. Commit Message Guidelines
 
