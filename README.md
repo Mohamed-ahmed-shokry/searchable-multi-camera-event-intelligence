@@ -1,128 +1,301 @@
 # Searchable Multi-Camera Event Intelligence
 
-A system blueprint for turning multi-camera video footage into searchable event intelligence: detections, object tracks, trajectories, events, visual evidence, and analytics that can be queried after the fact.
+Searchable Multi-Camera Event Intelligence is a computer-vision-first project for turning video footage into structured intelligence: detections, tracks, trajectories, events, visual evidence, summaries, analytics, and eventually searchable review workflows.
 
-The project is intended for scenarios where raw footage is difficult to inspect manually, such as public-space monitoring, facility operations, retail analytics, traffic analysis, campus safety, and large event review.
-
-## What It Does
-
-- Ingests footage from multiple cameras or video files.
-- Detects objects, people, vehicles, and other entities of interest.
-- Tracks entities across frames and, where possible, across camera views.
-- Builds trajectories and time-based movement histories.
-- Extracts meaningful events from low-level detections.
-- Stores metadata so footage can be searched by time, camera, object, location, event type, or visual evidence.
-- Produces analytics that help investigators or operators understand what happened without scanning hours of video.
-
-## Example Questions
-
-The system is designed to support queries such as:
-
-- "Show all red vehicles seen near Gate 2 yesterday afternoon."
-- "Find people moving from Camera A to Camera C within five minutes."
-- "List crowding events near the entrance."
-- "Show trajectories for objects that entered a restricted area."
-- "Return the clips and frames that support this event."
-
-## Core Pipeline
+The long-term vision is a full video intelligence system. The current priority is smaller and more deliberate: build the computer vision foundation first.
 
 ```text
-Video sources
-    -> Frame extraction
-    -> Object detection
-    -> Single-camera tracking
-    -> Cross-camera association
-    -> Trajectory generation
-    -> Event detection
-    -> Evidence packaging
-    -> Search and analytics
+video -> vision -> behavior -> events -> search -> insight
 ```
 
-## Planned Components
+## Core Idea
 
-| Component | Purpose |
-| --- | --- |
-| Ingestion | Register cameras, video files, timestamps, and scene metadata. |
-| Detection | Run computer vision models over sampled or full-rate frames. |
-| Tracking | Maintain object identities within each camera stream. |
-| Re-identification | Match entities across cameras using appearance, timing, and spatial constraints. |
-| Event Engine | Convert tracks and detections into higher-level events. |
-| Storage | Persist videos, frames, detections, tracks, embeddings, events, and evidence links. |
-| Search API | Query by event, object attributes, camera, time window, trajectory, or similarity. |
-| Analytics UI | Review timelines, maps, camera views, event summaries, and supporting evidence. |
+This project is not just an object detection demo, and it is not a dashboard project with a detector attached.
 
-## Data Model
+The goal is to understand what happens in video by moving through a complete CV reasoning pipeline:
 
-At a high level, the system revolves around these records:
+```text
+video source
+-> frame inspection
+-> object detection
+-> single-camera tracking
+-> trajectory extraction
+-> spatial reasoning
+-> event generation
+-> visual evidence
+-> structured outputs
+-> searchable review later
+```
 
-- `Camera`: camera identity, location, calibration, and field-of-view metadata.
-- `Video`: source footage, timestamps, frame rate, and storage reference.
-- `Detection`: frame-level object prediction with class, confidence, and bounding box.
-- `Track`: object identity over time within one camera.
-- `Trajectory`: movement path derived from one or more tracks.
-- `Event`: semantic activity inferred from detections, tracks, and rules or models.
-- `Evidence`: frames, clips, crops, and metadata that support an event or search result.
+Early work should prove that the system can understand movement and behavior in video before investing in backend, frontend, deployment, or product features.
 
-## Search Capabilities
+## Current Project Phase
 
-Useful search dimensions include:
+This repository may become a full software system later, but the current phase is focused on the computer vision foundation.
 
-- Time range
-- Camera or camera group
-- Object class
-- Object attributes such as color, size, direction, or speed
-- Region of interest
-- Event type
-- Track identity
-- Cross-camera movement
-- Visual similarity
-- Confidence score
+The first practical direction is single-camera, person-focused video intelligence:
 
-## Suggested Technology Stack
+- inspect one video source
+- detect people
+- track people over time
+- extract trajectories
+- reason about zones and lines
+- generate meaningful events
+- save visual evidence
+- produce structured outputs
+- evaluate what works and what fails
 
-This repository does not yet prescribe a final implementation stack. A practical starting point could include:
+Productization comes later, after the CV outputs are useful.
 
-- Python for video processing and model orchestration
-- OpenCV or PyAV for video decoding
-- YOLO, Detectron2, or similar models for detection
-- DeepSORT, ByteTrack, OC-SORT, or similar methods for tracking
-- A vector database for appearance embeddings
-- PostgreSQL or SQLite for structured metadata
-- FastAPI for a search and analytics API
-- React or another frontend framework for review workflows
+## Questions The System Should Eventually Answer
+
+The project should grow toward answering questions such as:
+
+- Who appeared in this video?
+- Where did each person move?
+- Which zones did they enter or exit?
+- Which lines did they cross?
+- How long did they stay in an area?
+- Which events were important?
+- What snapshot, crop, or clip supports each event?
+- Can the results be searched after processing?
+- Can activity be summarized across videos or cameras later?
+
+## CV-First Development Philosophy
+
+The project should grow in this order:
+
+```text
+CV experiment
+-> reusable CV module
+-> event intelligence pipeline
+-> searchable outputs
+-> inspection dashboard
+-> full product later
+```
+
+The early goal is engineering depth, not a polished application shell.
+
+Prefer focused experiments that answer:
+
+- What problem does this CV capability solve?
+- What input does it need?
+- What output does it produce?
+- How can the output be visually checked?
+- How can it be evaluated?
+- What are its limitations?
+- How could it become part of the main system later?
+
+## Main CV Capabilities
+
+The current roadmap focuses on these capabilities:
+
+- video inspection
+- person detection
+- person tracking
+- trajectory extraction
+- polygon zone reasoning
+- line crossing detection
+- dwell-time analysis
+- event lifecycle and deduplication
+- snapshots and crops as visual evidence
+- heatmaps and activity analytics
+- CV evaluation
+- structured searchable outputs
+
+Advanced features can come later, including multi-camera processing, cross-camera identity association, real-time streams, custom training, and richer product workflows.
+
+## Project Roadmap
+
+Build the project in phases. Each phase should be small enough to test, review, and document on its own.
+
+| Phase | Focus | Goal |
+| --- | --- | --- |
+| 0 | Project foundation | Define direction, rules, docs, and experiment style. |
+| 1 | Video inspection | Read video metadata and inspect sample frames. |
+| 2 | Person detection | Detect people and produce annotated visual proof. |
+| 3 | Person tracking | Assign stable IDs to people over time. |
+| 4 | Trajectory extraction | Convert tracks into timestamped movement paths. |
+| 5 | Zone and line reasoning | Detect zone entry, zone exit, and line crossing. |
+| 6 | Dwell-time events | Measure time in zones and generate clean events. |
+| 7 | Visual evidence | Save snapshots and crops that support events. |
+| 8 | Heatmaps and analytics | Summarize movement and activity patterns. |
+| 9 | CV evaluation | Measure quality, speed, failures, and limitations. |
+| 10 | Searchable outputs | Query structured CV results without a full product. |
+| 11 | Productization later | Add dashboard, API, database, jobs, auth, and deployment when justified. |
+
+Do not skip directly to productization unless the project direction changes explicitly.
+
+## CV Subprojects
+
+Use `cv_projects/` for research-style computer vision experiments and milestones.
+
+Recommended structure:
+
+```text
+cv_projects/
+  01_video_inspection/
+  02_person_detection/
+  03_person_tracking/
+  04_trajectory_extraction/
+  05_zone_line_reasoning/
+  06_dwell_time_events/
+  07_visual_evidence/
+  08_heatmaps_analytics/
+  09_cv_evaluation/
+  10_searchable_outputs/
+```
+
+Each subproject should focus on one meaningful CV capability, not a whole product feature.
+
+## Notebook-Based Workflow
+
+Each CV subproject should support exploration and reproducibility.
+
+Recommended subproject layout:
+
+```text
+cv_projects/<number>_<capability>/
+  README.md
+  notebooks/
+    01_explore_<topic>.ipynb
+  scripts/
+    run_<capability>.py
+  configs/
+    <capability>.yaml
+  outputs/
+  notes.md
+```
+
+Use notebooks for:
+
+- exploration
+- visual debugging
+- comparing ideas
+- reviewing failures
+- recording observations
+
+Use scripts for:
+
+- reproducible runs
+- consistent outputs
+- repeatable demos
+
+Use shared source modules later for:
+
+- stable reusable CV logic
+- cleaned implementations
+- code that has moved beyond one experiment
+
+The intended flow is:
+
+```text
+notebook exploration -> reproducible script -> reusable module
+```
+
+## Expected Output Artifacts
+
+Each processed run may eventually produce artifacts such as:
+
+```text
+outputs/runs/<run_id>/
+  summary.json
+  detections.csv
+  tracks.csv
+  trajectories.csv
+  events.csv
+  annotated_video.mp4
+  heatmap.png
+  snapshots/
+  crops/
+  evaluation_report.md
+```
+
+Not every phase needs every artifact. Early phases should produce only the outputs needed to verify that specific CV capability.
+
+## Event Intelligence Direction
+
+The system should not generate noisy frame-by-frame alerts. Event logic should eventually reason about state over time.
+
+Example event types:
+
+- zone entry
+- zone exit
+- line crossing
+- dwell-time event
+- stopped person or object
+- occupancy alert
+- restricted-zone entry
+- heatmap generated
+
+Important event principle:
+
+```text
+one meaningful behavior -> one clean event
+```
+
+For example, if a person stays in a zone for more than a threshold, the system should generate one dwell-time event, not hundreds of repeated frame alerts.
+
+## Searchable Outputs Direction
+
+Search comes after useful CV outputs exist.
+
+Start with structured search over exported artifacts, such as:
+
+- event type
+- video
+- time range
+- track ID
+- zone
+- line
+- duration
+- evidence path
+
+Natural-language search, dashboards, APIs, and product workflows can come later.
+
+## What Is Deferred
+
+Do not start with:
+
+- React dashboard
+- backend API
+- authentication
+- deployment
+- cloud infrastructure
+- complex database design
+- real-time RTSP processing
+- custom model training
+- multi-camera re-identification
+- license plate recognition
+- face recognition
+- large product architecture
+
+These can be valuable later, but the first priority is a working CV intelligence pipeline.
 
 ## Repository Status
 
-This repository currently contains the project description and license. Implementation files, setup scripts, datasets, and model configuration are expected to be added as the project evolves.
+The repository is currently in the planning and foundation stage.
 
-## Getting Started
+Current completed foundation work:
 
-Until the implementation is added, contributors can help by refining:
+- project direction defined
+- agent rules added in `AGENTS.md`
+- CV-first roadmap agreed
+- notebook-based subproject workflow agreed
 
-1. Requirements and target use cases
-2. Camera and video metadata schema
-3. Detection and tracking model choices
-4. Event taxonomy
-5. Search API design
-6. Evaluation metrics
-7. Privacy, retention, and access-control requirements
+Next recommended step:
 
-## Roadmap
-
-- Define the initial data schema.
-- Add a minimal video ingestion pipeline.
-- Add object detection over sample video.
-- Persist detection metadata.
-- Add single-camera tracking.
-- Add event extraction rules.
-- Expose a searchable API.
-- Add visual evidence export.
-- Build a lightweight review dashboard.
-- Evaluate accuracy, latency, and storage cost.
+```text
+Create docs/project_phases.md or start cv_projects/01_video_inspection/
+```
 
 ## Responsible Use
 
-Video intelligence systems can affect privacy, safety, and civil rights. Deployments should include clear purpose limits, consent or legal basis where required, access controls, audit logs, retention limits, and human review for consequential decisions.
+Video intelligence systems can affect privacy, safety, and civil rights.
+
+Future deployments should consider purpose limits, legal basis or consent where required, access controls, audit logs, retention limits, and human review for consequential decisions.
+
+This repository should avoid identity claims or sensitive recognition features unless they are explicitly justified, documented, and reviewed.
 
 ## License
 
