@@ -289,14 +289,6 @@ Next recommended step:
 Create docs/project_phases.md or start cv_projects/01_video_inspection/
 ```
 
-## Responsible Use
-
-Video intelligence systems can affect privacy, safety, and civil rights.
-
-Future deployments should consider purpose limits, legal basis or consent where required, access controls, audit logs, retention limits, and human review for consequential decisions.
-
-This repository should avoid identity claims or sensitive recognition features unless they are explicitly justified, documented, and reviewed.
-
 ## License
 
 This project is licensed under the Apache License 2.0. See [LICENSE](LICENSE) for details.
