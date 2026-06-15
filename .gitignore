@@ -216,3 +216,10 @@ __marimo__/
 
 # Streamlit
 .streamlit/secrets.toml
+
+# Project artifacts and footage (keep dirs tracked, contents out of git)
+/data/*
+!/data/README.md
+/outputs/
+cv_projects/**/outputs/*
+!cv_projects/**/outputs/.gitkeep
