@@ -274,14 +274,18 @@ These can be valuable later, but the first priority is a working CV intelligence
 
 ## Repository Status
 
-The repository is currently in the planning and foundation stage.
+The repository is in **Phase 1 — Video Inspection**. Phase 0 (foundation) is complete.
 
-Current completed foundation work:
+Completed foundation work:
 
 - project direction defined
 - agent rules added in `AGENTS.md`
 - CV-first roadmap agreed
 - notebook-based subproject workflow agreed
+- canonical phase plan in `docs/project_phases.md`
+- Phase 1 subproject scaffold at `cv_projects/01_video_inspection/`
+- `data/README.md` provenance template
+- Phase 1 dependencies added (`opencv-python`, `numpy`, `jupyter`)
 
 Next recommended step:
 
