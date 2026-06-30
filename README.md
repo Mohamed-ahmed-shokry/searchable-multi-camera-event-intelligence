@@ -146,7 +146,7 @@ cv_projects/
   10_searchable_outputs/
 ```
 
-Each subproject should focus on one meaningful CV capability, not a whole product feature.
+Each subproject should focus on meaningful CV capability, not a whole product feature.
 
 ## Notebook-Based Workflow
 
@@ -166,19 +166,6 @@ cv_projects/<number>_<capability>/
   outputs/
   notes.md
 ```
-
-Use notebooks for:
-
-- exploration
-- visual debugging
-- comparing ideas
-- reviewing failures
-- recording observations
-
-Use scripts for:
-
-- reproducible runs
-- consistent outputs
 - repeatable demos
 
 Use shared source modules later for:
