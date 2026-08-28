@@ -51,10 +51,13 @@ Build the project in focused phases:
 8. Heatmaps and analytics
 9. CV evaluation
 10. Searchable outputs
-11. Productization later
+11. CV pipeline integration (src/event_intelligence/)
+12. Productization later (deferred)
 ```
 
 Do not skip directly to later phases unless the user explicitly changes the project direction.
+See `docs/project_phases.md` for the canonical plan: locked decisions, per-phase Definition of
+Done, and the dependency introduction schedule.
 
 ## CV Subprojects
 

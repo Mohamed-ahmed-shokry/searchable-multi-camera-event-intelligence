@@ -122,9 +122,12 @@ Build the project in phases. Each phase should be small enough to test, review, 
 | 8 | Heatmaps and analytics | Summarize movement and activity patterns. |
 | 9 | CV evaluation | Measure quality, speed, failures, and limitations. |
 | 10 | Searchable outputs | Query structured CV results without a full product. |
-| 11 | Productization later | Add dashboard, API, database, jobs, auth, and deployment when justified. |
+| 11 | CV pipeline integration | Consolidate proven experiments into one runnable `src/event_intelligence/` system. |
+| 12 | Productization later | Add dashboard, API, database, jobs, auth, and deployment when justified. |
 
-Do not skip directly to productization unless the project direction changes explicitly.
+Do not skip directly to productization unless the project direction changes explicitly. See
+[docs/project_phases.md](docs/project_phases.md) for the canonical, detailed phase plan
+(Definition of Done per phase, locked decisions, dependency schedule).
 
 ## CV Subprojects
 
