@@ -12,8 +12,17 @@ _One entry per source once footage is acquired and inspected._
 
 ## Decisions
 
-_(none yet)_
+- `VideoSource` auto-detects frame-sequence sources by the presence of
+  `seqinfo.ini` in the given directory; everything else is treated as a video
+  file opened via OpenCV `VideoCapture`. Keeps the two input shapes required
+  by MOT17 (frames) and everything else (video files) behind one interface
+  without a format flag the caller has to get right.
+- Verified `video_source.py` and `inspect_video.py` against synthetic test
+  data (`data/_synthetic_test/`, not committed — gitignored) since no real
+  footage is in `data/` yet. This confirms the code is correct; it does not
+  substitute for the real scene-quality assessment below, which needs actual
+  MOT17/VIRAT (or fallback) footage.
 
 ## Failures / Limitations
 
-_(none yet)_
+_(none yet — pending real footage)_
