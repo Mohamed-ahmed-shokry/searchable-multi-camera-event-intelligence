@@ -183,6 +183,21 @@ class InspectionTests(unittest.TestCase):
             self.assertNotIn("Traceback", result.stderr)
             self.assertFalse(output.exists())
 
+    def test_oversized_sequence_length_has_clean_cli_error(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            source = make_sequence(root)
+            metadata = source / "seqinfo.ini"
+            metadata.write_text(metadata.read_text().replace("seqLength=5", "seqLength=" + "9" * 400))
+            output = root / "run"
+            result = subprocess.run(
+                [sys.executable, str(INSPECTION_SCRIPTS / "inspect_video.py"), str(source), "--output-dir", str(output)],
+                cwd=root, text=True, capture_output=True, check=False,
+            )
+            self.assertEqual(result.returncode, 2)
+            self.assertNotIn("Traceback", result.stderr)
+            self.assertFalse(output.exists())
+
 
 if __name__ == "__main__":
     unittest.main()

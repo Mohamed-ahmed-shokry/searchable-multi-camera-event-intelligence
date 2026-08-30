@@ -76,6 +76,7 @@ class VideoSourceTests(unittest.TestCase):
             ("seqLength", "-1"), ("seqLength", "4"), ("seqLength", "6"),
             ("imWidth", "0"), ("imHeight", "-1"), ("imDir", ".."),
             ("imExt", ".*"), ("frameRate", "unknown"),
+            ("seqLength", "9" * 400),
         ]
         for index, (key, value) in enumerate(cases):
             with self.subTest(key=key, value=value):

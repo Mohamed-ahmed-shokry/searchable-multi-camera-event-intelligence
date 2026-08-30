@@ -172,9 +172,6 @@ class _FrameSequenceSource:
             raise ValueError(f"frameRate must be finite and positive in {path}")
         if frame_count <= 0 or width <= 0 or height <= 0:
             raise ValueError(f"seqLength, imWidth and imHeight must be positive in {path}")
-        if not math.isfinite(frame_count / fps):
-            raise ValueError(f"Sequence duration must be finite in {path}")
-
         im_dir = (path / seq.get("imDir", "img1")).resolve()
         if not im_dir.is_relative_to(path.resolve()) or not im_dir.is_dir():
             raise ValueError(f"imDir must be an existing directory inside {path}")
@@ -189,6 +186,8 @@ class _FrameSequenceSource:
             raise ValueError(
                 f"seqLength declares {frame_count} frames but found {len(frame_paths)} in {im_dir}"
             )
+        if not math.isfinite(frame_count / fps):
+            raise ValueError(f"Sequence duration must be finite in {path}")
         for frame_path in frame_paths:
             if not frame_path.stem.isascii() or not frame_path.stem.isdecimal():
                 raise ValueError(f"Frame names must be numbered from 1: {frame_path}")
