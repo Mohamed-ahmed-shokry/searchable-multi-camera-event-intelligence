@@ -8,6 +8,8 @@ video file opened via OpenCV's ``VideoCapture``.
 from __future__ import annotations
 
 import configparser
+import math
+import re
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -105,26 +107,56 @@ class _VideoFileSource:
 class _FrameSequenceSource:
     def __init__(self, path: Path):
         self.path = path
-        config = configparser.ConfigParser()
-        config.read(path / "seqinfo.ini")
-        seq = config["Sequence"]
+        config = configparser.ConfigParser(interpolation=None)
+        try:
+            with (path / "seqinfo.ini").open(encoding="utf-8-sig") as handle:
+                config.read_file(handle)
+            seq = config["Sequence"]
+            fps = float(seq["frameRate"])
+            frame_count = int(seq["seqLength"])
+            width = int(seq["imWidth"])
+            height = int(seq["imHeight"])
+        except (configparser.Error, KeyError, ValueError) as exc:
+            raise ValueError(f"Invalid seqinfo.ini in {path}: {exc}") from exc
 
-        im_dir = path / seq.get("imDir", "img1")
+        if not math.isfinite(fps) or fps <= 0:
+            raise ValueError(f"frameRate must be finite and positive in {path}")
+        if frame_count <= 0 or width <= 0 or height <= 0:
+            raise ValueError(f"seqLength, imWidth and imHeight must be positive in {path}")
+        if not math.isfinite(frame_count / fps):
+            raise ValueError(f"Sequence duration must be finite in {path}")
+
+        im_dir = (path / seq.get("imDir", "img1")).resolve()
+        if not im_dir.is_relative_to(path.resolve()) or not im_dir.is_dir():
+            raise ValueError(f"imDir must be an existing directory inside {path}")
         im_ext = seq.get("imExt", ".jpg")
-        self.frame_paths = sorted(im_dir.glob(f"*{im_ext}"))
-
-        declared_length = seq.getint("seqLength", fallback=len(self.frame_paths))
-        frame_count = min(declared_length, len(self.frame_paths)) or len(self.frame_paths)
-        fps = seq.getfloat("frameRate", fallback=0.0)
+        if not re.fullmatch(r"\.[A-Za-z0-9]+", im_ext):
+            raise ValueError(f"imExt must be a literal file extension in {path}")
+        frame_paths = [
+            entry for entry in im_dir.iterdir()
+            if entry.is_file() and entry.suffix.lower() == im_ext.lower()
+        ]
+        if len(frame_paths) != frame_count:
+            raise ValueError(
+                f"seqLength declares {frame_count} frames but found {len(frame_paths)} in {im_dir}"
+            )
+        for frame_path in frame_paths:
+            if not frame_path.stem.isascii() or not frame_path.stem.isdecimal():
+                raise ValueError(f"Frame names must be numbered from 1: {frame_path}")
+            if not frame_path.resolve().is_relative_to(im_dir):
+                raise ValueError(f"Frame path must stay inside {im_dir}: {frame_path}")
+        self.frame_paths = sorted(frame_paths, key=lambda entry: int(entry.stem))
+        if any(int(entry.stem) != index for index, entry in enumerate(self.frame_paths, 1)):
+            raise ValueError(f"Frames must be contiguous and numbered from 1 in {im_dir}")
 
         self.metadata = VideoMetadata(
             source_type="frame_sequence",
             path=str(path),
             fps=fps,
-            width=seq.getint("imWidth", fallback=0),
-            height=seq.getint("imHeight", fallback=0),
+            width=width,
+            height=height,
             frame_count=frame_count,
-            duration_seconds=(frame_count / fps) if fps else 0.0,
+            duration_seconds=frame_count / fps,
             codec=None,
         )
 
@@ -134,6 +166,10 @@ class _FrameSequenceSource:
         frame = cv2.imread(str(self.frame_paths[index]))
         if frame is None:
             raise IOError(f"Failed to read frame file: {self.frame_paths[index]}")
+        if frame.shape[:2] != (self.metadata.height, self.metadata.width):
+            raise ValueError(
+                f"Frame dimensions disagree with seqinfo.ini: {self.frame_paths[index]}"
+            )
         return frame
 
     def close(self) -> None:

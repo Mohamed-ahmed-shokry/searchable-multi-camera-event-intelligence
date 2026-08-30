@@ -43,6 +43,12 @@ Run it:
 uv run python cv_projects/01_video_inspection/scripts/inspect_video.py <video_file_or_sequence_dir> [...]
 ```
 
+Frame-sequence metadata must declare a finite, positive `frameRate`, positive
+`seqLength`, `imWidth`, and `imHeight`. Images must be numbered consecutively
+from 1, match the declared count and dimensions, and stay inside the sequence
+directory. Invalid or incomplete sequences fail instead of silently shifting
+frame IDs. The reader's public indices are zero-based: index 0 is MOT image 1.
+
 ## Layout
 
 ```text
