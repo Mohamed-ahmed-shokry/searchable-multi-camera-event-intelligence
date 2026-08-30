@@ -26,13 +26,14 @@ class InspectionTests(unittest.TestCase):
         self.assertEqual(len(indices), 12)
         self.assertEqual(indices, sorted(set(indices)))
         self.assertTrue(all(0 <= index < 100 for index in indices))
+        self.assertEqual((indices[0], indices[-1]), (0, 99))
 
     def test_contact_sheet_contains_every_frame(self) -> None:
         frames = [np.full((48, 64, 3), value, dtype=np.uint8) for value in (20, 60, 100, 140, 180)]
         sheet = inspect_video.build_contact_sheet(frames)
         self.assertEqual(sheet.shape, (270, 960, 3))
-        self.assertEqual(int(sheet[0, 0, 0]), 20)
-        self.assertEqual(int(sheet[135, 0, 0]), 180)
+        self.assertEqual(int(sheet[67, 120, 0]), 20)
+        self.assertEqual(int(sheet[202, 120, 0]), 180)
         self.assertEqual(int(sheet[135, 240, 0]), 0)
 
     def test_inspection_writes_readable_samples_and_contact_sheet(self) -> None:
@@ -134,6 +135,53 @@ class InspectionTests(unittest.TestCase):
             with self.assertRaises(FileExistsError):
                 inspect_video.write_image(path, np.zeros((20, 20, 3), dtype=np.uint8))
             self.assertEqual(path.read_bytes(), b"keep me")
+
+    def test_one_sample_uses_the_first_frame(self) -> None:
+        self.assertEqual(inspect_video.sample_frame_indices(100, 1), [0])
+        self.assertEqual(inspect_video.sample_frame_indices(1, 12), [0])
+
+    def test_invalid_sample_counts_are_rejected(self) -> None:
+        for frames, samples in ((0, 12), (-1, 12), (5, 0), (5, -1), (5, 121)):
+            with self.subTest(frames=frames, samples=samples), self.assertRaises(ValueError):
+                inspect_video.sample_frame_indices(frames, samples)
+        with self.assertRaises(TypeError):
+            inspect_video.sample_frame_indices(10, True)
+
+    def test_square_thumbnail_is_centered_without_distortion(self) -> None:
+        thumb = inspect_video.make_thumbnail(np.full((100, 100, 3), 255, dtype=np.uint8))
+        self.assertEqual(thumb.shape, (135, 240, 3))
+        occupied = np.where(thumb[67, :, 0] > 0)[0]
+        self.assertEqual(len(occupied), 135)
+        self.assertEqual(occupied[0], 52)
+
+    def test_empty_contact_sheet_is_rejected(self) -> None:
+        with self.assertRaises(ValueError):
+            inspect_video.build_contact_sheet([])
+
+    def test_custom_sampling_records_timestamps_and_holds_only_thumbnails(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            source = make_sequence(root)
+            with patch("inspect_video.build_contact_sheet", wraps=inspect_video.build_contact_sheet) as build:
+                output = inspect_video.run_inspection([source], root / "run", sample_count=3)
+            self.assertTrue(all(frame.shape == (135, 240, 3) for frame in build.call_args.args[0]))
+            record = json.loads((output / "video_info.json").read_text())[0]
+            self.assertEqual(record["sampled_frame_indices"], [0, 2, 4])
+            self.assertEqual(record["sampled_timestamps_seconds"], [0.0, 0.2, 0.4])
+
+    def test_invalid_sample_argument_fails_without_artifacts_or_traceback(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            source = make_sequence(root)
+            output = root / "run"
+            result = subprocess.run(
+                [sys.executable, str(INSPECTION_SCRIPTS / "inspect_video.py"), str(source), "--output-dir", str(output), "--samples", "0"],
+                cwd=root, text=True, capture_output=True, check=False,
+            )
+            self.assertEqual(result.returncode, 2)
+            self.assertIn("samples must be", result.stderr)
+            self.assertNotIn("Traceback", result.stderr)
+            self.assertFalse(output.exists())
 
 
 if __name__ == "__main__":

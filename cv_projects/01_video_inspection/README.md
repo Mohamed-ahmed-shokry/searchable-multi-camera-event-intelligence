@@ -55,6 +55,13 @@ failure returns a nonzero exit code and retains partial artifacts with failed
 status when the output device is writable. Earlier runs are left untouched.
 Runs created by the older CLI directly under `outputs/` remain there unchanged.
 
+Use `--samples 24` to change the default of 12 (allowed: 1–120). Samples include
+the first and last frame when at least two are requested; a single sample uses
+frame 0. Contact sheets preserve aspect ratio with black padding. Only small
+thumbnails are retained in memory; individual JPEG samples keep full resolution.
+Metadata includes zero-based sampled indices and timestamps computed as
+`index / fps`.
+
 Frame-sequence metadata must declare a finite, positive `frameRate`, positive
 `seqLength`, `imWidth`, and `imHeight`. Images must be numbered consecutively
 from 1, match the declared count and dimensions, and stay inside the sequence
