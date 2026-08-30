@@ -1,21 +1,46 @@
 [project]
 name = "searchable-multi-camera-event-intelligence"
 version = "0.1.0"
-description = "Add your description here"
+description = "Reproducible computer vision experiments for searchable camera event intelligence"
 readme = "README.md"
 requires-python = ">=3.12"
 dependencies = [
-    "jupyter>=1.1.1",
-    "numpy>=2.4.6",
-    "opencv-python>=4.13.0.92",
-    "torch>=2.11.0",
-    "torchvision>=0.26.0",
-    "ultralytics>=8.4.132",
+    "numpy==2.4.6",
+    "opencv-python==4.13.0.92",
 ]
 
+[project.optional-dependencies]
+detection-cpu = [
+    "torch==2.11.0",
+    "torchvision==0.26.0",
+    "ultralytics==8.4.132",
+]
+detection-cuda = [
+    "torch==2.11.0",
+    "torchvision==0.26.0",
+    "ultralytics==8.4.132",
+]
+
+[dependency-groups]
+notebooks = ["jupyter==1.1.1"]
+
+[tool.uv]
+conflicts = [[{ extra = "detection-cpu" }, { extra = "detection-cuda" }]]
+
 [tool.uv.sources]
-torch = [{ index = "pytorch-cu128" }]
-torchvision = [{ index = "pytorch-cu128" }]
+torch = [
+    { index = "pytorch-cpu", extra = "detection-cpu" },
+    { index = "pytorch-cu128", extra = "detection-cuda" },
+]
+torchvision = [
+    { index = "pytorch-cpu", extra = "detection-cpu" },
+    { index = "pytorch-cu128", extra = "detection-cuda" },
+]
+
+[[tool.uv.index]]
+name = "pytorch-cpu"
+url = "https://download.pytorch.org/whl/cpu"
+explicit = true
 
 [[tool.uv.index]]
 name = "pytorch-cu128"

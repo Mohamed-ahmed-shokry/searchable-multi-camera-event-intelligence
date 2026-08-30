@@ -40,6 +40,12 @@ notes.md                   # model comparison, FPS on GPU, failure observations
   `data/`, which Phase 1 is still waiting on (see
   [01_video_inspection](../01_video_inspection/)).
 
+Install the exactly pinned detection stack with `uv sync --locked --extra
+detection-cuda` (Windows/Linux NVIDIA) or `uv sync --locked --extra detection-cpu`.
+The default environment only installs the Phase 1 reader dependencies. Notebook
+tools are optional via `--group notebooks`; CPU and CUDA extras cannot be enabled
+together. The CUDA extra retains the existing `cu128` wheel source.
+
 ## Layout
 
 ```text

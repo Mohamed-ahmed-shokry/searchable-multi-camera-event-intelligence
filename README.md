@@ -47,6 +47,38 @@ The first practical direction is single-camera, person-focused video intelligenc
 
 Productization comes later, after the CV outputs are useful.
 
+## Setup and Checks
+
+Use Python 3.12 (the tested interpreter is 3.12.12) and
+[uv](https://docs.astral.sh/uv/getting-started/installation/). The default install
+contains only NumPy and OpenCV; tests use the Python standard library.
+
+```bash
+uv sync --locked
+uv run --locked python -m unittest discover -s tests -v
+uv run --locked python cv_projects/01_video_inspection/scripts/inspect_video.py --help
+```
+
+Choose one detection environment when needed:
+
+```bash
+# NVIDIA CUDA 12.8 wheels on Windows/Linux
+uv sync --locked --extra detection-cuda
+
+# CPU-only detection environment
+uv sync --locked --extra detection-cpu
+
+# Optional notebook tools can be combined with either environment
+uv sync --locked --extra detection-cuda --group notebooks
+```
+
+The two detection extras conflict intentionally; do not use `--all-extras`.
+Dependencies are exactly pinned and `uv.lock` is committed. This follows
+[uv's explicit PyTorch index configuration](https://docs.astral.sh/uv/guides/integration/pytorch/).
+Installing CUDA wheels does not prove that a driver/GPU is available or that
+inference has run. A plain `uv sync` can remove optional packages; include the
+chosen extra when resynchronizing a detection environment.
+
 ## Questions The System Should Eventually Answer
 
 The project should grow toward answering questions such as:
