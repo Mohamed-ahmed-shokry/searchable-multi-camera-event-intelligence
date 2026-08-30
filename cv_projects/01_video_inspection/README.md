@@ -21,7 +21,8 @@ knowledge plus a reusable reader — not detection.
 ## Planned Outputs
 
 ```text
-outputs/
+outputs/<run_id>/
+  run.json                 # complete/failed status
   video_info.json          # one entry per source
   sample_frames/
   contact_sheet_<source>.png
@@ -42,6 +43,17 @@ Run it:
 ```bash
 uv run python cv_projects/01_video_inspection/scripts/inspect_video.py <video_file_or_sequence_dir> [...]
 ```
+
+Each invocation creates a new directory under `outputs/`. Use `--output-dir
+outputs/my_inspection` to select a **new** directory; existing directories are
+never overwritten. Source artifact names include a path hash so equal filenames
+from different folders remain distinct. `video_info.json` lists the relative
+paths of every sampled image and contact sheet.
+
+Only `run.json` with `status: "complete"` marks a successful batch. A read or write
+failure returns a nonzero exit code and retains partial artifacts with failed
+status when the output device is writable. Earlier runs are left untouched.
+Runs created by the older CLI directly under `outputs/` remain there unchanged.
 
 Frame-sequence metadata must declare a finite, positive `frameRate`, positive
 `seqLength`, `imWidth`, and `imHeight`. Images must be numbered consecutively
