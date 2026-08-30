@@ -198,6 +198,16 @@ class InspectionTests(unittest.TestCase):
             self.assertNotIn("Traceback", result.stderr)
             self.assertFalse(output.exists())
 
+    def test_numpy_sample_count_is_normalized_before_manifest_serialization(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            output = inspect_video.run_inspection(
+                [make_sequence(root)], root / "run", sample_count=np.int64(3)
+            )
+            manifest = json.loads((output / "run.json").read_text())
+            self.assertEqual(manifest["status"], "complete")
+            self.assertEqual(manifest["requested_sample_count"], 3)
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -62,6 +62,10 @@ thumbnails are retained in memory; individual JPEG samples keep full resolution.
 Metadata includes zero-based sampled indices and timestamps computed as
 `index / fps`.
 
+Inspection decodes only the sampled frames. A successful contact sheet does not
+prove that every unsampled frame is readable; full processing must still handle
+decode failures.
+
 Frame-sequence metadata must declare a finite, positive `frameRate`, positive
 `seqLength`, `imWidth`, and `imHeight`. Images must be numbered consecutively
 from 1, match the declared count and dimensions, and stay inside the sequence

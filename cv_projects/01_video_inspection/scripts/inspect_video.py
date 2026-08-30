@@ -149,6 +149,7 @@ def run_inspection(
     if len(paths) != len(set(paths)):
         raise ValueError("Duplicate input sources are not allowed")
     sample_frame_indices(1, sample_count)  # Validate before creating any output directories.
+    sample_count = operator.index(sample_count)
     for path in paths:
         with VideoSource(path):
             pass
