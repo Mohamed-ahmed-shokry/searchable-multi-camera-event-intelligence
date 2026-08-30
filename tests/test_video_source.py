@@ -5,6 +5,10 @@ from __future__ import annotations
 import tempfile
 import unittest
 from pathlib import Path
+from unittest.mock import Mock, patch
+
+import cv2
+import numpy as np
 
 from helpers import make_sequence, make_video
 from video_source import VideoSource
@@ -122,6 +126,91 @@ class VideoSourceTests(unittest.TestCase):
         (source / "seqinfo.ini").write_text("[Sequence]\nimDir=img1\n", encoding="utf-8")
         with self.assertRaisesRegex(ValueError, "Invalid seqinfo.ini"):
             VideoSource(source)
+
+    def test_directory_without_seqinfo_is_rejected_before_capture(self) -> None:
+        with patch("video_source.cv2.VideoCapture") as capture:
+            with self.assertRaisesRegex(ValueError, "seqinfo.ini"):
+                VideoSource(self.root)
+            capture.assert_not_called()
+
+    def test_closed_sources_reject_reads_and_close_is_idempotent(self) -> None:
+        for path in (make_sequence(self.root), make_video(self.root)):
+            with self.subTest(path=path):
+                source = VideoSource(path)
+                source.close()
+                source.close()
+                with self.assertRaisesRegex(ValueError, "closed"):
+                    source.read_frame(0)
+                with self.assertRaisesRegex(ValueError, "closed"):
+                    source.__enter__()
+
+    def test_indices_require_integers(self) -> None:
+        with VideoSource(make_sequence(self.root)) as source:
+            for index in (True, 0.5, "1"):
+                with self.subTest(index=index), self.assertRaises(TypeError):
+                    source.read_frame(index)
+            self.assertEqual(source.read_frame(np.int64(0)).shape, (48, 64, 3))
+
+    def fake_capture(self, overrides: dict | None = None) -> tuple[Path, Mock]:
+        path = self.root / "mock.avi"
+        path.touch()
+        properties = {
+            cv2.CAP_PROP_FPS: 10.0, cv2.CAP_PROP_FRAME_COUNT: 5.0,
+            cv2.CAP_PROP_FRAME_WIDTH: 64.0, cv2.CAP_PROP_FRAME_HEIGHT: 48.0,
+            cv2.CAP_PROP_FOURCC: 0.0,
+        }
+        properties.update(overrides or {})
+        capture = Mock()
+        capture.isOpened.return_value = True
+        capture.get.side_effect = properties.__getitem__
+        capture.set.return_value = True
+        capture.read.return_value = (True, np.zeros((48, 64, 3), dtype=np.uint8))
+        return path, capture
+
+    def test_capture_is_released_when_opening_fails(self) -> None:
+        path, capture = self.fake_capture()
+        capture.isOpened.return_value = False
+        with patch("video_source.cv2.VideoCapture", return_value=capture):
+            with self.assertRaises(OSError):
+                VideoSource(path)
+        capture.release.assert_called_once()
+
+    def test_invalid_video_metadata_releases_capture(self) -> None:
+        for property_id, value in (
+            (cv2.CAP_PROP_FPS, 0), (cv2.CAP_PROP_FPS, float("nan")),
+            (cv2.CAP_PROP_FRAME_COUNT, float("inf")), (cv2.CAP_PROP_FRAME_COUNT, 2.5),
+            (cv2.CAP_PROP_FRAME_WIDTH, -1), (cv2.CAP_PROP_FRAME_HEIGHT, 0),
+        ):
+            with self.subTest(property_id=property_id, value=value):
+                path, capture = self.fake_capture({property_id: value})
+                with patch("video_source.cv2.VideoCapture", return_value=capture):
+                    with self.assertRaises(ValueError):
+                        VideoSource(path)
+                capture.release.assert_called_once()
+
+    def test_failed_seek_does_not_read_or_mislabel_a_frame(self) -> None:
+        path, capture = self.fake_capture()
+        capture.set.return_value = False
+        with patch("video_source.cv2.VideoCapture", return_value=capture):
+            with VideoSource(path) as source, self.assertRaisesRegex(OSError, "seek"):
+                source.read_frame(2)
+        capture.read.assert_not_called()
+        capture.release.assert_called_once()
+
+    def test_invalid_decoded_video_frames_are_rejected(self) -> None:
+        for frame in (None, np.zeros((0, 0, 3)), np.zeros((20, 20, 3))):
+            with self.subTest(shape=None if frame is None else frame.shape):
+                path, capture = self.fake_capture()
+                capture.read.return_value = (True, frame)
+                with patch("video_source.cv2.VideoCapture", return_value=capture):
+                    with VideoSource(path) as source, self.assertRaises((OSError, ValueError)):
+                        source.read_frame(0)
+
+    def test_unknown_codec_is_null(self) -> None:
+        path, capture = self.fake_capture()
+        with patch("video_source.cv2.VideoCapture", return_value=capture):
+            with VideoSource(path) as source:
+                self.assertIsNone(source.metadata.codec)
 
 
 if __name__ == "__main__":

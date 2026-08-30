@@ -49,6 +49,13 @@ from 1, match the declared count and dimensions, and stay inside the sequence
 directory. Invalid or incomplete sequences fail instead of silently shifting
 frame IDs. The reader's public indices are zero-based: index 0 is MOT image 1.
 
+Inputs must be existing local files or sequence directories. Live streams,
+unknown frame counts/FPS, failed seeks, and changes in decoded dimensions are
+rejected. Video timing uses the reported constant FPS; variable-frame-rate
+timestamps are not supported. Metadata records the resolved absolute source
+path. Close the reader (prefer `with VideoSource(...)`) before releasing a run;
+reads after closing fail explicitly.
+
 ## Layout
 
 ```text
