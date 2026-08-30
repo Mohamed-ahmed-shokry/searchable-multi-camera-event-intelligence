@@ -11,6 +11,7 @@ import configparser
 import math
 import operator
 import re
+from collections.abc import Iterator
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -63,6 +64,21 @@ class VideoSource:
             raise TypeError("Frame index must be an integer, not a boolean")
         return self._impl.read_frame(operator.index(index))
 
+    def iter_frames(
+        self, *, start: int = 0, stop: int | None = None, step: int = 1
+    ) -> Iterator[tuple[int, np.ndarray]]:
+        """Yield zero-based frame IDs and BGR images, with an exclusive stop."""
+        if self._closed:
+            raise ValueError("VideoSource is closed")
+        values = (start, len(self) if stop is None else stop, step)
+        if any(isinstance(value, bool) for value in values):
+            raise TypeError("Frame range values must be integers, not booleans")
+        start, stop, step = (operator.index(value) for value in values)
+        if not 0 <= start <= stop <= len(self) or step <= 0:
+            raise ValueError("Frame range must satisfy 0 <= start <= stop <= frame count and step > 0")
+        for index in range(start, stop, step):
+            yield index, self.read_frame(index)
+
     def close(self) -> None:
         if not self._closed:
             self._closed = True
@@ -107,6 +123,7 @@ class _VideoFileSource:
                 duration_seconds=frame_count / fps,
                 codec=codec,
             )
+            self._next_index: int | None = 0
         except BaseException:
             self._cap.release()
             raise
@@ -119,13 +136,17 @@ class _VideoFileSource:
     def read_frame(self, index: int) -> np.ndarray:
         if not 0 <= index < self.metadata.frame_count:
             raise IndexError(f"Frame {index} out of range (0..{self.metadata.frame_count - 1})")
-        if not self._cap.set(cv2.CAP_PROP_POS_FRAMES, index):
-            raise OSError(f"Failed to seek to frame {index} in {self.path}")
+        if index != self._next_index:
+            self._next_index = None
+            if not self._cap.set(cv2.CAP_PROP_POS_FRAMES, index):
+                raise OSError(f"Failed to seek to frame {index} in {self.path}")
         ok, frame = self._cap.read()
+        self._next_index = None
         if not ok or frame is None or frame.size == 0:
             raise IOError(f"Failed to read frame {index} from {self.path}")
         if frame.shape[:2] != (self.metadata.height, self.metadata.width):
             raise ValueError(f"Decoded frame dimensions disagree with video metadata: {self.path}")
+        self._next_index = index + 1
         return frame
 
     def close(self) -> None:

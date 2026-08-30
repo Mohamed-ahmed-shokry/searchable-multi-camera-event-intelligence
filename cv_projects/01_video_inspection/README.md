@@ -56,6 +56,11 @@ timestamps are not supported. Metadata records the resolved absolute source
 path. Close the reader (prefer `with VideoSource(...)`) before releasing a run;
 reads after closing fail explicitly.
 
+For bounded-memory processing, `source.iter_frames(start=0, stop=None, step=1)`
+yields `(zero_based_index, bgr_image)` pairs. `stop` is exclusive. Consecutive
+video reads decode sequentially; random access seeks only when needed. No
+decoding speed or detector throughput claim is implied by this optimization.
+
 ## Layout
 
 ```text

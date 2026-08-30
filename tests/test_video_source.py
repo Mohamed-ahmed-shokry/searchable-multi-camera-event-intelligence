@@ -212,6 +212,40 @@ class VideoSourceTests(unittest.TestCase):
             with VideoSource(path) as source:
                 self.assertIsNone(source.metadata.codec)
 
+    def test_iterator_preserves_source_frame_indices(self) -> None:
+        for path in (make_sequence(self.root), make_video(self.root)):
+            with self.subTest(path=path), VideoSource(path) as source:
+                frames = list(source.iter_frames(start=1, stop=5, step=2))
+                self.assertEqual([index for index, _ in frames], [1, 3])
+                for index, frame in frames:
+                    self.assertAlmostEqual(float(frame.mean()), index * 40, delta=3)
+
+    def test_sequential_reads_do_not_seek_for_each_frame(self) -> None:
+        path, capture = self.fake_capture()
+        with patch("video_source.cv2.VideoCapture", return_value=capture):
+            with VideoSource(path) as source:
+                self.assertEqual([index for index, _ in source.iter_frames()], list(range(5)))
+                capture.set.assert_not_called()
+                source.read_frame(0)
+                capture.set.assert_called_once_with(cv2.CAP_PROP_POS_FRAMES, 0)
+
+    def test_invalid_iterator_ranges_are_rejected(self) -> None:
+        with VideoSource(make_sequence(self.root)) as source:
+            for kwargs in ({"start": -1}, {"stop": 6}, {"start": 3, "stop": 2}, {"step": 0}):
+                with self.subTest(kwargs=kwargs), self.assertRaises(ValueError):
+                    list(source.iter_frames(**kwargs))
+            with self.assertRaises(TypeError):
+                list(source.iter_frames(step=True))
+            self.assertEqual(list(source.iter_frames(start=5)), [])
+
+    def test_iterator_stops_reading_after_source_is_closed(self) -> None:
+        source = VideoSource(make_sequence(self.root))
+        frames = source.iter_frames()
+        self.assertEqual(next(frames)[0], 0)
+        source.close()
+        with self.assertRaisesRegex(ValueError, "closed"):
+            next(frames)
+
 
 if __name__ == "__main__":
     unittest.main()
