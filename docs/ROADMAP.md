@@ -38,7 +38,7 @@ and the latest run on the phase branch is 100% green, with a draft PR documentin
 | 4 | GitHub Actions workflow executes `uv sync --locked`, ruff checks, and pytest on `windows-latest` (matching the dev OS) | ✅ | `.github/workflows/ci.yml` committed; remote run 39513973426 succeeded (29 s) |
 | 5 | All local CI-parity checks and the remote CI workflow run pass 100% | ✅ | commands above + `gh run list`: `completed / success` |
 | 6 | Draft PR open with phase summary tied to this roadmap | ✅ | PR #1 https://github.com/Mohamed-ahmed-shokry/searchable-multi-camera-event-intelligence/pull/1 |
-| 7 | README + progress record + decision log updated (separate commits) | ☐ | — |
+| 7 | README + progress record + decision log updated (separate commits) | ✅ | README test-section commit; ROADMAP criteria + ticks commit; Decision Log addendum commit |
 
 ### Validation & CI Plan (exact commands, matching the workflow)
 
@@ -79,7 +79,7 @@ Local parity reference: baseline suite `python -m unittest discover -s tests` �
 - [x] 12. `docs(readme): document pytest and ruff commands replacing unittest instructions`
 - [x] 13. Push branch, create draft PR (PR #1)
 - [x] 14. Monitor remote CI; fix any failure per its own micro-commit — run 39513973426 succeeded on first attempt; no fixes needed
-- [ ] 15. Final: tick acceptance criteria, decision log addendum, CI log (separate docs commits)
+- [x] 15. Final: tick acceptance criteria, decision log addendum, CI log (separate docs commits)
 
 ### Decision Log
 
@@ -107,3 +107,6 @@ Local parity reference: baseline suite `python -m unittest discover -s tests` �
 | `uv run --locked ruff format --check .` (parity) | ✅ `17 files already formatted` exit 0 | — |
 | `uv run --locked pytest -q` (parity) | ✅ `46 passed, 49 subtests passed` exit 0 | — |
 | Remote CI: `gh run list --branch phase/ci-verification-foundation` | ✅ run 39513973426 — completed / success (29 s) | workflow `ci`, HEAD e07a522 |
+| Remote CI (PR event): run 39514225001 | ✅ completed / success (29 s) | on PR #1 |
+| Remote CI (final docs push): run 39514219892 | ✅ completed / success (27 s) | HEAD f784699 |
+| E2E real execution | ✅ | `run_inspection` on a synthetic MJPEG clip + MOT-style sequence → `run.json` complete, 2 metadata entries, 10 sampled frames, 2 contact sheets; CLI `--help` verified |
