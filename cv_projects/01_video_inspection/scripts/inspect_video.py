@@ -41,9 +41,14 @@ THUMB_SIZE = (240, 135)  # width, height
 def sample_frame_indices(frame_count: int, sample_count: int) -> list[int]:
     if isinstance(frame_count, bool) or isinstance(sample_count, bool):
         raise TypeError("Frame and sample counts must be integers")
-    frame_count, sample_count = operator.index(frame_count), operator.index(sample_count)
+    frame_count, sample_count = (
+        operator.index(frame_count),
+        operator.index(sample_count),
+    )
     if frame_count <= 0 or not 1 <= sample_count <= MAX_SAMPLE_COUNT:
-        raise ValueError(f"Frame count must be positive and samples must be between 1 and {MAX_SAMPLE_COUNT}")
+        raise ValueError(
+            f"Frame count must be positive and samples must be between 1 and {MAX_SAMPLE_COUNT}"
+        )
     count = min(frame_count, sample_count)
     if count == 1:
         return [0]
@@ -52,7 +57,12 @@ def sample_frame_indices(frame_count: int, sample_count: int) -> list[int]:
 
 def make_thumbnail(frame: np.ndarray) -> np.ndarray:
     """Fit a BGR frame into the thumbnail without stretching its aspect ratio."""
-    if frame.ndim != 3 or frame.shape[2] != 3 or frame.size == 0 or frame.dtype != np.uint8:
+    if (
+        frame.ndim != 3
+        or frame.shape[2] != 3
+        or frame.size == 0
+        or frame.dtype != np.uint8
+    ):
         raise ValueError("Contact sheet frames must be nonempty uint8 BGR images")
     height, width = frame.shape[:2]
     scale = min(THUMB_SIZE[0] / width, THUMB_SIZE[1] / height)
@@ -67,7 +77,9 @@ def make_thumbnail(frame: np.ndarray) -> np.ndarray:
 
 def build_contact_sheet(frames: list[np.ndarray]) -> np.ndarray:
     if not 1 <= len(frames) <= MAX_SAMPLE_COUNT:
-        raise ValueError(f"Contact sheets require between 1 and {MAX_SAMPLE_COUNT} frames")
+        raise ValueError(
+            f"Contact sheets require between 1 and {MAX_SAMPLE_COUNT} frames"
+        )
     thumbs = [make_thumbnail(frame) for frame in frames]
     cols = CONTACT_SHEET_COLS
     rows = (len(thumbs) + cols - 1) // cols
@@ -106,7 +118,10 @@ def write_json(path: Path, value: object) -> None:
 
 
 def inspect_source(
-    source_path: str | Path, output_dir: Path | None = None, *, sample_count: int = SAMPLE_COUNT
+    source_path: str | Path,
+    output_dir: Path | None = None,
+    *,
+    sample_count: int = SAMPLE_COUNT,
 ) -> dict:
     output_dir = OUTPUT_DIR if output_dir is None else Path(output_dir)
     name = source_name(source_path)
@@ -132,15 +147,22 @@ def inspect_source(
             write_image(sheet_path, sheet)
 
     return {
-        "name": name, **asdict(meta), "sampled_frame_indices": indices,
+        "name": name,
+        **asdict(meta),
+        "sampled_frame_indices": indices,
         "sampled_timestamps_seconds": [index / meta.fps for index in indices],
-        "sample_frames": [f"sample_frames/{name}/frame_{idx:06d}.jpg" for idx in indices],
+        "sample_frames": [
+            f"sample_frames/{name}/frame_{idx:06d}.jpg" for idx in indices
+        ],
         "contact_sheet": sheet_path.name,
     }
 
 
 def run_inspection(
-    sources: Sequence[str | Path], output_dir: Path | None = None, *, sample_count: int = SAMPLE_COUNT
+    sources: Sequence[str | Path],
+    output_dir: Path | None = None,
+    *,
+    sample_count: int = SAMPLE_COUNT,
 ) -> Path:
     """Inspect a batch in an exclusive directory and retain failed-run evidence."""
     paths = [Path(source).expanduser().resolve() for source in sources]
@@ -148,7 +170,9 @@ def run_inspection(
         raise ValueError("At least one source is required")
     if len(paths) != len(set(paths)):
         raise ValueError("Duplicate input sources are not allowed")
-    sample_frame_indices(1, sample_count)  # Validate before creating any output directories.
+    sample_frame_indices(
+        1, sample_count
+    )  # Validate before creating any output directories.
     sample_count = operator.index(sample_count)
     for path in paths:
         with VideoSource(path):
@@ -159,12 +183,17 @@ def run_inspection(
     output_dir = Path(output_dir).expanduser().resolve()
     output_dir.mkdir(parents=True, exist_ok=False)
     manifest = {
-        "schema_version": 1, "status": "running", "sources": [str(path) for path in paths],
+        "schema_version": 1,
+        "status": "running",
+        "sources": [str(path) for path in paths],
         "requested_sample_count": sample_count,
     }
     write_json(output_dir / "run.json", manifest)
     try:
-        results = [inspect_source(path, output_dir, sample_count=sample_count) for path in paths]
+        results = [
+            inspect_source(path, output_dir, sample_count=sample_count)
+            for path in paths
+        ]
         write_json(output_dir / "video_info.json", results)
         manifest.update(status="complete", source_count=len(results))
         write_json(output_dir / "run.json", manifest)
@@ -181,13 +210,24 @@ def run_inspection(
 def main(argv: Sequence[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description="Inspect video sources for Phase 1.")
     parser.add_argument(
-        "sources", nargs="+", help="Video file(s) or MOT17-style frame-sequence directory(ies)"
+        "sources",
+        nargs="+",
+        help="Video file(s) or MOT17-style frame-sequence directory(ies)",
     )
-    parser.add_argument("--output-dir", type=Path, help="New run directory; must not already exist")
-    parser.add_argument("--samples", type=int, default=SAMPLE_COUNT, help="Samples per source, 1..120 (default: 12)")
+    parser.add_argument(
+        "--output-dir", type=Path, help="New run directory; must not already exist"
+    )
+    parser.add_argument(
+        "--samples",
+        type=int,
+        default=SAMPLE_COUNT,
+        help="Samples per source, 1..120 (default: 12)",
+    )
     args = parser.parse_args(argv)
     try:
-        output_dir = run_inspection(args.sources, args.output_dir, sample_count=args.samples)
+        output_dir = run_inspection(
+            args.sources, args.output_dir, sample_count=args.samples
+        )
     except (OSError, ValueError, cv2.error) as exc:
         parser.exit(2, f"error: {exc}\n")
     print(f"Wrote {output_dir / 'video_info.json'} ({len(args.sources)} source(s))")
