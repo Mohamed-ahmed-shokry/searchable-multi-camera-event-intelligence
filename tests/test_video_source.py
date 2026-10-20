@@ -9,7 +9,6 @@ from unittest.mock import Mock, patch
 
 import cv2
 import numpy as np
-
 from helpers import make_sequence, make_video
 from video_source import VideoSource
 
@@ -171,9 +170,8 @@ class VideoSourceTests(unittest.TestCase):
     def test_capture_is_released_when_opening_fails(self) -> None:
         path, capture = self.fake_capture()
         capture.isOpened.return_value = False
-        with patch("video_source.cv2.VideoCapture", return_value=capture):
-            with self.assertRaises(OSError):
-                VideoSource(path)
+        with (patch("video_source.cv2.VideoCapture", return_value=capture), self.assertRaises(OSError)):
+            VideoSource(path)
         capture.release.assert_called_once()
 
     def test_invalid_video_metadata_releases_capture(self) -> None:
@@ -184,17 +182,16 @@ class VideoSourceTests(unittest.TestCase):
         ):
             with self.subTest(property_id=property_id, value=value):
                 path, capture = self.fake_capture({property_id: value})
-                with patch("video_source.cv2.VideoCapture", return_value=capture):
-                    with self.assertRaises(ValueError):
-                        VideoSource(path)
+                with (patch("video_source.cv2.VideoCapture", return_value=capture), self.assertRaises(ValueError)):
+                    VideoSource(path)
                 capture.release.assert_called_once()
 
     def test_failed_seek_does_not_read_or_mislabel_a_frame(self) -> None:
         path, capture = self.fake_capture()
         capture.set.return_value = False
-        with patch("video_source.cv2.VideoCapture", return_value=capture):
-            with VideoSource(path) as source, self.assertRaisesRegex(OSError, "seek"):
-                source.read_frame(2)
+        with (patch("video_source.cv2.VideoCapture", return_value=capture), VideoSource(path) as source,
+              self.assertRaisesRegex(OSError, "seek")):
+            source.read_frame(2)
         capture.read.assert_not_called()
         capture.release.assert_called_once()
 
@@ -203,15 +200,14 @@ class VideoSourceTests(unittest.TestCase):
             with self.subTest(shape=None if frame is None else frame.shape):
                 path, capture = self.fake_capture()
                 capture.read.return_value = (True, frame)
-                with patch("video_source.cv2.VideoCapture", return_value=capture):
-                    with VideoSource(path) as source, self.assertRaises((OSError, ValueError)):
-                        source.read_frame(0)
+                with (patch("video_source.cv2.VideoCapture", return_value=capture), VideoSource(path) as source,
+                      self.assertRaises((OSError, ValueError))):
+                    source.read_frame(0)
 
     def test_unknown_codec_is_null(self) -> None:
         path, capture = self.fake_capture()
-        with patch("video_source.cv2.VideoCapture", return_value=capture):
-            with VideoSource(path) as source:
-                self.assertIsNone(source.metadata.codec)
+        with patch("video_source.cv2.VideoCapture", return_value=capture), VideoSource(path) as source:
+            self.assertIsNone(source.metadata.codec)
 
     def test_iterator_preserves_source_frame_indices(self) -> None:
         for path in (make_sequence(self.root), make_video(self.root)):
@@ -223,12 +219,11 @@ class VideoSourceTests(unittest.TestCase):
 
     def test_sequential_reads_do_not_seek_for_each_frame(self) -> None:
         path, capture = self.fake_capture()
-        with patch("video_source.cv2.VideoCapture", return_value=capture):
-            with VideoSource(path) as source:
-                self.assertEqual([index for index, _ in source.iter_frames()], list(range(5)))
-                capture.set.assert_not_called()
-                source.read_frame(0)
-                capture.set.assert_called_once_with(cv2.CAP_PROP_POS_FRAMES, 0)
+        with patch("video_source.cv2.VideoCapture", return_value=capture), VideoSource(path) as source:
+            self.assertEqual([index for index, _ in source.iter_frames()], list(range(5)))
+            capture.set.assert_not_called()
+            source.read_frame(0)
+            capture.set.assert_called_once_with(cv2.CAP_PROP_POS_FRAMES, 0)
 
     def test_invalid_iterator_ranges_are_rejected(self) -> None:
         with VideoSource(make_sequence(self.root)) as source:
