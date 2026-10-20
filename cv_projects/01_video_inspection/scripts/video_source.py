@@ -14,6 +14,7 @@ import re
 from collections.abc import Iterator
 from dataclasses import dataclass
 from pathlib import Path
+from typing import Self
 
 import cv2
 import numpy as np
@@ -84,7 +85,7 @@ class VideoSource:
             self._closed = True
             self._impl.close()
 
-    def __enter__(self) -> "VideoSource":
+    def __enter__(self) -> Self:
         if self._closed:
             raise ValueError("VideoSource is closed")
         return self
@@ -143,7 +144,7 @@ class _VideoFileSource:
         ok, frame = self._cap.read()
         self._next_index = None
         if not ok or frame is None or frame.size == 0:
-            raise IOError(f"Failed to read frame {index} from {self.path}")
+            raise OSError(f"Failed to read frame {index} from {self.path}")
         if frame.shape[:2] != (self.metadata.height, self.metadata.width):
             raise ValueError(f"Decoded frame dimensions disagree with video metadata: {self.path}")
         self._next_index = index + 1
@@ -213,7 +214,7 @@ class _FrameSequenceSource:
             raise IndexError(f"Frame {index} out of range (0..{self.metadata.frame_count - 1})")
         frame = cv2.imread(str(self.frame_paths[index]))
         if frame is None:
-            raise IOError(f"Failed to read frame file: {self.frame_paths[index]}")
+            raise OSError(f"Failed to read frame file: {self.frame_paths[index]}")
         if frame.shape[:2] != (self.metadata.height, self.metadata.width):
             raise ValueError(
                 f"Frame dimensions disagree with seqinfo.ini: {self.frame_paths[index]}"
