@@ -51,13 +51,20 @@ Productization comes later, after the CV outputs are useful.
 
 Use Python 3.12 (the tested interpreter is 3.12.12) and
 [uv](https://docs.astral.sh/uv/getting-started/installation/). The default install
-contains only NumPy and OpenCV; tests use the Python standard library.
+contains only NumPy and OpenCV plus dev tooling (`pytest`, `ruff` in the `dev`
+dependency group).
 
 ```bash
 uv sync --locked
-uv run --locked python -m unittest discover -s tests -v
+uv run --locked pytest -v                # full test suite
+uv run --locked ruff check .             # lint
+uv run --locked ruff format --check .    # formatting check
 uv run --locked python cv_projects/01_video_inspection/scripts/inspect_video.py --help
 ```
+
+Continuous integration (GitHub Actions, `.github/workflows/ci.yml`) runs exactly
+these checks — `uv sync --locked`, both ruff gates, and `pytest` — on every push,
+pull request, and manual dispatch, on `windows-latest` (the development OS).
 
 Choose one detection environment when needed:
 
