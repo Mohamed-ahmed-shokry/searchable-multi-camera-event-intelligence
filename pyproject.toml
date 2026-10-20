@@ -24,6 +24,7 @@ detection-cuda = [
 [dependency-groups]
 dev = [
     "pytest>=9.1.1",
+    "ruff>=0.17.1",
 ]
 notebooks = ["jupyter==1.1.1"]
 
