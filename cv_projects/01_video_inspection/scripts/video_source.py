@@ -14,6 +14,7 @@ import re
 from collections.abc import Iterator
 from dataclasses import dataclass
 from pathlib import Path
+from typing import Self
 
 import cv2
 import numpy as np
@@ -43,7 +44,9 @@ class VideoSource:
         elif self.path.is_file():
             self._impl = _VideoFileSource(self.path)
         else:
-            raise ValueError(f"Source must be a local video file or a directory with seqinfo.ini: {self.path}")
+            raise ValueError(
+                f"Source must be a local video file or a directory with seqinfo.ini: {self.path}"
+            )
         self._closed = False
 
     @staticmethod
@@ -75,7 +78,9 @@ class VideoSource:
             raise TypeError("Frame range values must be integers, not booleans")
         start, stop, step = (operator.index(value) for value in values)
         if not 0 <= start <= stop <= len(self) or step <= 0:
-            raise ValueError("Frame range must satisfy 0 <= start <= stop <= frame count and step > 0")
+            raise ValueError(
+                "Frame range must satisfy 0 <= start <= stop <= frame count and step > 0"
+            )
         for index in range(start, stop, step):
             yield index, self.read_frame(index)
 
@@ -84,7 +89,7 @@ class VideoSource:
             self._closed = True
             self._impl.close()
 
-    def __enter__(self) -> "VideoSource":
+    def __enter__(self) -> Self:
         if self._closed:
             raise ValueError("VideoSource is closed")
         return self
@@ -104,9 +109,16 @@ class _VideoFileSource:
             frame_count = self._cap.get(cv2.CAP_PROP_FRAME_COUNT)
             width = self._cap.get(cv2.CAP_PROP_FRAME_WIDTH)
             height = self._cap.get(cv2.CAP_PROP_FRAME_HEIGHT)
-            for name, value in (("FPS", fps), ("frame count", frame_count), ("width", width), ("height", height)):
+            for name, value in (
+                ("FPS", fps),
+                ("frame count", frame_count),
+                ("width", width),
+                ("height", height),
+            ):
                 if not math.isfinite(value) or value <= 0:
-                    raise ValueError(f"Video {name} must be finite and positive: {path}")
+                    raise ValueError(
+                        f"Video {name} must be finite and positive: {path}"
+                    )
                 if name != "FPS" and value != int(value):
                     raise ValueError(f"Video {name} must be an integer: {path}")
             if not math.isfinite(frame_count / fps):
@@ -135,7 +147,9 @@ class _VideoFileSource:
 
     def read_frame(self, index: int) -> np.ndarray:
         if not 0 <= index < self.metadata.frame_count:
-            raise IndexError(f"Frame {index} out of range (0..{self.metadata.frame_count - 1})")
+            raise IndexError(
+                f"Frame {index} out of range (0..{self.metadata.frame_count - 1})"
+            )
         if index != self._next_index:
             self._next_index = None
             if not self._cap.set(cv2.CAP_PROP_POS_FRAMES, index):
@@ -143,9 +157,11 @@ class _VideoFileSource:
         ok, frame = self._cap.read()
         self._next_index = None
         if not ok or frame is None or frame.size == 0:
-            raise IOError(f"Failed to read frame {index} from {self.path}")
+            raise OSError(f"Failed to read frame {index} from {self.path}")
         if frame.shape[:2] != (self.metadata.height, self.metadata.width):
-            raise ValueError(f"Decoded frame dimensions disagree with video metadata: {self.path}")
+            raise ValueError(
+                f"Decoded frame dimensions disagree with video metadata: {self.path}"
+            )
         self._next_index = index + 1
         return frame
 
@@ -171,10 +187,9 @@ class _FrameSequenceSource:
         if not math.isfinite(fps) or fps <= 0:
             raise ValueError(f"frameRate must be finite and positive in {path}")
         if frame_count <= 0 or width <= 0 or height <= 0:
-            raise ValueError(f"seqLength, imWidth and imHeight must be positive in {path}")
-        if not math.isfinite(frame_count / fps):
-            raise ValueError(f"Sequence duration must be finite in {path}")
-
+            raise ValueError(
+                f"seqLength, imWidth and imHeight must be positive in {path}"
+            )
         im_dir = (path / seq.get("imDir", "img1")).resolve()
         if not im_dir.is_relative_to(path.resolve()) or not im_dir.is_dir():
             raise ValueError(f"imDir must be an existing directory inside {path}")
@@ -182,21 +197,28 @@ class _FrameSequenceSource:
         if not re.fullmatch(r"\.[A-Za-z0-9]+", im_ext):
             raise ValueError(f"imExt must be a literal file extension in {path}")
         frame_paths = [
-            entry for entry in im_dir.iterdir()
+            entry
+            for entry in im_dir.iterdir()
             if entry.is_file() and entry.suffix.lower() == im_ext.lower()
         ]
         if len(frame_paths) != frame_count:
             raise ValueError(
                 f"seqLength declares {frame_count} frames but found {len(frame_paths)} in {im_dir}"
             )
+        if not math.isfinite(frame_count / fps):
+            raise ValueError(f"Sequence duration must be finite in {path}")
         for frame_path in frame_paths:
             if not frame_path.stem.isascii() or not frame_path.stem.isdecimal():
                 raise ValueError(f"Frame names must be numbered from 1: {frame_path}")
             if not frame_path.resolve().is_relative_to(im_dir):
                 raise ValueError(f"Frame path must stay inside {im_dir}: {frame_path}")
         self.frame_paths = sorted(frame_paths, key=lambda entry: int(entry.stem))
-        if any(int(entry.stem) != index for index, entry in enumerate(self.frame_paths, 1)):
-            raise ValueError(f"Frames must be contiguous and numbered from 1 in {im_dir}")
+        if any(
+            int(entry.stem) != index for index, entry in enumerate(self.frame_paths, 1)
+        ):
+            raise ValueError(
+                f"Frames must be contiguous and numbered from 1 in {im_dir}"
+            )
 
         self.metadata = VideoMetadata(
             source_type="frame_sequence",
@@ -211,10 +233,12 @@ class _FrameSequenceSource:
 
     def read_frame(self, index: int) -> np.ndarray:
         if not 0 <= index < self.metadata.frame_count:
-            raise IndexError(f"Frame {index} out of range (0..{self.metadata.frame_count - 1})")
+            raise IndexError(
+                f"Frame {index} out of range (0..{self.metadata.frame_count - 1})"
+            )
         frame = cv2.imread(str(self.frame_paths[index]))
         if frame is None:
-            raise IOError(f"Failed to read frame file: {self.frame_paths[index]}")
+            raise OSError(f"Failed to read frame file: {self.frame_paths[index]}")
         if frame.shape[:2] != (self.metadata.height, self.metadata.width):
             raise ValueError(
                 f"Frame dimensions disagree with seqinfo.ini: {self.frame_paths[index]}"
