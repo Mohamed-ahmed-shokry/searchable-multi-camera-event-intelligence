@@ -2,19 +2,18 @@
 
 from __future__ import annotations
 
-import tempfile
 import json
 import subprocess
 import sys
+import tempfile
 import unittest
 from pathlib import Path
 from unittest.mock import patch
 
 import cv2
-import numpy as np
-
-from helpers import INSPECTION_SCRIPTS, make_sequence
 import inspect_video
+import numpy as np
+from helpers import INSPECTION_SCRIPTS, make_sequence
 
 
 class InspectionTests(unittest.TestCase):
@@ -87,9 +86,11 @@ class InspectionTests(unittest.TestCase):
             root = Path(directory)
             source = make_sequence(root)
             output = root / "run"
-            with patch("inspect_video.cv2.imencode", return_value=(False, None)):
-                with self.assertRaisesRegex(OSError, "encode"):
-                    inspect_video.run_inspection([source], output)
+            with (
+                patch("inspect_video.cv2.imencode", return_value=(False, None)),
+                self.assertRaisesRegex(OSError, "encode"),
+            ):
+                inspect_video.run_inspection([source], output)
             self.assertEqual(json.loads((output / "run.json").read_text())["status"], "failed")
             self.assertFalse((output / "video_info.json").exists())
 
