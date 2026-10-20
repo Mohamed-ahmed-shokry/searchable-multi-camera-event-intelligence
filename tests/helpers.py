@@ -8,7 +8,6 @@ from pathlib import Path
 import cv2
 import numpy as np
 
-
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 INSPECTION_SCRIPTS = PROJECT_ROOT / "cv_projects" / "01_video_inspection" / "scripts"
 sys.path.insert(0, str(INSPECTION_SCRIPTS))
