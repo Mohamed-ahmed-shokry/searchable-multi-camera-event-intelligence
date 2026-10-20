@@ -28,7 +28,10 @@ class InspectionTests(unittest.TestCase):
         self.assertEqual((indices[0], indices[-1]), (0, 99))
 
     def test_contact_sheet_contains_every_frame(self) -> None:
-        frames = [np.full((48, 64, 3), value, dtype=np.uint8) for value in (20, 60, 100, 140, 180)]
+        frames = [
+            np.full((48, 64, 3), value, dtype=np.uint8)
+            for value in (20, 60, 100, 140, 180)
+        ]
         sheet = inspect_video.build_contact_sheet(frames)
         self.assertEqual(sheet.shape, (270, 960, 3))
         self.assertEqual(int(sheet[67, 120, 0]), 20)
@@ -57,7 +60,9 @@ class InspectionTests(unittest.TestCase):
             records = json.loads((run / "video_info.json").read_text(encoding="utf-8"))
             self.assertNotEqual(records[0]["name"], records[1]["name"])
             self.assertEqual(len(list((run / "sample_frames").glob("*/*.jpg"))), 10)
-            self.assertEqual(json.loads((run / "run.json").read_text())["status"], "complete")
+            self.assertEqual(
+                json.loads((run / "run.json").read_text())["status"], "complete"
+            )
 
     def test_repeated_run_never_replaces_existing_artifacts(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
@@ -65,10 +70,18 @@ class InspectionTests(unittest.TestCase):
             source = make_sequence(root)
             output = root / "run"
             inspect_video.run_inspection([source], output)
-            before = {path.relative_to(output): path.read_bytes() for path in output.rglob("*") if path.is_file()}
+            before = {
+                path.relative_to(output): path.read_bytes()
+                for path in output.rglob("*")
+                if path.is_file()
+            }
             with self.assertRaises(FileExistsError):
                 inspect_video.run_inspection([source], output)
-            after = {path.relative_to(output): path.read_bytes() for path in output.rglob("*") if path.is_file()}
+            after = {
+                path.relative_to(output): path.read_bytes()
+                for path in output.rglob("*")
+                if path.is_file()
+            }
             self.assertEqual(before, after)
 
     def test_duplicate_and_invalid_sources_do_not_create_a_run(self) -> None:
@@ -77,7 +90,10 @@ class InspectionTests(unittest.TestCase):
             source = make_sequence(root)
             output = root / "run"
             for sources in ([], [source, source], [source, root / "absent.avi"]):
-                with self.subTest(sources=sources), self.assertRaises((ValueError, FileNotFoundError)):
+                with (
+                    self.subTest(sources=sources),
+                    self.assertRaises((ValueError, FileNotFoundError)),
+                ):
                     inspect_video.run_inspection(sources, output)
                 self.assertFalse(output.exists())
 
@@ -91,20 +107,34 @@ class InspectionTests(unittest.TestCase):
                 self.assertRaisesRegex(OSError, "encode"),
             ):
                 inspect_video.run_inspection([source], output)
-            self.assertEqual(json.loads((output / "run.json").read_text())["status"], "failed")
+            self.assertEqual(
+                json.loads((output / "run.json").read_text())["status"], "failed"
+            )
             self.assertFalse((output / "video_info.json").exists())
 
-    def test_failed_later_source_retains_partial_run_without_claiming_success(self) -> None:
+    def test_failed_later_source_retains_partial_run_without_claiming_success(
+        self,
+    ) -> None:
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
-            sources = [make_sequence(root, name="first"), make_sequence(root, name="second")]
+            sources = [
+                make_sequence(root, name="first"),
+                make_sequence(root, name="second"),
+            ]
             (sources[1] / "img1" / "000002.jpg").write_bytes(b"corrupt")
             output = root / "run"
             with self.assertRaises(OSError):
                 inspect_video.run_inspection(sources, output)
-            self.assertEqual(json.loads((output / "run.json").read_text())["status"], "failed")
+            self.assertEqual(
+                json.loads((output / "run.json").read_text())["status"], "failed"
+            )
             self.assertFalse((output / "video_info.json").exists())
-            self.assertTrue((output / f"contact_sheet_{inspect_video.source_name(sources[0])}.png").exists())
+            self.assertTrue(
+                (
+                    output
+                    / f"contact_sheet_{inspect_video.source_name(sources[0])}.png"
+                ).exists()
+            )
 
     def test_default_runs_are_isolated(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
@@ -123,8 +153,17 @@ class InspectionTests(unittest.TestCase):
             source = make_sequence(root)
             output = root / "run"
             result = subprocess.run(
-                [sys.executable, str(INSPECTION_SCRIPTS / "inspect_video.py"), str(source), "--output-dir", str(output)],
-                cwd=root, text=True, capture_output=True, check=False,
+                [
+                    sys.executable,
+                    str(INSPECTION_SCRIPTS / "inspect_video.py"),
+                    str(source),
+                    "--output-dir",
+                    str(output),
+                ],
+                cwd=root,
+                text=True,
+                capture_output=True,
+                check=False,
             )
             self.assertEqual(result.returncode, 0, result.stderr)
             self.assertTrue((output / "video_info.json").exists())
@@ -143,13 +182,18 @@ class InspectionTests(unittest.TestCase):
 
     def test_invalid_sample_counts_are_rejected(self) -> None:
         for frames, samples in ((0, 12), (-1, 12), (5, 0), (5, -1), (5, 121)):
-            with self.subTest(frames=frames, samples=samples), self.assertRaises(ValueError):
+            with (
+                self.subTest(frames=frames, samples=samples),
+                self.assertRaises(ValueError),
+            ):
                 inspect_video.sample_frame_indices(frames, samples)
         with self.assertRaises(TypeError):
             inspect_video.sample_frame_indices(10, True)
 
     def test_square_thumbnail_is_centered_without_distortion(self) -> None:
-        thumb = inspect_video.make_thumbnail(np.full((100, 100, 3), 255, dtype=np.uint8))
+        thumb = inspect_video.make_thumbnail(
+            np.full((100, 100, 3), 255, dtype=np.uint8)
+        )
         self.assertEqual(thumb.shape, (135, 240, 3))
         occupied = np.where(thumb[67, :, 0] > 0)[0]
         self.assertEqual(len(occupied), 135)
@@ -163,9 +207,16 @@ class InspectionTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
             source = make_sequence(root)
-            with patch("inspect_video.build_contact_sheet", wraps=inspect_video.build_contact_sheet) as build:
-                output = inspect_video.run_inspection([source], root / "run", sample_count=3)
-            self.assertTrue(all(frame.shape == (135, 240, 3) for frame in build.call_args.args[0]))
+            with patch(
+                "inspect_video.build_contact_sheet",
+                wraps=inspect_video.build_contact_sheet,
+            ) as build:
+                output = inspect_video.run_inspection(
+                    [source], root / "run", sample_count=3
+                )
+            self.assertTrue(
+                all(frame.shape == (135, 240, 3) for frame in build.call_args.args[0])
+            )
             record = json.loads((output / "video_info.json").read_text())[0]
             self.assertEqual(record["sampled_frame_indices"], [0, 2, 4])
             self.assertEqual(record["sampled_timestamps_seconds"], [0.0, 0.2, 0.4])
@@ -176,8 +227,19 @@ class InspectionTests(unittest.TestCase):
             source = make_sequence(root)
             output = root / "run"
             result = subprocess.run(
-                [sys.executable, str(INSPECTION_SCRIPTS / "inspect_video.py"), str(source), "--output-dir", str(output), "--samples", "0"],
-                cwd=root, text=True, capture_output=True, check=False,
+                [
+                    sys.executable,
+                    str(INSPECTION_SCRIPTS / "inspect_video.py"),
+                    str(source),
+                    "--output-dir",
+                    str(output),
+                    "--samples",
+                    "0",
+                ],
+                cwd=root,
+                text=True,
+                capture_output=True,
+                check=False,
             )
             self.assertEqual(result.returncode, 2)
             self.assertIn("samples must be", result.stderr)
@@ -189,17 +251,30 @@ class InspectionTests(unittest.TestCase):
             root = Path(directory)
             source = make_sequence(root)
             metadata = source / "seqinfo.ini"
-            metadata.write_text(metadata.read_text().replace("seqLength=5", "seqLength=" + "9" * 400))
+            metadata.write_text(
+                metadata.read_text().replace("seqLength=5", "seqLength=" + "9" * 400)
+            )
             output = root / "run"
             result = subprocess.run(
-                [sys.executable, str(INSPECTION_SCRIPTS / "inspect_video.py"), str(source), "--output-dir", str(output)],
-                cwd=root, text=True, capture_output=True, check=False,
+                [
+                    sys.executable,
+                    str(INSPECTION_SCRIPTS / "inspect_video.py"),
+                    str(source),
+                    "--output-dir",
+                    str(output),
+                ],
+                cwd=root,
+                text=True,
+                capture_output=True,
+                check=False,
             )
             self.assertEqual(result.returncode, 2)
             self.assertNotIn("Traceback", result.stderr)
             self.assertFalse(output.exists())
 
-    def test_numpy_sample_count_is_normalized_before_manifest_serialization(self) -> None:
+    def test_numpy_sample_count_is_normalized_before_manifest_serialization(
+        self,
+    ) -> None:
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
             output = inspect_video.run_inspection(
