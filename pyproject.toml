@@ -27,6 +27,9 @@ dev = [
 ]
 notebooks = ["jupyter==1.1.1"]
 
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+
 [tool.uv]
 conflicts = [[{ extra = "detection-cpu" }, { extra = "detection-cuda" }]]
 
