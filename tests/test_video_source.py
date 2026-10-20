@@ -64,17 +64,29 @@ class VideoSourceTests(unittest.TestCase):
         path = source / "seqinfo.ini"
         lines = path.read_text(encoding="utf-8").splitlines()
         path.write_text(
-            "\n".join(f"{key}={value}" if line.startswith(f"{key}=") else line for line in lines),
+            "\n".join(
+                f"{key}={value}" if line.startswith(f"{key}=") else line
+                for line in lines
+            ),
             encoding="utf-8",
         )
 
     def test_invalid_sequence_metadata_is_rejected(self) -> None:
         cases = [
-            ("frameRate", "nan"), ("frameRate", "inf"), ("frameRate", "0"),
-            ("frameRate", "-2"), ("frameRate", "1e-320"), ("seqLength", "0"),
-            ("seqLength", "-1"), ("seqLength", "4"), ("seqLength", "6"),
-            ("imWidth", "0"), ("imHeight", "-1"), ("imDir", ".."),
-            ("imExt", ".*"), ("frameRate", "unknown"),
+            ("frameRate", "nan"),
+            ("frameRate", "inf"),
+            ("frameRate", "0"),
+            ("frameRate", "-2"),
+            ("frameRate", "1e-320"),
+            ("seqLength", "0"),
+            ("seqLength", "-1"),
+            ("seqLength", "4"),
+            ("seqLength", "6"),
+            ("imWidth", "0"),
+            ("imHeight", "-1"),
+            ("imDir", ".."),
+            ("imExt", ".*"),
+            ("frameRate", "unknown"),
             ("seqLength", "9" * 400),
         ]
         for index, (key, value) in enumerate(cases):
@@ -112,18 +124,26 @@ class VideoSourceTests(unittest.TestCase):
     def test_frame_dimensions_must_match_metadata(self) -> None:
         source = make_sequence(self.root)
         self.change_metadata(source, "imWidth", "65")
-        with VideoSource(source) as reader, self.assertRaisesRegex(ValueError, "dimensions"):
+        with (
+            VideoSource(source) as reader,
+            self.assertRaisesRegex(ValueError, "dimensions"),
+        ):
             reader.read_frame(0)
 
     def test_corrupt_image_fails_when_read(self) -> None:
         source = make_sequence(self.root)
         (source / "img1" / "000003.jpg").write_bytes(b"not an image")
-        with VideoSource(source) as reader, self.assertRaisesRegex(OSError, "Failed to read"):
+        with (
+            VideoSource(source) as reader,
+            self.assertRaisesRegex(OSError, "Failed to read"),
+        ):
             reader.read_frame(2)
 
     def test_required_sequence_fields_are_not_inferred(self) -> None:
         source = make_sequence(self.root)
-        (source / "seqinfo.ini").write_text("[Sequence]\nimDir=img1\n", encoding="utf-8")
+        (source / "seqinfo.ini").write_text(
+            "[Sequence]\nimDir=img1\n", encoding="utf-8"
+        )
         with self.assertRaisesRegex(ValueError, "Invalid seqinfo.ini"):
             VideoSource(source)
 
@@ -155,8 +175,10 @@ class VideoSourceTests(unittest.TestCase):
         path = self.root / "mock.avi"
         path.touch()
         properties = {
-            cv2.CAP_PROP_FPS: 10.0, cv2.CAP_PROP_FRAME_COUNT: 5.0,
-            cv2.CAP_PROP_FRAME_WIDTH: 64.0, cv2.CAP_PROP_FRAME_HEIGHT: 48.0,
+            cv2.CAP_PROP_FPS: 10.0,
+            cv2.CAP_PROP_FRAME_COUNT: 5.0,
+            cv2.CAP_PROP_FRAME_WIDTH: 64.0,
+            cv2.CAP_PROP_FRAME_HEIGHT: 48.0,
             cv2.CAP_PROP_FOURCC: 0.0,
         }
         properties.update(overrides or {})
@@ -170,27 +192,39 @@ class VideoSourceTests(unittest.TestCase):
     def test_capture_is_released_when_opening_fails(self) -> None:
         path, capture = self.fake_capture()
         capture.isOpened.return_value = False
-        with (patch("video_source.cv2.VideoCapture", return_value=capture), self.assertRaises(OSError)):
+        with (
+            patch("video_source.cv2.VideoCapture", return_value=capture),
+            self.assertRaises(OSError),
+        ):
             VideoSource(path)
         capture.release.assert_called_once()
 
     def test_invalid_video_metadata_releases_capture(self) -> None:
         for property_id, value in (
-            (cv2.CAP_PROP_FPS, 0), (cv2.CAP_PROP_FPS, float("nan")),
-            (cv2.CAP_PROP_FRAME_COUNT, float("inf")), (cv2.CAP_PROP_FRAME_COUNT, 2.5),
-            (cv2.CAP_PROP_FRAME_WIDTH, -1), (cv2.CAP_PROP_FRAME_HEIGHT, 0),
+            (cv2.CAP_PROP_FPS, 0),
+            (cv2.CAP_PROP_FPS, float("nan")),
+            (cv2.CAP_PROP_FRAME_COUNT, float("inf")),
+            (cv2.CAP_PROP_FRAME_COUNT, 2.5),
+            (cv2.CAP_PROP_FRAME_WIDTH, -1),
+            (cv2.CAP_PROP_FRAME_HEIGHT, 0),
         ):
             with self.subTest(property_id=property_id, value=value):
                 path, capture = self.fake_capture({property_id: value})
-                with (patch("video_source.cv2.VideoCapture", return_value=capture), self.assertRaises(ValueError)):
+                with (
+                    patch("video_source.cv2.VideoCapture", return_value=capture),
+                    self.assertRaises(ValueError),
+                ):
                     VideoSource(path)
                 capture.release.assert_called_once()
 
     def test_failed_seek_does_not_read_or_mislabel_a_frame(self) -> None:
         path, capture = self.fake_capture()
         capture.set.return_value = False
-        with (patch("video_source.cv2.VideoCapture", return_value=capture), VideoSource(path) as source,
-              self.assertRaisesRegex(OSError, "seek")):
+        with (
+            patch("video_source.cv2.VideoCapture", return_value=capture),
+            VideoSource(path) as source,
+            self.assertRaisesRegex(OSError, "seek"),
+        ):
             source.read_frame(2)
         capture.read.assert_not_called()
         capture.release.assert_called_once()
@@ -200,13 +234,19 @@ class VideoSourceTests(unittest.TestCase):
             with self.subTest(shape=None if frame is None else frame.shape):
                 path, capture = self.fake_capture()
                 capture.read.return_value = (True, frame)
-                with (patch("video_source.cv2.VideoCapture", return_value=capture), VideoSource(path) as source,
-                      self.assertRaises((OSError, ValueError))):
+                with (
+                    patch("video_source.cv2.VideoCapture", return_value=capture),
+                    VideoSource(path) as source,
+                    self.assertRaises((OSError, ValueError)),
+                ):
                     source.read_frame(0)
 
     def test_unknown_codec_is_null(self) -> None:
         path, capture = self.fake_capture()
-        with patch("video_source.cv2.VideoCapture", return_value=capture), VideoSource(path) as source:
+        with (
+            patch("video_source.cv2.VideoCapture", return_value=capture),
+            VideoSource(path) as source,
+        ):
             self.assertIsNone(source.metadata.codec)
 
     def test_iterator_preserves_source_frame_indices(self) -> None:
@@ -219,15 +259,25 @@ class VideoSourceTests(unittest.TestCase):
 
     def test_sequential_reads_do_not_seek_for_each_frame(self) -> None:
         path, capture = self.fake_capture()
-        with patch("video_source.cv2.VideoCapture", return_value=capture), VideoSource(path) as source:
-            self.assertEqual([index for index, _ in source.iter_frames()], list(range(5)))
+        with (
+            patch("video_source.cv2.VideoCapture", return_value=capture),
+            VideoSource(path) as source,
+        ):
+            self.assertEqual(
+                [index for index, _ in source.iter_frames()], list(range(5))
+            )
             capture.set.assert_not_called()
             source.read_frame(0)
             capture.set.assert_called_once_with(cv2.CAP_PROP_POS_FRAMES, 0)
 
     def test_invalid_iterator_ranges_are_rejected(self) -> None:
         with VideoSource(make_sequence(self.root)) as source:
-            for kwargs in ({"start": -1}, {"stop": 6}, {"start": 3, "stop": 2}, {"step": 0}):
+            for kwargs in (
+                {"start": -1},
+                {"stop": 6},
+                {"start": 3, "stop": 2},
+                {"step": 0},
+            ):
                 with self.subTest(kwargs=kwargs), self.assertRaises(ValueError):
                     list(source.iter_frames(**kwargs))
             with self.assertRaises(TypeError):
