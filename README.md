@@ -66,6 +66,13 @@ Continuous integration (GitHub Actions, `.github/workflows/ci.yml`) runs exactly
 these checks — `uv sync --locked`, both ruff gates, and `pytest` — on every push,
 pull request, and manual dispatch, on `windows-latest` (the development OS).
 
+After inspecting real footage, validate the produced `video_info.json` against
+the published dataset specs:
+
+```bash
+uv run --locked python cv_projects/01_video_inspection/scripts/validate_dataset.py <run_dir>/video_info.json
+```
+
 Choose one detection environment when needed:
 
 ```bash
