@@ -95,8 +95,10 @@ def main(dest: Path, seqs: list[str]) -> None:
         if any(info.filename.startswith(f"MOT17/train/{seq}/") for seq in seqs)
     ]
     sizes = {
-        s: sum(i.file_size for i in wanted if i.filename.startswith(s + "/"))
-        for s in seqs
+        seq: sum(
+            i.file_size for i in wanted if i.filename.startswith(f"MOT17/train/{seq}/")
+        )
+        for seq in seqs
     }
     print("to extract:", {s: f"{v / 1e6:.0f} MB" for s, v in sizes.items()}, flush=True)
     count = 0
