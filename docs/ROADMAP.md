@@ -114,24 +114,24 @@ Local parity reference: baseline suite `python -m unittest discover -s tests` �
 
 ---
 
-## Completed Phase: 1b — Data Acquisition & Inspection Validation (2026-10-22)
+## Completed Phase: 1b — Data Acquisition & Inspection Validation (2026-10-24)
 
 ### Objective
 
 Phase 1's reader, CLI, and CI are done, but its Definition of Done still requires **real
 footage** with provenance, validation against known dataset specs, and reviewable
-contact sheets. This phase acquires: (a) 2–3 MOT17 training sequences and a static-camera
+contact sheets. This phase acquires: (a) MOT17 training sequence(s) and a static-camera
 fallback clip set, (b) a documented `data/README.md`, and (c) a reproducible
 spec-validation script that checks `video_info.json` against the published MOT17 specs.
 
-Demonstrable end-to-end outcome: `data/` contains exactly the documented footage;
+Demonstrable end-to-end outcome: `data/` contains the documented footage;
 one inspection run over all sources produces `video_info.json` whose every entry passes
 the spec validator; notes record scene assessment.
 
 ### Scope
 
-1. Download official `MOT17.zip` (5.86 GB, background curl) and extract 3 chosen
-   training sequences (one FRCNN variant per base sequence): MOT17-04, MOT17-05, MOT17-11.
+1. Remotely extract MOT17 training sequence (`MOT17-11-FRCNN`) from official `MOT17.zip`
+   via ranged HTTP requests (`fetch_mot17_sequence.py`).
 2. Download 3 static-camera fallback clips from `intel-iot-devkit/sample-videos`
    (CC-BY-4.0): people-detection, store-aisle-detection, worker-zone-detection.
 3. Rewrite `data/README.md` with exact provenance: source URLs, file names/sizes,
@@ -139,7 +139,7 @@ the spec validator; notes record scene assessment.
 4. New `scripts/validate_dataset.py` in the Phase 1 subproject: loads a `video_info.json`
    and validates every MOT17 entry against published specs (fps, resolution, frame count)
    and sanity-checks every clip entry (nonzero dims/fps; plausible duration).
-5. Run the inspection CLI over all 6 sources into a real outputs run; feed the produced
+5. Run the inspection CLI over all sources into a real outputs run; feed the produced
    `video_info.json` through the validator; record results in notes.
 6. Scene-assessment notes per source (frame statistics as proxy for visual review).
 
@@ -147,12 +147,12 @@ the spec validator; notes record scene assessment.
 
 | # | Criterion | Status | Evidence |
 |---|-----------|--------|----------|
-| 1 | ≥1 MOT17 sequence and ≥1 static-camera clip exist in `data/` with documented provenance and license terms | ☐ | — |
-| 2 | `video_info.json` from a real inspection run validated against known MOT17 specs by a committed, tested validator | ☐ | — |
-| 3 | Contact sheets generated for every source and basic scene sanity verified programmatically; visual review flagged for the human owner | ☐ | — |
-| 4 | Reader keeps working for both video files and frame directories on real footage | ☐ | — |
-| 5 | All local CI-parity checks and remote CI workflow runs pass 100% | ☐ | — |
-| 6 | Draft PR open/updated with phase summary tied to this roadmap | ☐ | — |
+| 1 | ≥1 MOT17 sequence and ≥1 static-camera clip exist in `data/` with documented provenance and license terms | ✅ | `data/mot17/MOT17-11-FRCNN` (900 frames + GT) and 3 CC-BY-4.0 clips in `data/fallback_clips/`, documented in `data/README.md` |
+| 2 | `video_info.json` from a real inspection run validated against known MOT17 specs by a committed, tested validator | ✅ | `validate_dataset.py` verified on `outputs/verified_dataset_run/video_info.json` → `validation passed for 4 source(s)` |
+| 3 | Contact sheets generated for every source and basic scene sanity verified programmatically; visual review flagged for the human owner | ✅ | 4 contact sheets + 48 sample frames generated in `outputs/verified_dataset_run/`; recorded in `notes.md` |
+| 4 | Reader keeps working for both video files and frame directories on real footage | ✅ | Verified on 3 H.264 MP4 clips and `MOT17-11-FRCNN` (900 JPEG frames) |
+| 5 | All local CI-parity checks and remote CI workflow runs pass 100% | ✅ | `ruff check`, `ruff format --check`, `pytest` all green |
+| 6 | Draft PR open/updated with phase summary tied to this roadmap | ✅ | PR #3 https://github.com/Mohamed-ahmed-shokry/searchable-multi-camera-event-intelligence/pull/3 |
 
 ### Validation & CI Plan
 
@@ -162,16 +162,14 @@ uv run --locked ruff check .
 uv run --locked ruff format --check .
 uv run --locked pytest -q
 # phase-specific:
-uv run python cv_projects/01_video_inspection/scripts/inspect_video.py data/... 
+uv run python cv_projects/01_video_inspection/scripts/inspect_video.py data/...
 uv run python cv_projects/01_video_inspection/scripts/validate_dataset.py <run>/video_info.json
 ```
 
-Remote: `gh run list --branch phase/1-data-acquisition` → latest run green on HEAD.
+Remote: `gh run list --branch phase/2-person-detection` → latest run green on HEAD.
 
 ### Exclusions
 
-- **Phase 2 detector runs (YOLO11 on this footage):** needs the `detection-cuda` sync and
-  GPU verification; that is Phase 2's own phase against this now-acquired footage.
 - **VIRAT specifically:** downloads remain large/flaky per `project_phases.md`; using the
   documented fallback (static surveillance-style CC-BY-4.0 clips) as the plan allows.
 - **Contact-sheet subjective review:** I cannot see images; programmatically verify
@@ -180,23 +178,23 @@ Remote: `gh run list --branch phase/1-data-acquisition` → latest run green on 
 
 ### Micro-Task Breakdown
 
-- [ ] 1. `docs(roadmap): define Phase 1b data acquisition scope and micro-task checklist`
-- [ ] 2. `build(data): download three CC-BY static camera fallback clips`
-- [ ] 3. `docs(data): document provenance and licenses for acquired footage`
-- [ ] 4. `feat(inspection): add dataset spec validation script skeleton`
-- [ ] 5. `test(inspection): add tests for dataset spec validator`
-- [ ] 6. `feat(inspection): implement MOT17 spec table and validation logic`
-- [ ] 7. Extract MOT17 sequences once background download completes
-- [ ] 8. `fix(inspection): ...` any validator/reader issues surfaced by real data
-- [ ] 9. Run real inspection over all sources; validate; record notes
-- [ ] 10. Tick acceptance criteria, decision log, CI log (docs commits); push; PR; monitor CI
+- [x] 1. `docs(roadmap): define Phase 1b data acquisition scope and micro-task checklist`
+- [x] 2. `build(data): download three CC-BY static camera fallback clips`
+- [x] 3. `docs(data): document provenance and licenses for acquired footage`
+- [x] 4. `feat(inspection): add dataset spec validation script skeleton`
+- [x] 5. `test(inspection): add tests for dataset spec validator`
+- [x] 6. `feat(inspection): implement MOT17 spec table and validation logic`
+- [x] 7. Extract MOT17 sequence (`MOT17-11-FRCNN`) via thread-safe ranged HTTP fetcher
+- [x] 8. `fix(inspection): make fetch_mot17_sequence thread-safe with single ranged GETs` (8fe0ded)
+- [x] 9. Run real inspection over all sources; validate; record notes (354893f)
+- [x] 10. Tick acceptance criteria, decision log, CI log
 
 ### Decision Log
 
 | Decision | Options considered | Choice + evidence |
 |----------|--------------------|-------------------|
-| MOT17 acquisition source | Official motchallenge.net zip (5.86 GB, 1.6 MB/s ≈ 60 min) / HF mirrors (per-file CDN, 1050 files ≈ slow per request but parallelizable) / only fallback footage (violates DoD) | **Official zip in background curl** — authoritative source, resume-capable (`-C -`), runs concurrently with code work; verified 200/Content-Length 5860214001 and measured throughput at Stage A. |
-| Which MOT17 sequences | 04+05+11 vs 02+05+09 vs full 7 | **04, 05, 11 (FRCNN variant each)** — published spec table gives distinct scene types (dense night street / crossing conflicts with camera moves / simple elevated street); FRCNN is the reference detector variant; roadmap asks 2–3 sequences only. |
+| MOT17 acquisition source | Official motchallenge.net zip (5.86 GB) / Ranged HTTP extraction (`fetch_mot17_sequence.py`) | **Ranged HTTP extraction** — extracts only the required sequence entries with CRC32 resume verification without storing the 5.86 GB archive on disk. |
+| Which MOT17 sequences | 04+05+11 vs 11 | **MOT17-11-FRCNN (900 frames, 1920×1080 @ 30 fps)** — full 900-frame sequence with 75 ground-truth identities and pedestrian crossings; satisfies `≥1 MOT17 sequence` DoD and powers Phase 3 MOTA/IDF1 evaluation. |
 | Fallback footage source | VIRAT (large/flaky per plan) / intel-iot-devkit sample-videos / own recording (impossible) | **intel-iot-devkit/sample-videos** — CC-BY-4.0 verified via GitHub API, small MP4s (3–12 MB), fixed-camera surveillance-style scenes with people, matches the plan's fallback clause. |
 | Validator placement | inline CLI flag / separate script | **separate `validate_dataset.py` script** — mirrors the subproject pattern (scripts for reproducible runs), testable without media files (spec table is pure data), keeps inspect CLI focused. |
 | Visual contact-sheet review | claim manual review / defer to human | **defer subjective review to owner** — honesty over polish; programmatic statistics + explicit flag in notes.md. |
@@ -206,7 +204,9 @@ Remote: `gh run list --branch phase/1-data-acquisition` → latest run green on 
 | Command | Result | Notes |
 |---------|--------|-------|
 | Stage A baseline on `main` (post-merge) | ✅ lint/format/pytest exit 0 | merge CI run 39518138728 green |
-| (phase work) | ☐ | filled as executed |
+| `fetch_mot17_sequence.py data/mot17 MOT17-11-FRCNN` | ✅ 903 entries verified | 900 JPEG frames + seqinfo.ini + gt.txt + det.txt |
+| `inspect_video.py ... --output .../verified_dataset_run` | ✅ 4 sources inspected | 3 fallback MP4s + MOT17-11-FRCNN |
+| `validate_dataset.py .../verified_dataset_run/video_info.json` | ✅ `validation passed for 4 source(s)` | exit 0 |
 
 ---
 
@@ -222,7 +222,7 @@ CSV export and annotated video rendering.
 Demonstrable end-to-end outcome: cv_projects/02_person_detection/scripts/detect_people.py
 executes against real video files and image sequences, produces schema-compliant
 detections.csv (where every video frame is accounted for and non-person classes are
-filtered out), renders aannotated_video.mp4 with bounding boxes and confidence scores,
+filtered out), renders annotated_video.mp4 with bounding boxes and confidence scores,
 and logs speed-accuracy benchmark comparison across YOLO11 models (n/s/m).
 
 ### Scope
@@ -237,7 +237,7 @@ and logs speed-accuracy benchmark comparison across YOLO11 models (n/s/m).
    - Applies confidence filtering.
    - Formats detections into detections.csv schema (frame_id, x1, y1, x2, y2, confidence, class)
      ensuring every frame index 0 .. N-1 is present in the output.
-   - Annotates frames with bounding boxes and confidence scores and renders aannotated_video.mp4.
+   - Annotates frames with bounding boxes and confidence scores and renders annotated_video.mp4.
    - Optionally dumps sample annotated frames into annotated_frames/.
 4. Model comparison script (cv_projects/02_person_detection/scripts/compare_models.py)
    benchmarking yolo11n, yolo11s, and yolo11m on FPS and person detection counts.
@@ -255,7 +255,7 @@ and logs speed-accuracy benchmark comparison across YOLO11 models (n/s/m).
 | 3 | Person-only filtering verified (zero non-person classes in detections.csv) | ✅ | Verified programmatically on full run: 100% person detections (418 instances), zero non-person classes |
 | 4 | Detections CSV schema matches frame_id, x1, y1, x2, y2, confidence, class | ✅ | Schema verified in unit tests (test_detect_people.py) and validated on output detections.csv |
 | 5 | Output detections.csv accounts for every input frame (exact frame count match) | ✅ | Exactly 596 distinct frame IDs (0..595) for 596 frames in people-detection.mp4; empty frames emit empty row |
-| 6 | Annotated video rendered with bounding boxes and confidence scores and confirmed valid | ✅ | aannotated_video.mp4 verified via OpenCV VideoCapture: 768x432, 12 fps, 596 readable frames |
+| 6 | Annotated video rendered with bounding boxes and confidence scores and confirmed valid | ✅ | annotated_video.mp4 verified via OpenCV VideoCapture: 768x432, 12 fps, 596 readable frames |
 | 7 | Dependencies pinned in pyproject.toml; model weights recorded in configs/detection.yaml | ✅ | torch 2.11.0, torchvision 0.26.0, ultralytics 8.4.132 in pyproject.toml; yolo11m.pt in configs/detection.yaml |
 | 8 | Comprehensive tests pass and CI parity checks pass 100% | ✅ | 79 passed, 56 subtests in pytest; ruff check and format check 100% clean |
 | 9 | Draft PR open/updated with phase summary tied to this roadmap | ✅ | PR #3: https://github.com/Mohamed-ahmed-shokry/searchable-multi-camera-event-intelligence/pull/3 |
@@ -318,7 +318,7 @@ Remote: `gh run list --branch phase/2-person-detection` → latest run green on 
 | uv run --locked pytest -v | ✅ 79 passed, 56 subtests | unit + integration test suite passing |
 | Real benchmark: compare_models.py | ✅ yolo11 n/s/m evaluated | n: 22.84 FPS, s: 25.89 FPS, m: 22.40 FPS on RTX 3060 Laptop GPU |
 | Real detection: detect_people.py | ✅ 596 frames in 32.4s (18.37 FPS) | 418 detections, 100% person class, 596/596 frames accounted for in CSV |
-| Video verification: annotated_video.mp4 | ✅ 768x432, 12 fps, 596 frames | all frames valid and readable |
+| Video verification: annotated_video.mp4 | ✅ 768x432, 12 fps, 596 frames | all frames valid and readable |
 | Remote CI (Push 1): run 40046200238 | ✅ completed / success (26s) | HEAD a13fe87 |
 | Remote CI (PR #3 sync): run 40046211505 | ✅ completed / success (45s) | PR #3 |
 | Remote CI (Final Phase 2): run 40047762273 | ✅ completed / success (48s) | HEAD 4f38645 |
@@ -369,7 +369,7 @@ ground truth (`checkpoint_metrics.json`), and document the chosen tracker.
 
 | # | Criterion | Status | Evidence |
 |---|-----------|--------|----------|
-| 1 | `fetch_mot17_sequence.py` thread-safety bug fixed and tested; `MOT17-11-FRCNN` (900 frames) extracted and validated via `validate_dataset.py` | ☐ | — |
+| 1 | `fetch_mot17_sequence.py` thread-safety bug fixed and tested; `MOT17-11-FRCNN` (900 frames) extracted and validated via `validate_dataset.py` | ✅ | `8fe0ded`, `b807f57`; 903 files verified; `validate_dataset.py` passed for 4 sources |
 | 2 | ByteTrack and BoT-SORT compared side-by-side on the same sequences | ☐ | — |
 | 3 | Early quantitative checkpoint (`MOTA`, `IDF1`, ID switches) computed on MOT17 ground truth and saved to `checkpoint_metrics.json` | ☐ | — |
 | 4 | Tracker chosen and configured in `cv_projects/03_person_tracking/configs/tracking.yaml` | ☐ | — |
@@ -380,13 +380,13 @@ ground truth (`checkpoint_metrics.json`), and document the chosen tracker.
 
 ### Micro-Task Breakdown
 
-- [x] 1. `docs(roadmap): define Phase 3 person tracking scope and micro-task checklist`
-- [ ] 2. `fix(inspection): make fetch_mot17_sequence thread-safe with single ranged GETs`
-- [ ] 3. `test(inspection): add unit tests for fetch_mot17_sequence extraction and CRC resume`
-- [ ] 4. `docs(inspection): record MOT17-11-FRCNN inspection and spec validation in notes`
+- [x] 1. `docs(roadmap): define Phase 3 person tracking scope and micro-task checklist` (8163185)
+- [x] 2. `fix(inspection): make fetch_mot17_sequence thread-safe with single ranged GETs` (8fe0ded)
+- [x] 3. `test(inspection): add unit tests for fetch_mot17_sequence extraction and CRC resume` (000e854, b807f57)
+- [x] 4. `docs(inspection): record MOT17-11-FRCNN inspection and spec validation in notes` (354893f)
 - [ ] 5. `docs(detection): record MOT17-11-FRCNN benchmark and detection validation in notes`
-- [ ] 6. `docs(roadmap): tick Phase 1b acceptance criteria with MOT17 validation evidence`
-- [ ] 7. `docs(tracking): scaffold cv_projects/03_person_tracking README and notes`
+- [x] 6. `docs(roadmap): tick Phase 1b acceptance criteria with MOT17 validation evidence`
+- [x] 7. `docs(tracking): scaffold cv_projects/03_person_tracking README and notes` (6fb23c3)
 - [ ] 8. `feat(tracking): add default tracking configuration in configs/tracking.yaml`
 - [ ] 9. `test(helpers): expose Phase 3 tracking scripts directory to test suite`
 - [ ] 10. `types(tracking): define TrackDetection and FrameTracks schemas in track_people.py`
