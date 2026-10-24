@@ -5,6 +5,7 @@ track summaries, anomaly detection, and MOT17 evaluation.
 from __future__ import annotations
 
 import csv
+import json
 import tempfile
 import unittest
 from pathlib import Path
@@ -12,6 +13,7 @@ from types import SimpleNamespace
 
 import helpers
 import numpy as np
+from compare_trackers import compare_trackers
 from evaluate_mot import box_iou, compute_iou_matrix, evaluate_tracking, load_mot17_gt
 from track_people import (
     TRACK_SUMMARY_CSV_HEADER,
@@ -403,6 +405,57 @@ class EvaluateMotParserTests(unittest.TestCase):
         self.assertAlmostEqual(m_switched["mota"], 0.3333, places=4)
         # IDTP = 2 (for pred 42 matched on frames 0 & 1), denom = 3 GT + 4 pred = 7 -> IDF1 = 4/7 = 0.5714
         self.assertAlmostEqual(m_switched["idf1"], 0.5714, places=4)
+
+
+class CompareTrackersTests(unittest.TestCase):
+    def test_compare_trackers_writes_checkpoint_metrics_json(self):
+        def make_fake_tracker(tracker_cfg: str) -> PersonTracker:
+            def fake_track(*_a, **_kw):
+                return [
+                    SimpleNamespace(
+                        boxes=[
+                            SimpleNamespace(
+                                id=[1],
+                                cls=[0],
+                                conf=[0.9],
+                                xyxy=[[10.0, 10.0, 30.0, 40.0]],
+                            )
+                        ]
+                    )
+                ]
+
+            return PersonTracker(
+                tracker_config=tracker_cfg,
+                device="cpu",
+                model=SimpleNamespace(track=fake_track),
+            )
+
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            seq_dir = helpers.make_sequence(root, count=3)
+            gt_dir = seq_dir / "gt"
+            gt_dir.mkdir(parents=True, exist_ok=True)
+            (gt_dir / "gt.txt").write_text(
+                "1,1,10,10,20,30,1,1,1.0\n"
+                "2,1,10,10,20,30,1,1,1.0\n"
+                "3,1,10,10,20,30,1,1,1.0\n",
+                encoding="utf-8",
+            )
+            out_dir = root / "cmp_out"
+            ckpt = compare_trackers(
+                seq_dir,
+                output_dir=out_dir,
+                tracker_factory=make_fake_tracker,
+            )
+            self.assertIn("bytetrack", ckpt["trackers"])
+            self.assertIn("botsort", ckpt["trackers"])
+            self.assertAlmostEqual(ckpt["trackers"]["bytetrack"]["mota"], 1.0)
+            self.assertAlmostEqual(ckpt["trackers"]["botsort"]["idf1"], 1.0)
+
+            ckpt_file = out_dir / "checkpoint_metrics.json"
+            self.assertTrue(ckpt_file.is_file())
+            loaded = json.loads(ckpt_file.read_text(encoding="utf-8"))
+            self.assertEqual(loaded["frame_count"], 3)
 
 
 if __name__ == "__main__":
