@@ -10,6 +10,9 @@ from collections.abc import Sequence
 from dataclasses import dataclass, field
 from pathlib import Path
 
+import cv2
+import numpy as np
+
 TRACKS_CSV_HEADER: list[str] = [
     "frame_id",
     "track_id",
@@ -385,3 +388,85 @@ class PersonTracker:
             )
 
         return tracks
+
+
+TRACK_COLOR_PALETTE: list[tuple[int, int, int]] = [
+    (255, 100, 50),
+    (50, 220, 100),
+    (50, 150, 255),
+    (220, 80, 220),
+    (60, 230, 230),
+    (255, 180, 40),
+    (180, 255, 80),
+    (255, 80, 140),
+    (80, 200, 180),
+    (160, 110, 255),
+]
+
+
+def track_color(track_id: int) -> tuple[int, int, int]:
+    """Return a deterministic BGR color for a given track_id."""
+    return TRACK_COLOR_PALETTE[track_id % len(TRACK_COLOR_PALETTE)]
+
+
+def draw_tracks(
+    frame: np.ndarray,
+    tracks: Sequence[TrackDetection],
+    *,
+    thickness: int = 2,
+) -> np.ndarray:
+    """Draw per-track colored bounding boxes and ID labels onto a frame copy."""
+    annotated = frame.copy()
+    height, width = annotated.shape[:2]
+    font = cv2.FONT_HERSHEY_SIMPLEX
+    font_scale = 0.48
+    font_thickness = 1
+
+    for trk in tracks:
+        color = track_color(trk.track_id)
+        x1 = max(0, min(round(trk.x1), width - 1))
+        y1 = max(0, min(round(trk.y1), height - 1))
+        x2 = max(0, min(round(trk.x2), width - 1))
+        y2 = max(0, min(round(trk.y2), height - 1))
+
+        cv2.rectangle(annotated, (x1, y1), (x2, y2), color, thickness)
+
+        label = f"ID {trk.track_id} ({trk.confidence:.2f})"
+        (label_w, label_h), _ = cv2.getTextSize(label, font, font_scale, font_thickness)
+        pill_y1 = max(0, y1 - label_h - 4)
+        pill_y2 = y1
+        pill_x2 = min(width - 1, x1 + label_w + 4)
+
+        cv2.rectangle(annotated, (x1, pill_y1), (pill_x2, pill_y2), color, -1)
+        cv2.putText(
+            annotated,
+            label,
+            (x1 + 2, max(label_h, pill_y2 - 2)),
+            font,
+            font_scale,
+            (0, 0, 0),
+            font_thickness,
+            cv2.LINE_AA,
+        )
+
+    return annotated
+
+
+def create_video_writer(
+    output_path: str | Path,
+    fps: float,
+    width: int,
+    height: int,
+    fourcc: str = "mp4v",
+) -> cv2.VideoWriter:
+    """Create a cv2.VideoWriter for rendering annotated tracking videos."""
+    path = Path(output_path)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    fourcc_code = cv2.VideoWriter_fourcc(*fourcc)
+    writer = cv2.VideoWriter(str(path), fourcc_code, fps, (width, height))
+    if not writer.isOpened():
+        fallback_fourcc = cv2.VideoWriter_fourcc(*"MJPG")
+        writer = cv2.VideoWriter(str(path), fallback_fourcc, fps, (width, height))
+    if not writer.isOpened():
+        raise RuntimeError(f"Could not open VideoWriter for {path}")
+    return writer
