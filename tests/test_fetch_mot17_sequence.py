@@ -6,9 +6,7 @@ import unittest
 import zipfile
 from pathlib import Path
 
-from tests import helpers  # noqa: F401 — adds scripts dir to sys.path
-
-import fetch_mot17_sequence as fm  # isort:skip
+import fetch_mot17_sequence as fm
 
 
 def _build_in_memory_mot17_zip() -> bytes:
