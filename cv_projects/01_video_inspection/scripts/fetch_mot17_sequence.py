@@ -8,9 +8,10 @@ Usage:
 
 How it works:
 - The archive's central directory is read over a few ranged requests.
-- For every entry belonging to the requested sequences, one ranged GET fetches
-  exactly that entry's compressed bytes; they are decompressed, CRC-verified,
-  and written into ``<dest_dir>/`` under the entry's relative path.
+- For every entry belonging to the requested sequences, one thread-safe ranged
+  GET fetches the entry's local file header and compressed bytes together; they
+  are decompressed, CRC-verified, and written into ``<dest_dir>/`` under the
+  entry's relative path.
 - Files that already exist locally with matching sizes are CRC-checked locally
   and skipped when valid, so an interrupted run resumes cheaply.
 - Kept here so data acquisition is reproducible; the ~5.9 GB archive itself is
@@ -21,10 +22,12 @@ from __future__ import annotations
 
 import io
 import sys
+import threading
 import time
 import urllib.request
 import zipfile
 import zlib
+from collections.abc import Callable
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
@@ -32,6 +35,8 @@ ARCHIVE_URL = "https://motchallenge.net/data/MOT17.zip"
 ARCHIVE_LENGTH = 5860214001
 CHUNK = 1024 * 1024
 WORKERS = 10
+LOCAL_HEADER_MAGIC = b"PK\x03\x04"
+EXTRA_PADDING_ESTIMATE = 256
 
 
 class RemoteFile(io.RawIOBase):
@@ -106,19 +111,6 @@ def open_archive() -> zipfile.ZipFile:
     return zipfile.ZipFile(remote)
 
 
-def _entry_data(info: zipfile.ZipInfo, archive: zipfile.ZipFile) -> int:
-    """Byte offset of an entry's compressed payload inside the archive."""
-    with archive.open(info):
-        pass
-    header_offset = info.header_offset
-    remote = archive.fp  # type: ignore[attr-defined]
-    remote.seek(header_offset)
-    local_header = remote.read(30)
-    name_length = int.from_bytes(local_header[26:28], "little")
-    extra_length = int.from_bytes(local_header[28:30], "little")
-    return header_offset + 30 + name_length + extra_length
-
-
 def _range_bytes(start: int, end: int, attempts: int = 5) -> bytes:
     request = urllib.request.Request(
         ARCHIVE_URL, headers={"Range": f"bytes={start}-{end}"}
@@ -131,6 +123,33 @@ def _range_bytes(start: int, end: int, attempts: int = 5) -> bytes:
             if attempt == attempts - 1:
                 raise
     raise OSError("unreachable")
+
+
+def _fetch_entry_payload(
+    info: zipfile.ZipInfo,
+    range_fetcher: Callable[[int, int], bytes] = _range_bytes,
+) -> bytes:
+    """Fetch an entry's compressed payload via thread-safe ranged reads without mutating ZipFile."""
+    header_offset = info.header_offset
+    estimated_span = (
+        30
+        + len(info.filename.encode("utf-8"))
+        + EXTRA_PADDING_ESTIMATE
+        + info.compress_size
+    )
+    raw = range_fetcher(header_offset, header_offset + estimated_span - 1)
+    if len(raw) < 30 or raw[:4] != LOCAL_HEADER_MAGIC:
+        raise zipfile.BadZipFile(
+            f"Bad magic number for file header at offset {header_offset}"
+        )
+    name_length = int.from_bytes(raw[26:28], "little")
+    extra_length = int.from_bytes(raw[28:30], "little")
+    payload_rel_start = 30 + name_length + extra_length
+    payload_rel_end = payload_rel_start + info.compress_size
+    if len(raw) >= payload_rel_end:
+        return raw[payload_rel_start:payload_rel_end]
+    data_offset = header_offset + payload_rel_start
+    return range_fetcher(data_offset, data_offset + info.compress_size - 1)
 
 
 def _decompress(payload: bytes, method: int) -> bytes:
@@ -149,7 +168,12 @@ def _local_crc_matches(path: Path, expected_crc: str) -> bool:
     return f"{crc & 0xFFFFFFFF:08x}" == expected_crc.lower()
 
 
-def extract(archive: zipfile.ZipFile, dest: Path, seqs: list[str]) -> None:
+def extract(
+    archive: zipfile.ZipFile,
+    dest: Path,
+    seqs: list[str],
+    range_fetcher: Callable[[int, int], bytes] = _range_bytes,
+) -> None:
     wanted = [
         info
         for info in archive.infolist()
@@ -163,6 +187,7 @@ def extract(archive: zipfile.ZipFile, dest: Path, seqs: list[str]) -> None:
         flush=True,
     )
     done = 0
+    lock = threading.Lock()
     started = time.time()
 
     def worker(info: zipfile.ZipInfo) -> None:
@@ -170,10 +195,10 @@ def extract(archive: zipfile.ZipFile, dest: Path, seqs: list[str]) -> None:
         relative = Path(*info.filename.split("/")[2:])  # strip MOT17/train/
         target = dest / relative
         if _local_crc_matches(target, f"{info.CRC:08x}"):
-            done += 1
+            with lock:
+                done += 1
             return
-        data_offset = _entry_data(info, archive)
-        payload = _range_bytes(data_offset, data_offset + info.compress_size - 1)
+        payload = _fetch_entry_payload(info, range_fetcher=range_fetcher)
         if len(payload) != info.compress_size:
             raise OSError(f"short read for {info.filename}: {len(payload)} bytes")
         content = _decompress(payload, info.compress_type)
@@ -183,10 +208,12 @@ def extract(archive: zipfile.ZipFile, dest: Path, seqs: list[str]) -> None:
             raise OSError(f"CRC mismatch for {info.filename}")
         target.parent.mkdir(parents=True, exist_ok=True)
         target.write_bytes(content)
-        done += 1
-        if done % 200 == 0:
-            rate = done / max(time.time() - started, 1e-6)
-            print(f"  {done}/{total} ({rate:.1f} files/s)", flush=True)
+        with lock:
+            done += 1
+            current_done = done
+        if current_done % 200 == 0:
+            rate = current_done / max(time.time() - started, 1e-6)
+            print(f"  {current_done}/{total} ({rate:.1f} files/s)", flush=True)
 
     with ThreadPoolExecutor(WORKERS) as pool:
         for result in [pool.submit(worker, info) for info in wanted]:
