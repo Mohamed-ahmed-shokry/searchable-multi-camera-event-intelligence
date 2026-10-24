@@ -5,6 +5,7 @@ and schema validation.
 from __future__ import annotations
 
 import csv
+import json
 import tempfile
 import unittest
 from pathlib import Path
@@ -322,3 +323,41 @@ class DetectionPipelineIntegrationTests(unittest.TestCase):
         with self.assertRaises(SystemExit) as ctx:
             main(["nonexistent_clip.mp4"])
         self.assertEqual(ctx.exception.code, 2)
+
+    def test_compare_models_outputs_valid_json(self) -> None:
+        from unittest.mock import patch
+
+        import compare_models
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            tmp = Path(tmpdir)
+            video_path = make_video(tmp, name="bench_clip.avi", count=3)
+            out_json = tmp / "comparison.json"
+
+            fake_metrics = {
+                "model": "fake.pt",
+                "device": "cpu",
+                "confidence_threshold": 0.4,
+                "frame_count": 3,
+                "duration_seconds": 0.05,
+                "fps": 60.0,
+                "total_detections": 5,
+                "frames_with_detections": 3,
+                "avg_detections_per_frame": 1.67,
+            }
+
+            with patch.object(
+                compare_models, "benchmark_model", return_value=fake_metrics
+            ):
+                results = compare_models.compare_models(
+                    video_path,
+                    models=("fake.pt",),
+                    output_path=out_json,
+                )
+
+            self.assertEqual(len(results), 1)
+            self.assertEqual(results[0]["model"], "fake.pt")
+            self.assertTrue(out_json.is_file())
+            loaded = json.loads(out_json.read_text(encoding="utf-8"))
+            self.assertEqual(len(loaded), 1)
+            self.assertEqual(loaded[0]["fps"], 60.0)
