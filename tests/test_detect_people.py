@@ -18,10 +18,14 @@ from detect_people import (
     PersonDetector,
     create_video_writer,
     draw_detections,
+    load_config,
+    main,
     read_detections_csv,
+    run_detection,
     select_default_device,
     write_detections_csv,
 )
+from helpers import make_sequence, make_video
 
 
 class DetectionSchemaTests(unittest.TestCase):
@@ -228,3 +232,93 @@ class AnnotationTests(unittest.TestCase):
 
             self.assertTrue(out_path.is_file())
             self.assertGreater(out_path.stat().st_size, 0)
+
+
+class DetectionPipelineIntegrationTests(unittest.TestCase):
+    """Test end-to-end detection execution against video files and frame sequences."""
+
+    def test_load_config_reads_yaml(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            cfg_path = Path(tmpdir) / "test_cfg.yaml"
+            cfg_path.write_text(
+                "model: yolo11s.pt\nconfidence_threshold: 0.5\ndevice: cpu\nsave_video: false\n",
+                encoding="utf-8",
+            )
+            cfg = load_config(cfg_path)
+            self.assertEqual(cfg["model"], "yolo11s.pt")
+            self.assertEqual(cfg["confidence_threshold"], 0.5)
+            self.assertEqual(cfg["device"], "cpu")
+            self.assertFalse(cfg["save_video"])
+
+    def test_run_detection_on_synthetic_video_generates_all_artifacts(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            tmp = Path(tmpdir)
+            video_path = make_video(tmp, name="test_clip.avi", count=6)
+            out_dir = tmp / "output"
+
+            class MockDetector:
+                model_name = "mock_model.pt"
+                confidence_threshold = 0.4
+                device = "cpu"
+
+                def detect(self, frame: np.ndarray) -> list[Detection]:
+                    # Return 1 detection on even frames, 0 on odd frames
+                    return [Detection(10.0, 10.0, 30.0, 30.0, 0.85, "person")]
+
+            summary = run_detection(
+                video_path,
+                output_dir=out_dir,
+                detector=MockDetector(),
+                save_video=True,
+                save_sample_frames=True,
+                sample_frame_interval=2,
+            )
+
+            self.assertEqual(summary["frame_count"], 6)
+            self.assertEqual(summary["total_detections"], 6)
+            self.assertTrue((out_dir / "detections.csv").is_file())
+            self.assertTrue((out_dir / "annotated_video.mp4").is_file())
+            self.assertTrue((out_dir / "detection_summary.json").is_file())
+
+            # Read back CSV and verify exact frame match
+            rows = read_detections_csv(out_dir / "detections.csv")
+            self.assertEqual(len(rows), 6)
+            self.assertEqual([r["frame_id"] for r in rows], list(range(6)))
+
+    def test_run_detection_on_synthetic_frame_sequence(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            tmp = Path(tmpdir)
+            seq_dir = make_sequence(tmp, name="test_seq", count=5)
+            out_dir = tmp / "seq_output"
+
+            class ZeroDetector:
+                model_name = "zero.pt"
+                confidence_threshold = 0.4
+                device = "cpu"
+
+                def detect(self, frame: np.ndarray) -> list[Detection]:
+                    return []
+
+            summary = run_detection(
+                seq_dir,
+                output_dir=out_dir,
+                detector=ZeroDetector(),
+                save_video=False,
+            )
+
+            self.assertEqual(summary["frame_count"], 5)
+            self.assertEqual(summary["total_detections"], 0)
+            self.assertEqual(summary["frames_with_detections"], 0)
+
+            # Every frame must still be present in the CSV
+            rows = read_detections_csv(out_dir / "detections.csv")
+            self.assertEqual(len(rows), 5)
+            self.assertEqual([r["frame_id"] for r in rows], list(range(5)))
+            for r in rows:
+                self.assertIsNone(r["x1"])
+                self.assertIsNone(r["confidence"])
+
+    def test_cli_exits_cleanly_on_nonexistent_source(self) -> None:
+        with self.assertRaises(SystemExit) as ctx:
+            main(["nonexistent_clip.mp4"])
+        self.assertEqual(ctx.exception.code, 2)
