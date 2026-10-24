@@ -14,6 +14,7 @@ from track_people import (
     TRACKS_CSV_HEADER,
     FrameTracks,
     TrackDetection,
+    analyze_track_anomalies,
     compute_track_summaries,
     read_track_summary_csv,
     read_tracks_csv,
@@ -161,6 +162,41 @@ class TrackSummaryTests(unittest.TestCase):
             self.assertEqual(len(loaded), 2)
             self.assertEqual(loaded[0].track_id, 10)
             self.assertEqual(loaded[0].observed_frames, 2)
+
+
+class TrackAnomalyTests(unittest.TestCase):
+    def test_detects_fragmentation_and_spatial_handoff(self):
+        frames = [
+            FrameTracks(
+                frame_id=0,
+                tracks=[
+                    TrackDetection(0, 1, 10, 10, 50, 90, 0.9),
+                    TrackDetection(0, 5, 200, 100, 240, 180, 0.85),
+                ],
+            ),
+            FrameTracks(frame_id=1, tracks=[]),
+            FrameTracks(
+                frame_id=2,
+                tracks=[
+                    # Track 1 reappears after 1-frame gap at frame 1
+                    TrackDetection(2, 1, 14, 10, 54, 90, 0.88),
+                    # Track 6 starts right where Track 5 ended at frame 0
+                    TrackDetection(2, 6, 204, 102, 244, 182, 0.86),
+                ],
+            ),
+        ]
+        anomalies = analyze_track_anomalies(frames)
+        self.assertEqual(len(anomalies["fragmentations"]), 1)
+        frag = anomalies["fragmentations"][0]
+        self.assertEqual(frag["track_id"], 1)
+        self.assertEqual(frag["lost_after_frame"], 0)
+        self.assertEqual(frag["reappeared_at_frame"], 2)
+        self.assertEqual(frag["gap_frames"], 1)
+
+        self.assertEqual(len(anomalies["potential_handoffs"]), 1)
+        handoff = anomalies["potential_handoffs"][0]
+        self.assertEqual(handoff["old_track_id"], 5)
+        self.assertEqual(handoff["new_track_id"], 6)
 
 
 if __name__ == "__main__":
