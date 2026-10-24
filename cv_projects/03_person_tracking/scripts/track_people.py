@@ -113,3 +113,66 @@ def read_tracks_csv(path: Path | str) -> list[FrameTracks]:
                 )
             )
     return [by_frame[fid] for fid in sorted(by_frame)]
+
+
+TRACK_SUMMARY_CSV_HEADER: list[str] = [
+    "track_id",
+    "start_frame",
+    "end_frame",
+    "duration_frames",
+    "duration_seconds",
+    "observed_frames",
+]
+
+
+@dataclass(frozen=True)
+class TrackSummary:
+    """Lifecycle summary for a single tracked person identity."""
+
+    track_id: int
+    start_frame: int
+    end_frame: int
+    duration_frames: int
+    duration_seconds: float
+    observed_frames: int
+
+    def to_row(self) -> list[str]:
+        return [
+            str(self.track_id),
+            str(self.start_frame),
+            str(self.end_frame),
+            str(self.duration_frames),
+            f"{self.duration_seconds:.4f}",
+            str(self.observed_frames),
+        ]
+
+
+def compute_track_summaries(
+    frame_tracks: Sequence[FrameTracks], fps: float
+) -> list[TrackSummary]:
+    """Aggregate per-frame tracks into per-identity TrackSummary records."""
+    if fps <= 0:
+        raise ValueError(f"fps must be positive, got {fps}")
+    frames_by_id: dict[int, set[int]] = {}
+    for ft in frame_tracks:
+        for trk in ft.tracks:
+            frames_by_id.setdefault(trk.track_id, set()).add(trk.frame_id)
+
+    summaries: list[TrackSummary] = []
+    for track_id in sorted(frames_by_id):
+        seen = frames_by_id[track_id]
+        start_f = min(seen)
+        end_f = max(seen)
+        dur_frames = end_f - start_f + 1
+        dur_sec = dur_frames / fps
+        summaries.append(
+            TrackSummary(
+                track_id=track_id,
+                start_frame=start_f,
+                end_frame=end_f,
+                duration_frames=dur_frames,
+                duration_seconds=dur_sec,
+                observed_frames=len(seen),
+            )
+        )
+    return summaries
