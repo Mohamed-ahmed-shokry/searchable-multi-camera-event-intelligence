@@ -33,18 +33,30 @@ notes.md                   # model comparison, FPS on GPU, failure observations
 
 ## Status
 
-- Dependencies added: `ultralytics`, `torch`, `torchvision` (CUDA build, see
+- Dependencies pinned: `ultralytics`, `torch`, `torchvision` (CUDA build, see
   [pyproject.toml](../../pyproject.toml)).
 - CUDA verified: RTX 3060 Laptop GPU, ~6.4 GB VRAM — see `notes.md`.
-- Not yet done: running the detector itself. That needs real footage in
-  `data/`, which Phase 1 is still waiting on (see
-  [01_video_inspection](../01_video_inspection/)).
+- Implementation: `scripts/detect_people.py` (CLI + module) and `scripts/compare_models.py`.
+- Config: `configs/detection.yaml` (YOLO11m baseline, conf >= 0.4).
+- Real runs verified: `data/fallback_clips/people-detection.mp4` processed on CUDA
+  with 100% frame accounting in `detections.csv` and rendered `annotated_video.mp4`.
 
-Install the exactly pinned detection stack with `uv sync --locked --extra
-detection-cuda` (Windows/Linux NVIDIA) or `uv sync --locked --extra detection-cpu`.
-The default environment only installs the Phase 1 reader dependencies. Notebook
-tools are optional via `--group notebooks`; CPU and CUDA extras cannot be enabled
-together. The CUDA extra retains the existing `cu128` wheel source.
+## Usage
+
+```bash
+# Sync CUDA extra environment
+uv sync --locked --extra detection-cuda
+
+# Run person detection on video or frame sequence
+uv run python cv_projects/02_person_detection/scripts/detect_people.py \
+    data/fallback_clips/people-detection.mp4 \
+    --output-dir cv_projects/02_person_detection/outputs/my_run \
+    --sample-frames
+
+# Benchmark YOLO11 model variants (n vs s vs m)
+uv run python cv_projects/02_person_detection/scripts/compare_models.py \
+    data/fallback_clips/people-detection.mp4 --max-frames 200
+```
 
 ## Layout
 

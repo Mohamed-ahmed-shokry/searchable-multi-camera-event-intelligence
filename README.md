@@ -84,6 +84,12 @@ uv sync --locked --extra detection-cpu
 
 # Optional notebook tools can be combined with either environment
 uv sync --locked --extra detection-cuda --group notebooks
+
+# Run Phase 2 person detection
+uv run python cv_projects/02_person_detection/scripts/detect_people.py <source_path>
+
+# Benchmark YOLO11 model variants (n vs s vs m)
+uv run python cv_projects/02_person_detection/scripts/compare_models.py <source_path>
 ```
 
 The two detection extras conflict intentionally; do not use `--all-extras`.

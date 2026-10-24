@@ -223,3 +223,9 @@ __marimo__/
 /outputs/
 cv_projects/**/outputs/*
 !cv_projects/**/outputs/.gitkeep
+
+# Model weights
+*.pt
+*.pth
+*.onnx
+*.engine
