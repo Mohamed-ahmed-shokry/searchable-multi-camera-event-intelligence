@@ -176,3 +176,44 @@ def compute_track_summaries(
             )
         )
     return summaries
+
+
+def write_track_summary_csv(
+    path: Path | str, summaries: Sequence[TrackSummary]
+) -> Path:
+    """Write per-identity track summaries to CSV matching TRACK_SUMMARY_CSV_HEADER."""
+    out_path = Path(path)
+    out_path.parent.mkdir(parents=True, exist_ok=True)
+    with out_path.open("w", newline="", encoding="utf-8") as handle:
+        writer = csv.writer(handle)
+        writer.writerow(TRACK_SUMMARY_CSV_HEADER)
+        for summary in summaries:
+            writer.writerow(summary.to_row())
+    return out_path
+
+
+def read_track_summary_csv(path: Path | str) -> list[TrackSummary]:
+    """Read a track_summary.csv file into TrackSummary objects."""
+    in_path = Path(path)
+    summaries: list[TrackSummary] = []
+    with in_path.open("r", newline="", encoding="utf-8") as handle:
+        reader = csv.reader(handle)
+        header = next(reader, None)
+        if header != TRACK_SUMMARY_CSV_HEADER:
+            raise ValueError(
+                f"Expected CSV header {TRACK_SUMMARY_CSV_HEADER}, got {header!r}"
+            )
+        for row in reader:
+            if not row:
+                continue
+            summaries.append(
+                TrackSummary(
+                    track_id=int(row[0]),
+                    start_frame=int(row[1]),
+                    end_frame=int(row[2]),
+                    duration_frames=int(row[3]),
+                    duration_seconds=float(row[4]),
+                    observed_frames=int(row[5]),
+                )
+            )
+    return summaries
