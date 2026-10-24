@@ -241,3 +241,56 @@ def evaluate_tracking(
         "fn": total_fn,
         "id_switch_events": id_switch_events,
     }
+
+
+def build_parser() -> object:
+    import argparse
+
+    parser = argparse.ArgumentParser(
+        description="Evaluate tracks.csv against MOT17 gt.txt (MOTA, MOTP, IDF1, IDSW)."
+    )
+    parser.add_argument("gt_txt", type=Path, help="Path to MOT17 gt.txt")
+    parser.add_argument("tracks_csv", type=Path, help="Path to predicted tracks.csv")
+    parser.add_argument(
+        "--iou-threshold",
+        type=float,
+        default=0.5,
+        help="IoU threshold for matching (default: 0.5)",
+    )
+    parser.add_argument(
+        "--output",
+        "-o",
+        type=Path,
+        default=None,
+        help="Optional path to save evaluation JSON",
+    )
+    return parser
+
+
+def main(argv: Sequence[str] | None = None) -> int:
+    import json
+
+    from track_people import read_tracks_csv
+
+    parser = build_parser()
+    args = parser.parse_args(argv)  # type: ignore[attr-defined]
+    try:
+        preds = read_tracks_csv(args.tracks_csv)
+        max_frame = max((ft.frame_id for ft in preds), default=None)
+        max_frames = (max_frame + 1) if max_frame is not None else None
+        gt = load_mot17_gt(args.gt_txt, max_frames=max_frames)
+        metrics = evaluate_tracking(gt, preds, iou_threshold=float(args.iou_threshold))
+        if args.output is not None:
+            args.output.parent.mkdir(parents=True, exist_ok=True)
+            args.output.write_text(json.dumps(metrics, indent=2), encoding="utf-8")
+        print(
+            f"MOTA={metrics['mota']:.4f} MOTP={metrics['motp']:.4f} "
+            f"IDF1={metrics['idf1']:.4f} IDSW={metrics['id_switches']}"
+        )
+        return 0
+    except (OSError, ValueError) as exc:
+        parser.exit(2, f"error: {exc}\n")  # type: ignore[attr-defined]
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())
