@@ -12,7 +12,7 @@ from types import SimpleNamespace
 
 import helpers
 import numpy as np
-from evaluate_mot import box_iou, compute_iou_matrix, load_mot17_gt
+from evaluate_mot import box_iou, compute_iou_matrix, evaluate_tracking, load_mot17_gt
 from track_people import (
     TRACK_SUMMARY_CSV_HEADER,
     TRACKS_CSV_HEADER,
@@ -339,17 +339,11 @@ class RunTrackingPipelineTests(unittest.TestCase):
 
 class EvaluateMotParserTests(unittest.TestCase):
     def test_load_mot17_gt_and_iou_matrix(self):
-        gt_lines = "\n".join(
-            [
-                # Frame 1 (0-based 0), ID 1, active pedestrian (mark=1, cls=1, vis=1.0)
-                "1,1,100,200,50,100,1,1,1.0",
-                # Frame 1, ID 2, ignore region (mark=0) -> skipped
-                "1,2,300,200,50,100,0,1,1.0",
-                # Frame 1, ID 3, non-pedestrian vehicle (cls=3) -> skipped
-                "1,3,400,200,50,100,1,3,1.0",
-                # Frame 2 (0-based 1), ID 1, active pedestrian
-                "2,1,110,200,50,100,1,1,0.8",
-            ]
+        gt_lines = (
+            "1,1,100,200,50,100,1,1,1.0\n"
+            "1,2,300,200,50,100,0,1,1.0\n"
+            "1,3,400,200,50,100,1,3,1.0\n"
+            "2,1,110,200,50,100,1,1,0.8\n"
         )
         with tempfile.TemporaryDirectory() as tmp:
             gt_file = Path(tmp) / "gt.txt"
@@ -372,6 +366,43 @@ class EvaluateMotParserTests(unittest.TestCase):
         self.assertEqual(mat.shape, (1, 2))
         self.assertAlmostEqual(float(mat[0, 0]), 1.0)
         self.assertAlmostEqual(float(mat[0, 1]), 0.0)
+
+    def test_evaluate_tracking_perfect_and_id_switch(self):
+        gt = {
+            0: [TrackDetection(0, 1, 10, 10, 50, 90, 1.0)],
+            1: [TrackDetection(1, 1, 12, 10, 52, 90, 1.0)],
+            2: [TrackDetection(2, 1, 14, 10, 54, 90, 1.0)],
+        }
+        perfect_pred = [
+            FrameTracks(0, [TrackDetection(0, 42, 10, 10, 50, 90, 0.9)]),
+            FrameTracks(1, [TrackDetection(1, 42, 12, 10, 52, 90, 0.9)]),
+            FrameTracks(2, [TrackDetection(2, 42, 14, 10, 54, 90, 0.9)]),
+        ]
+        m_perfect = evaluate_tracking(gt, perfect_pred)
+        self.assertAlmostEqual(m_perfect["mota"], 1.0)
+        self.assertAlmostEqual(m_perfect["idf1"], 1.0)
+        self.assertEqual(m_perfect["id_switches"], 0)
+
+        # ID switch on frame 2 (42 -> 99) + 1 false positive on frame 2
+        switched_pred = [
+            FrameTracks(0, [TrackDetection(0, 42, 10, 10, 50, 90, 0.9)]),
+            FrameTracks(1, [TrackDetection(1, 42, 12, 10, 52, 90, 0.9)]),
+            FrameTracks(
+                2,
+                [
+                    TrackDetection(2, 99, 14, 10, 54, 90, 0.9),
+                    TrackDetection(2, 100, 300, 300, 340, 380, 0.8),
+                ],
+            ),
+        ]
+        m_switched = evaluate_tracking(gt, switched_pred)
+        self.assertEqual(m_switched["id_switches"], 1)
+        self.assertEqual(m_switched["fp"], 1)
+        self.assertEqual(m_switched["fn"], 0)
+        # MOTA = 1 - (0 + 1 + 1) / 3 = 1/3 = 0.3333
+        self.assertAlmostEqual(m_switched["mota"], 0.3333, places=4)
+        # IDTP = 2 (for pred 42 matched on frames 0 & 1), denom = 3 GT + 4 pred = 7 -> IDF1 = 4/7 = 0.5714
+        self.assertAlmostEqual(m_switched["idf1"], 0.5714, places=4)
 
 
 if __name__ == "__main__":
