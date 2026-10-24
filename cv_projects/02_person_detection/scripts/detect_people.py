@@ -11,6 +11,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
+import cv2
 import numpy as np
 
 DETECTIONS_CSV_HEADER = [
@@ -243,3 +244,85 @@ class PersonDetector:
             )
 
         return detections
+
+
+def draw_detections(
+    frame: np.ndarray,
+    detections: list[Detection],
+    *,
+    box_color: tuple[int, int, int] = (0, 255, 0),
+    thickness: int = 2,
+) -> np.ndarray:
+    """Draw bounding boxes and confidence labels on a frame.
+
+    Parameters
+    ----------
+    frame : np.ndarray
+        Input BGR image frame.
+    detections : list[Detection]
+        List of detections for this frame.
+    box_color : tuple[int, int, int]
+        BGR color for bounding boxes and label pill.
+    thickness : int
+        Border line thickness.
+
+    Returns
+    -------
+    np.ndarray
+        Annotated BGR image frame copy.
+    """
+    annotated = frame.copy()
+    height, width = annotated.shape[:2]
+
+    for det in detections:
+        x1 = max(0, min(round(det.x1), width - 1))
+        y1 = max(0, min(round(det.y1), height - 1))
+        x2 = max(0, min(round(det.x2), width - 1))
+        y2 = max(0, min(round(det.y2), height - 1))
+
+        cv2.rectangle(annotated, (x1, y1), (x2, y2), box_color, thickness)
+
+        label = f"{det.class_name} {det.confidence:.2f}"
+        font = cv2.FONT_HERSHEY_SIMPLEX
+        font_scale = 0.45
+        font_thickness = 1
+
+        (label_w, label_h), _ = cv2.getTextSize(label, font, font_scale, font_thickness)
+        pill_y1 = max(0, y1 - label_h - 4)
+        pill_y2 = y1
+        pill_x2 = min(width - 1, x1 + label_w + 4)
+
+        cv2.rectangle(annotated, (x1, pill_y1), (pill_x2, pill_y2), box_color, -1)
+        cv2.putText(
+            annotated,
+            label,
+            (x1 + 2, max(label_h, pill_y2 - 2)),
+            font,
+            font_scale,
+            (0, 0, 0),
+            font_thickness,
+            cv2.LINE_AA,
+        )
+
+    return annotated
+
+
+def create_video_writer(
+    output_path: str | Path,
+    fps: float,
+    width: int,
+    height: int,
+    fourcc: str = "mp4v",
+) -> cv2.VideoWriter:
+    """Create a cv2.VideoWriter for rendering annotated videos."""
+    path = Path(output_path)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    fourcc_code = cv2.VideoWriter_fourcc(*fourcc)
+    writer = cv2.VideoWriter(str(path), fourcc_code, fps, (width, height))
+    if not writer.isOpened():
+        # Fallback to MJPG if mp4v is not supported by backend
+        fallback_fourcc = cv2.VideoWriter_fourcc(*"MJPG")
+        writer = cv2.VideoWriter(str(path), fallback_fourcc, fps, (width, height))
+    if not writer.isOpened():
+        raise RuntimeError(f"Could not open VideoWriter for {path}")
+    return writer

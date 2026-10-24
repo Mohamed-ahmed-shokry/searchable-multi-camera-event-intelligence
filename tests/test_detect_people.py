@@ -16,6 +16,8 @@ from detect_people import (
     Detection,
     FrameDetections,
     PersonDetector,
+    create_video_writer,
+    draw_detections,
     read_detections_csv,
     select_default_device,
     write_detections_csv,
@@ -192,3 +194,37 @@ class PersonDetectorFilteringTests(unittest.TestCase):
         detector = PersonDetector(model=EmptyYOLO())
         detections = detector.detect(np.zeros((50, 50, 3), dtype=np.uint8))
         self.assertEqual(detections, [])
+
+
+class AnnotationTests(unittest.TestCase):
+    """Test frame bounding-box drawing and video writer creation."""
+
+    def test_draw_detections_returns_annotated_frame(self) -> None:
+        frame = np.zeros((120, 160, 3), dtype=np.uint8)
+        det = Detection(10.0, 10.0, 50.0, 60.0, 0.88, "person")
+        annotated = draw_detections(frame, [det], box_color=(0, 255, 0), thickness=2)
+
+        self.assertEqual(annotated.shape, frame.shape)
+        # Bounding box pixels should no longer be purely black
+        self.assertTrue(np.any(annotated > 0))
+
+    def test_draw_detections_handles_out_of_bounds_gracefully(self) -> None:
+        frame = np.zeros((50, 50, 3), dtype=np.uint8)
+        # Coordinates extending past image dimensions
+        det = Detection(-10.0, -10.0, 100.0, 100.0, 0.75, "person")
+        annotated = draw_detections(frame, [det])
+        self.assertEqual(annotated.shape, (50, 50, 3))
+
+    def test_create_video_writer_opens_and_writes_frames(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            out_path = Path(tmpdir) / "test_out.mp4"
+            writer = create_video_writer(out_path, fps=10.0, width=64, height=48)
+            self.assertTrue(writer.isOpened())
+
+            frame = np.zeros((48, 64, 3), dtype=np.uint8)
+            writer.write(frame)
+            writer.write(frame)
+            writer.release()
+
+            self.assertTrue(out_path.is_file())
+            self.assertGreater(out_path.stat().st_size, 0)
