@@ -285,3 +285,103 @@ def analyze_track_anomalies(
         "fragmentations": fragmentations,
         "potential_handoffs": potential_handoffs,
     }
+
+
+def select_default_device() -> str:
+    """Select cuda:0 if PyTorch with CUDA is available, else cpu."""
+    try:
+        import torch
+
+        if torch.cuda.is_available():
+            return "cuda:0"
+    except ImportError:
+        pass
+    return "cpu"
+
+
+class PersonTracker:
+    """Runs multi-object person tracking using YOLO11 + ByteTrack or BoT-SORT."""
+
+    def __init__(
+        self,
+        model_name: str = "yolo11m.pt",
+        *,
+        tracker_config: str = "bytetrack.yaml",
+        confidence_threshold: float = 0.4,
+        iou_threshold: float = 0.45,
+        device: str | None = None,
+        target_classes: tuple[int, ...] = (0,),
+        model: object = None,
+    ) -> None:
+        self.model_name = model_name
+        self.tracker_config = tracker_config
+        self.confidence_threshold = confidence_threshold
+        self.iou_threshold = iou_threshold
+        self.device = device or select_default_device()
+        self.target_classes = set(target_classes)
+
+        if model is not None:
+            self._model = model
+        else:
+            from ultralytics import YOLO
+
+            self._model = YOLO(model_name)
+
+    def track(self, frame: object, frame_id: int) -> list[TrackDetection]:
+        """Track people in a single frame with state persistence across frames."""
+        results = self._model.track(  # type: ignore[attr-defined]
+            frame,
+            persist=True,
+            tracker=self.tracker_config,
+            conf=self.confidence_threshold,
+            iou=self.iou_threshold,
+            device=self.device,
+            classes=list(self.target_classes),
+            verbose=False,
+        )
+
+        tracks: list[TrackDetection] = []
+        if not results:
+            return tracks
+
+        first_res = results[0]
+        boxes = getattr(first_res, "boxes", None)
+        if boxes is None or len(boxes) == 0:
+            return tracks
+
+        for box in boxes:
+            id_attr = getattr(box, "id", None)
+            if id_attr is None:
+                continue
+            id_val = id_attr[0] if hasattr(id_attr, "__getitem__") else id_attr
+            if id_val is None:
+                continue
+            track_id = int(id_val.item() if hasattr(id_val, "item") else id_val)
+
+            cls_val = box.cls[0]
+            cls_id = int(cls_val.item() if hasattr(cls_val, "item") else cls_val)
+            if cls_id not in self.target_classes:
+                continue
+
+            conf_val = box.conf[0]
+            conf = float(conf_val.item() if hasattr(conf_val, "item") else conf_val)
+            if conf < self.confidence_threshold:
+                continue
+
+            xyxy_val = box.xyxy[0]
+            xyxy = xyxy_val.tolist() if hasattr(xyxy_val, "tolist") else xyxy_val
+            x1, y1, x2, y2 = [float(v) for v in xyxy]
+
+            tracks.append(
+                TrackDetection(
+                    frame_id=frame_id,
+                    track_id=track_id,
+                    x1=x1,
+                    y1=y1,
+                    x2=x2,
+                    y2=y2,
+                    confidence=conf,
+                )
+            )
+
+        return tracks
