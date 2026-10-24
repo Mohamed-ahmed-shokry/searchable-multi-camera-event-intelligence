@@ -12,6 +12,7 @@ from types import SimpleNamespace
 
 import helpers
 import numpy as np
+from evaluate_mot import box_iou, compute_iou_matrix, load_mot17_gt
 from track_people import (
     TRACK_SUMMARY_CSV_HEADER,
     TRACKS_CSV_HEADER,
@@ -334,6 +335,43 @@ class RunTrackingPipelineTests(unittest.TestCase):
         with self.assertRaises(SystemExit) as ctx:
             main(["nonexistent_source_path_xyz.mp4", "--no-video"])
         self.assertEqual(ctx.exception.code, 2)
+
+
+class EvaluateMotParserTests(unittest.TestCase):
+    def test_load_mot17_gt_and_iou_matrix(self):
+        gt_lines = "\n".join(
+            [
+                # Frame 1 (0-based 0), ID 1, active pedestrian (mark=1, cls=1, vis=1.0)
+                "1,1,100,200,50,100,1,1,1.0",
+                # Frame 1, ID 2, ignore region (mark=0) -> skipped
+                "1,2,300,200,50,100,0,1,1.0",
+                # Frame 1, ID 3, non-pedestrian vehicle (cls=3) -> skipped
+                "1,3,400,200,50,100,1,3,1.0",
+                # Frame 2 (0-based 1), ID 1, active pedestrian
+                "2,1,110,200,50,100,1,1,0.8",
+            ]
+        )
+        with tempfile.TemporaryDirectory() as tmp:
+            gt_file = Path(tmp) / "gt.txt"
+            gt_file.write_text(gt_lines, encoding="utf-8")
+            gt_by_frame = load_mot17_gt(gt_file)
+
+        self.assertEqual(sorted(gt_by_frame.keys()), [0, 1])
+        self.assertEqual(len(gt_by_frame[0]), 1)
+        box0 = gt_by_frame[0][0]
+        self.assertEqual(box0.track_id, 1)
+        self.assertEqual(
+            (box0.x1, box0.y1, box0.x2, box0.y2), (100.0, 200.0, 150.0, 300.0)
+        )
+
+        # Identical box -> IoU 1.0; disjoint box -> IoU 0.0
+        disjoint = TrackDetection(0, 9, 500.0, 500.0, 550.0, 600.0, 0.9)
+        self.assertAlmostEqual(box_iou(box0, box0), 1.0)
+        self.assertAlmostEqual(box_iou(box0, disjoint), 0.0)
+        mat = compute_iou_matrix([box0], [box0, disjoint])
+        self.assertEqual(mat.shape, (1, 2))
+        self.assertAlmostEqual(float(mat[0, 0]), 1.0)
+        self.assertAlmostEqual(float(mat[0, 1]), 0.0)
 
 
 if __name__ == "__main__":
