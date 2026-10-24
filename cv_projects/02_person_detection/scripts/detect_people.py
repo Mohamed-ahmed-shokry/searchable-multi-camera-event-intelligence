@@ -11,6 +11,8 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
+import numpy as np
+
 DETECTIONS_CSV_HEADER = [
     "frame_id",
     "x1",
@@ -147,3 +149,97 @@ def read_detections_csv(csv_path: str | Path) -> list[dict[str, Any]]:
             rows.append(parsed)
 
     return rows
+
+
+def select_default_device() -> str:
+    """Select cuda:0 if PyTorch with CUDA is available, else cpu."""
+    try:
+        import torch
+
+        if torch.cuda.is_available():
+            return "cuda:0"
+    except ImportError:
+        pass
+    return "cpu"
+
+
+class PersonDetector:
+    """Runs person-filtered object detection using YOLO11."""
+
+    def __init__(
+        self,
+        model_name: str = "yolo11m.pt",
+        *,
+        confidence_threshold: float = 0.4,
+        iou_threshold: float = 0.45,
+        device: str | None = None,
+        target_classes: tuple[int, ...] = (0,),
+        model: Any = None,
+    ) -> None:
+        self.model_name = model_name
+        self.confidence_threshold = confidence_threshold
+        self.iou_threshold = iou_threshold
+        self.device = device or select_default_device()
+        self.target_classes = set(target_classes)
+
+        if model is not None:
+            self._model = model
+            self.class_names = getattr(model, "names", {0: "person"})
+        else:
+            from ultralytics import YOLO
+
+            self._model = YOLO(model_name)
+            self.class_names = getattr(self._model, "names", {0: "person"})
+
+    def detect(self, frame: np.ndarray) -> list[Detection]:
+        """Detect people in a single frame.
+
+        Filters out any bounding boxes that do not belong to target_classes
+        or fail the confidence threshold.
+        """
+        results = self._model.predict(
+            frame,
+            conf=self.confidence_threshold,
+            iou=self.iou_threshold,
+            device=self.device,
+            classes=list(self.target_classes),
+            verbose=False,
+        )
+
+        detections: list[Detection] = []
+        if not results:
+            return detections
+
+        first_res = results[0]
+        boxes = getattr(first_res, "boxes", None)
+        if boxes is None or len(boxes) == 0:
+            return detections
+
+        for box in boxes:
+            cls_val = box.cls[0]
+            cls_id = int(cls_val.item() if hasattr(cls_val, "item") else cls_val)
+            if cls_id not in self.target_classes:
+                continue
+
+            conf_val = box.conf[0]
+            conf = float(conf_val.item() if hasattr(conf_val, "item") else conf_val)
+            if conf < self.confidence_threshold:
+                continue
+
+            xyxy_val = box.xyxy[0]
+            xyxy = xyxy_val.tolist() if hasattr(xyxy_val, "tolist") else xyxy_val
+            x1, y1, x2, y2 = [float(v) for v in xyxy]
+            class_name = self.class_names.get(cls_id, "person")
+
+            detections.append(
+                Detection(
+                    x1=x1,
+                    y1=y1,
+                    x2=x2,
+                    y2=y2,
+                    confidence=conf,
+                    class_name=class_name,
+                )
+            )
+
+        return detections

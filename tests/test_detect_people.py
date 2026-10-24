@@ -8,12 +8,16 @@ import csv
 import tempfile
 import unittest
 from pathlib import Path
+from types import SimpleNamespace
 
+import numpy as np
 from detect_people import (
     DETECTIONS_CSV_HEADER,
     Detection,
     FrameDetections,
+    PersonDetector,
     read_detections_csv,
+    select_default_device,
     write_detections_csv,
 )
 
@@ -120,3 +124,71 @@ class DetectionSchemaTests(unittest.TestCase):
                 f.write("wrong,header,here\n1,2,3\n")
             with self.assertRaises(ValueError):
                 read_detections_csv(csv_path)
+
+
+class PersonDetectorFilteringTests(unittest.TestCase):
+    """Test person-only filtering and confidence gating in PersonDetector."""
+
+    def test_default_device_selection_returns_valid_string(self) -> None:
+        dev = select_default_device()
+        self.assertIn(dev, ("cuda:0", "cpu"))
+
+    def test_detector_filters_non_person_classes_and_low_confidence(self) -> None:
+        class MockBox:
+            def __init__(self, cls_id: int, conf: float, coords: list[float]):
+                self.cls = [cls_id]
+                self.conf = [conf]
+                self.xyxy = [coords]
+
+        class MockResult:
+            def __init__(self, boxes: list[MockBox]):
+                self.boxes = boxes
+
+        class MockYOLO:
+            def __init__(self) -> None:
+                self.names = {0: "person", 2: "car", 24: "backpack"}
+
+            def predict(self, *args, **kwargs):
+                return [
+                    MockResult(
+                        [
+                            MockBox(
+                                0, 0.85, [10.0, 20.0, 50.0, 100.0]
+                            ),  # person, high conf -> keep
+                            MockBox(
+                                0, 0.35, [15.0, 25.0, 55.0, 105.0]
+                            ),  # person, low conf -> reject
+                            MockBox(
+                                2, 0.95, [100.0, 100.0, 200.0, 200.0]
+                            ),  # car, high conf -> reject
+                            MockBox(
+                                24, 0.90, [30.0, 40.0, 60.0, 80.0]
+                            ),  # backpack -> reject
+                        ]
+                    )
+                ]
+
+        detector = PersonDetector(
+            confidence_threshold=0.4,
+            model=MockYOLO(),
+        )
+
+        dummy_frame = np.zeros((100, 100, 3), dtype=np.uint8)
+        detections = detector.detect(dummy_frame)
+
+        self.assertEqual(len(detections), 1)
+        self.assertEqual(detections[0].class_name, "person")
+        self.assertEqual(detections[0].confidence, 0.85)
+        self.assertEqual((detections[0].x1, detections[0].y1), (10.0, 20.0))
+
+    def test_detector_handles_empty_results_gracefully(self) -> None:
+        class EmptyYOLO:
+            def __init__(self) -> None:
+                self.names = {0: "person"}
+
+            def predict(self, *args, **kwargs):
+                return [SimpleNamespace(boxes=[])]
+
+        detector = PersonDetector(model=EmptyYOLO())
+        detections = detector.detect(np.zeros((50, 50, 3), dtype=np.uint8))
+        self.assertEqual(detections, [])
