@@ -10,6 +10,7 @@ import unittest
 from pathlib import Path
 from types import SimpleNamespace
 
+import helpers
 import numpy as np
 from track_people import (
     TRACK_SUMMARY_CSV_HEADER,
@@ -20,8 +21,11 @@ from track_people import (
     analyze_track_anomalies,
     compute_track_summaries,
     draw_tracks,
+    load_config,
+    main,
     read_track_summary_csv,
     read_tracks_csv,
+    run_tracking,
     track_color,
     write_track_summary_csv,
     write_tracks_csv,
@@ -266,6 +270,70 @@ class DrawTracksTests(unittest.TestCase):
         self.assertEqual(annotated.shape, blank.shape)
         self.assertEqual(int(blank.sum()), 0)
         self.assertGreater(int(annotated.sum()), 0)
+
+
+class RunTrackingPipelineTests(unittest.TestCase):
+    def test_run_tracking_end_to_end_on_synthetic_sequence(self):
+        call_idx = 0
+
+        def fake_track(*_args, **_kwargs):
+            nonlocal call_idx
+            idx = call_idx
+            call_idx += 1
+            if idx == 1:
+                return [SimpleNamespace(boxes=[])]
+            return [
+                SimpleNamespace(
+                    boxes=[
+                        SimpleNamespace(
+                            id=[1],
+                            cls=[0],
+                            conf=[0.89],
+                            xyxy=[[5.0 + idx, 5.0, 25.0 + idx, 40.0]],
+                        )
+                    ]
+                )
+            ]
+
+        fake_tracker = PersonTracker(
+            model_name="yolo11m.pt",
+            tracker_config="bytetrack.yaml",
+            device="cpu",
+            model=SimpleNamespace(track=fake_track),
+        )
+
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            seq_dir = helpers.make_sequence(root, count=4)
+            out_dir = root / "outputs"
+            summary = run_tracking(
+                seq_dir,
+                output_dir=out_dir,
+                tracker=fake_tracker,
+                save_video=True,
+            )
+            self.assertEqual(summary["frame_count"], 4)
+            self.assertEqual(summary["num_unique_tracks"], 1)
+            self.assertEqual(summary["total_track_observations"], 3)
+            self.assertTrue((out_dir / "tracks.csv").is_file())
+            self.assertTrue((out_dir / "track_summary.csv").is_file())
+            self.assertTrue((out_dir / "annotated_tracking_video.mp4").is_file())
+
+    def test_load_config_and_cli_missing_source_exits_2(self):
+        cfg_path = (
+            helpers.PROJECT_ROOT
+            / "cv_projects"
+            / "03_person_tracking"
+            / "configs"
+            / "tracking.yaml"
+        )
+        cfg = load_config(cfg_path)
+        self.assertEqual(cfg["model"], "yolo11m.pt")
+        self.assertEqual(cfg["tracker"], "bytetrack.yaml")
+
+        with self.assertRaises(SystemExit) as ctx:
+            main(["nonexistent_source_path_xyz.mp4", "--no-video"])
+        self.assertEqual(ctx.exception.code, 2)
 
 
 if __name__ == "__main__":
