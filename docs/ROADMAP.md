@@ -321,3 +321,95 @@ Remote: `gh run list --branch phase/2-person-detection` → latest run green on 
 | Video verification: annotated_video.mp4 | ✅ 768x432, 12 fps, 596 frames | all frames valid and readable |
 | Remote CI (Push 1): run 40046200238 | ✅ completed / success (26s) | HEAD a13fe87 |
 | Remote CI (PR #3 sync): run 40046211505 | ✅ completed / success (45s) | PR #3 |
+| Remote CI (Final Phase 2): run 40047762273 | ✅ completed / success (48s) | HEAD 4f38645 |
+
+---
+
+## Current Phase: 3 — Person Tracking & MOT17 Validation (2026-10-24)
+
+### Objective
+
+Complete the prerequisite MOT17-11-FRCNN dataset extraction and Phase 1/2 validation, then
+deliver **Phase 3 — Person Tracking (with early quantitative checkpoint)** end to end:
+keep consistent `track_id` values across frames using ByteTrack and BoT-SORT, produce
+schema-compliant `tracks.csv` and `track_summary.csv` outputs, render
+`annotated_tracking_video.mp4` with distinct per-track colors and labels, detect track
+fragmentation and ID-switch anomalies, evaluate MOTA/IDF1/ID-switches against MOT17
+ground truth (`checkpoint_metrics.json`), and document the chosen tracker.
+
+### Scope
+
+1. Fix the thread-safety race condition in `cv_projects/01_video_inspection/scripts/fetch_mot17_sequence.py`
+   so concurrent workers fetch each entry's local ZIP header and compressed payload in a
+   single ranged HTTP request without mutating shared `ZipFile` state.
+2. Complete extraction of `data/mot17/MOT17-11-FRCNN` (all 900 frames + `gt/gt.txt` +
+   `seqinfo.ini`), validate all dataset sources with `inspect_video.py` and
+   `validate_dataset.py`, and run Phase 2 detection/benchmark validation on `MOT17-11-FRCNN`.
+3. Scaffold `cv_projects/03_person_tracking/` (`README.md`, `notes.md`, `configs/tracking.yaml`,
+   `scripts/`, `notebooks/`, `outputs/`).
+4. Implement `cv_projects/03_person_tracking/scripts/track_people.py`:
+   - `TrackDetection`, `FrameTracks`, and `TrackSummary` dataclasses.
+   - CSV serialization/deserialization for `tracks.csv` (`frame_id, track_id, x1, y1, x2, y2, confidence`)
+     and `track_summary.csv` (`track_id, start_frame, end_frame, duration_frames, duration_seconds, observed_frames`).
+   - Track fragmentation / gap and close-proximity ID-switch heuristic analyzer (`analyze_track_anomalies`).
+   - `PersonTracker` wrapper around Ultralytics `model.track(persist=True, tracker=...)` supporting
+     `bytetrack.yaml` and `botsort.yaml` with person-class filtering and deterministic per-track colors.
+   - Annotated tracking video renderer (`annotated_tracking_video.mp4`) and CLI entrypoint.
+5. Implement `cv_projects/03_person_tracking/scripts/evaluate_mot.py`:
+   - MOT17 `gt.txt` parser (pedestrian class 1, active mark 1, visibility > 0, 1-based to 0-based frame conversion).
+   - Pairwise IoU matrix and greedy/optimal bipartite assignment for CLEAR-MOT (`MOTA`, `MOTP`, `IDSW`) and `IDF1`.
+6. Implement `cv_projects/03_person_tracking/scripts/compare_trackers.py`:
+   - Side-by-side ByteTrack vs BoT-SORT comparison on real sequences + MOT17 ground truth,
+     exporting `checkpoint_metrics.json`.
+7. Add exploratory notebook `cv_projects/03_person_tracking/notebooks/01_compare_trackers.ipynb`.
+8. Add comprehensive unit and integration tests (`tests/test_fetch_mot17_sequence.py`,
+   `tests/test_track_people.py`) and verify 100% green local and remote CI.
+
+### Acceptance Criteria
+
+| # | Criterion | Status | Evidence |
+|---|-----------|--------|----------|
+| 1 | `fetch_mot17_sequence.py` thread-safety bug fixed and tested; `MOT17-11-FRCNN` (900 frames) extracted and validated via `validate_dataset.py` | ☐ | — |
+| 2 | ByteTrack and BoT-SORT compared side-by-side on the same sequences | ☐ | — |
+| 3 | Early quantitative checkpoint (`MOTA`, `IDF1`, ID switches) computed on MOT17 ground truth and saved to `checkpoint_metrics.json` | ☐ | — |
+| 4 | Tracker chosen and configured in `cv_projects/03_person_tracking/configs/tracking.yaml` | ☐ | — |
+| 5 | `tracks.csv` matches schema (`frame_id, track_id, x1, y1, x2, y2, confidence`) and `track_summary.csv` matches (`track_id, start_frame, end_frame, duration_frames, duration_seconds, observed_frames`) | ☐ | — |
+| 6 | Annotated tracking video (`annotated_tracking_video.mp4`) rendered with distinct colors per `track_id` and verified readable | ☐ | — |
+| 7 | At least 3 concrete ID-switch / fragmentation observations with frame numbers logged in `notes.md` | ☐ | — |
+| 8 | All local CI-parity checks (`ruff check`, `ruff format --check`, `pytest`) and remote GitHub Actions CI pass 100% | ☐ | — |
+
+### Micro-Task Breakdown
+
+- [x] 1. `docs(roadmap): define Phase 3 person tracking scope and micro-task checklist`
+- [ ] 2. `fix(inspection): make fetch_mot17_sequence thread-safe with single ranged GETs`
+- [ ] 3. `test(inspection): add unit tests for fetch_mot17_sequence extraction and CRC resume`
+- [ ] 4. `docs(inspection): record MOT17-11-FRCNN inspection and spec validation in notes`
+- [ ] 5. `docs(detection): record MOT17-11-FRCNN benchmark and detection validation in notes`
+- [ ] 6. `docs(roadmap): tick Phase 1b acceptance criteria with MOT17 validation evidence`
+- [ ] 7. `docs(tracking): scaffold cv_projects/03_person_tracking README and notes`
+- [ ] 8. `feat(tracking): add default tracking configuration in configs/tracking.yaml`
+- [ ] 9. `test(helpers): expose Phase 3 tracking scripts directory to test suite`
+- [ ] 10. `types(tracking): define TrackDetection and FrameTracks schemas in track_people.py`
+- [ ] 11. `feat(tracking): implement tracks.csv writer and reader helpers`
+- [ ] 12. `test(tracking): add unit tests for TrackDetection and tracks.csv serialization`
+- [ ] 13. `types(tracking): define TrackSummary dataclass and compute_track_summaries`
+- [ ] 14. `feat(tracking): implement track_summary.csv writer and reader helpers`
+- [ ] 15. `test(tracking): add unit tests for track summary computation and CSV round-trip`
+- [ ] 16. `feat(tracking): implement track fragmentation and ID-switch heuristic analyzer`
+- [ ] 17. `test(tracking): add unit tests for track anomaly and gap detection`
+- [ ] 18. `feat(tracking): implement PersonTracker wrapper for ByteTrack and BoT-SORT`
+- [ ] 19. `test(tracking): add unit tests for PersonTracker class filtering and untracked box handling`
+- [ ] 20. `feat(tracking): implement deterministic color palette and draw_tracks renderer`
+- [ ] 21. `test(tracking): add unit tests for draw_tracks and track_color`
+- [ ] 22. `feat(tracking): implement run_tracking pipeline and CLI in track_people.py`
+- [ ] 23. `test(tracking): add integration tests for run_tracking and CLI error handling`
+- [ ] 24. `feat(tracking): implement MOT17 ground-truth parser and IoU matrix in evaluate_mot.py`
+- [ ] 25. `test(tracking): add unit tests for MOT17 ground-truth parser and IoU calculation`
+- [ ] 26. `feat(tracking): implement CLEAR-MOT (MOTA/MOTP/IDSW) and IDF1 evaluator`
+- [ ] 27. `test(tracking): add unit tests for MOTA, IDF1, and ID switch evaluation`
+- [ ] 28. `feat(tracking): implement compare_trackers script for ByteTrack vs BoT-SORT checkpoint`
+- [ ] 29. `test(tracking): add unit tests for compare_trackers checkpoint generation`
+- [ ] 30. `feat(tracking): add exploratory notebook 01_compare_trackers.ipynb`
+- [ ] 31. `docs(tracking): record ByteTrack vs BoT-SORT MOTA/IDF1 metrics and ID switch log in notes`
+- [ ] 32. `docs(tracking): document tracking CLI and checkpoint evaluation in READMEs`
+- [ ] 33. `docs(progress): complete Phase 3 acceptance criteria, decision log, and CI log`
