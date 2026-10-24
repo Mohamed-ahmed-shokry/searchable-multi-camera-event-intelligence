@@ -114,7 +114,7 @@ Local parity reference: baseline suite `python -m unittest discover -s tests` �
 
 ---
 
-## Executed Phase: 1b — Data Acquisition & Inspection Validation (2026-10-22)
+## Completed Phase: 1b — Data Acquisition & Inspection Validation (2026-10-22)
 
 ### Objective
 
@@ -207,3 +207,104 @@ Remote: `gh run list --branch phase/1-data-acquisition` → latest run green on 
 |---------|--------|-------|
 | Stage A baseline on `main` (post-merge) | ✅ lint/format/pytest exit 0 | merge CI run 39518138728 green |
 | (phase work) | ☐ | filled as executed |
+
+---
+
+## Executed Phase: 2 — Person Detection (2026-10-24)
+
+### Objective
+
+Detect people and produce annotated visual proof with CUDA acceleration verified on the
+development hardware (RTX 3060 Mobile / Laptop, 6 GB VRAM). Establish reproducible
+person-only detection on video files and MOT17 frame sequences with schema-compliant
+CSV export and annotated video rendering.
+
+Demonstrable end-to-end outcome: cv_projects/02_person_detection/scripts/detect_people.py
+executes against real video files and image sequences, produces schema-compliant
+detections.csv (where every video frame is accounted for and non-person classes are
+filtered out), renders annotated_video.mp4 with bounding boxes and confidence scores,
+and logs speed-accuracy benchmark comparison across YOLO11 models (n/s/m).
+
+### Scope
+
+1. CUDA environment verification on hardware (device name, VRAM, PyTorch CUDA build).
+2. Detection configuration (configs/detection.yaml) defining model weights, confidence
+   threshold (0.4), device selection, and class filtering (person only).
+3. Core detection module and CLI (cv_projects/02_person_detection/scripts/detect_people.py):
+   - Reads input using Phase 1's VideoSource (supports both video files and frame sequences).
+   - Runs pretrained YOLO11 model with device fallback (cuda:0 / cpu).
+   - Filters detections strictly to person class (COCO class 0).
+   - Applies confidence filtering.
+   - Formats detections into detections.csv schema (frame_id, x1, y1, x2, y2, confidence, class)
+     ensuring every frame index 0 .. N-1 is present in the output.
+   - Annotates frames with bounding boxes and confidence scores and renders annotated_video.mp4.
+   - Optionally dumps sample annotated frames into annotated_frames/.
+4. Model comparison script (cv_projects/02_person_detection/scripts/compare_models.py)
+   benchmarking yolo11n, yolo11s, and yolo11m on FPS and person detection counts.
+5. Exploratory Jupyter notebook notebooks/01_compare_models.ipynb.
+6. Unit and integration tests (tests/test_detect_people.py) covering schema conformity,
+   person filtering, empty frame accounting, coordinate normalization, and CLI operation.
+7. Documentation and notes (cv_projects/02_person_detection/notes.md, README.md).
+
+### Acceptance Criteria
+
+| # | Criterion | Status | Evidence |
+|---|-----------|--------|----------|
+| 1 | CUDA verified: GPU model and VRAM recorded in notes | ☐ | — |
+| 2 | Model chosen: yolo11m baseline compared against n/s on real footage (speed FPS + detection trade-off recorded) | ☐ | — |
+| 3 | Person-only filtering verified (zero non-person classes in detections.csv) | ☐ | — |
+| 4 | Detections CSV schema matches frame_id, x1, y1, x2, y2, confidence, class | ☐ | — |
+| 5 | Output detections.csv accounts for every input frame (exact frame count match) | ☐ | — |
+| 6 | Annotated video rendered with bounding boxes and confidence scores and confirmed valid | ☐ | — |
+| 7 | Dependencies pinned in pyproject.toml; model weights recorded in configs/detection.yaml | ☐ | — |
+| 8 | Comprehensive tests pass and CI parity checks pass 100% | ☐ | — |
+| 9 | Draft PR open/updated with phase summary tied to this roadmap | ☐ | — |
+
+### Validation & CI Plan
+
+```bash
+uv sync --locked
+uv run --locked ruff check .
+uv run --locked ruff format --check .
+uv run --locked pytest -v
+# phase-specific execution:
+uv run python cv_projects/02_person_detection/scripts/detect_people.py data/fallback_clips/people-detection.mp4
+uv run python cv_projects/02_person_detection/scripts/compare_models.py
+```
+
+Remote: `gh run list --branch phase/2-person-detection` → latest run green on HEAD.
+
+### Exclusions
+
+- Multi-object tracking (ByteTrack / BoT-SORT): Track IDs and temporal trajectories
+  belong to Phase 3 (Person Tracking) and Phase 4 (Trajectory Extraction).
+- Custom model fine-tuning: Pretrained COCO weights are sufficient and locked per
+  architecture decisions in docs/project_phases.md.
+- Large cloud downloads in CI: Remote CI runner uses locked CPU environment without
+  downloading YOLO weights; unit tests use mock/deterministic fixtures. Real weight
+  inference runs locally on the GPU and is verified on test footage.
+
+### Micro-Task Breakdown
+
+- [x] 1. docs(roadmap): define Phase 2 person detection scope and micro-task checklist
+- [ ] 2. feat(detection): define default detection configuration in YAML
+- [ ] 3. types(detection): implement Detection and FrameDetections schema with CSV serialization
+- [ ] 4. test(detection): add unit tests for Detection schemas and CSV export
+- [ ] 5. feat(detection): implement PersonDetector with person class filtering and CUDA auto-device
+- [ ] 6. feat(detection): implement frame bounding box annotation and video renderer
+- [ ] 7. feat(detection): implement detect_people CLI with VideoSource input integration
+- [ ] 8. test(detection): add tests for PersonDetector, CLI arguments, and empty frame accounting
+- [ ] 9. feat(detection): implement compare_models benchmark script for yolo11 n/s/m
+- [ ] 10. feat(detection): add exploratory model comparison notebook
+- [ ] 11. docs(detection): record CUDA specs and benchmark observations in notes.md
+- [ ] 12. Run detection and benchmark on real test footage; generate outputs
+- [ ] 13. docs(readme): update README and subproject README with detection usage
+- [ ] 14. Push to remote, monitor CI, create draft PR, and verify 100% green status
+
+### Decision Log
+
+| Decision | Options considered | Choice + evidence |
+|----------|--------------------|-------------------|
+| Empty frame accounting in CSV | Skip frames with 0 detections / Emit row with empty bbox fields | Emit row with empty bbox fields — frame_id,,,,,, ensures len(set(df['frame_id'])) == frame_count and every frame is accounted for without ambiguous gaps. |
+| Person class ID | Dynamically lookup names['person'] / hardcode 0 | Lookup names mapping with fallback to 0 — standard COCO class 0 is person, but dynamic lookup guarantees compatibility with any custom weights dictionary. |
+| Test suite isolation in CI | Download real weights in CI / Mock YOLO results in unit tests | Mock results in unit tests — CI runner (windows-latest) runs uv sync --locked on the default dependency set; tests verify detector logic, frame accounting, CSV serialization, and CLI without network flakiness. |
