@@ -8,11 +8,14 @@ import csv
 import tempfile
 import unittest
 from pathlib import Path
+from types import SimpleNamespace
 
+import numpy as np
 from track_people import (
     TRACK_SUMMARY_CSV_HEADER,
     TRACKS_CSV_HEADER,
     FrameTracks,
+    PersonTracker,
     TrackDetection,
     analyze_track_anomalies,
     compute_track_summaries,
@@ -197,6 +200,55 @@ class TrackAnomalyTests(unittest.TestCase):
         handoff = anomalies["potential_handoffs"][0]
         self.assertEqual(handoff["old_track_id"], 5)
         self.assertEqual(handoff["new_track_id"], 6)
+
+
+class PersonTrackerUnitTests(unittest.TestCase):
+    def test_filters_non_person_low_conf_and_untracked_boxes(self):
+        boxes = [
+            # Valid tracked person (cls=0, id=4, conf=0.82)
+            SimpleNamespace(
+                id=[4],
+                cls=[0],
+                conf=[0.82],
+                xyxy=[[10.0, 20.0, 50.0, 120.0]],
+            ),
+            # Non-person car (cls=2, id=9, conf=0.95) -> filtered out
+            SimpleNamespace(
+                id=[9],
+                cls=[2],
+                conf=[0.95],
+                xyxy=[[100.0, 100.0, 200.0, 200.0]],
+            ),
+            # Untracked person box (id=None) -> filtered out
+            SimpleNamespace(
+                id=None,
+                cls=[0],
+                conf=[0.90],
+                xyxy=[[30.0, 30.0, 60.0, 110.0]],
+            ),
+            # Low confidence person (conf=0.25 < 0.4) -> filtered out
+            SimpleNamespace(
+                id=[11],
+                cls=[0],
+                conf=[0.25],
+                xyxy=[[70.0, 20.0, 90.0, 80.0]],
+            ),
+        ]
+        fake_model = SimpleNamespace(
+            track=lambda *_a, **_kw: [SimpleNamespace(boxes=boxes)]
+        )
+        tracker = PersonTracker(
+            tracker_config="bytetrack.yaml",
+            confidence_threshold=0.4,
+            device="cpu",
+            model=fake_model,
+        )
+        frame = np.zeros((240, 320, 3), dtype=np.uint8)
+        res = tracker.track(frame, frame_id=5)
+        self.assertEqual(len(res), 1)
+        self.assertEqual(res[0].frame_id, 5)
+        self.assertEqual(res[0].track_id, 4)
+        self.assertAlmostEqual(res[0].confidence, 0.82)
 
 
 if __name__ == "__main__":
