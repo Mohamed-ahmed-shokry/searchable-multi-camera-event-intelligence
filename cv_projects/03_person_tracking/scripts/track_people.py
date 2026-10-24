@@ -217,3 +217,70 @@ def read_track_summary_csv(path: Path | str) -> list[TrackSummary]:
                 )
             )
     return summaries
+
+
+def _box_center_and_scale(trk: TrackDetection) -> tuple[float, float, float]:
+    cx = 0.5 * (trk.x1 + trk.x2)
+    cy = 0.5 * (trk.y1 + trk.y2)
+    scale = max(trk.x2 - trk.x1, trk.y2 - trk.y1, 1.0)
+    return cx, cy, scale
+
+
+def analyze_track_anomalies(
+    frame_tracks: Sequence[FrameTracks], max_handoff_gap: int = 5
+) -> dict[str, list[dict[str, int | float]]]:
+    """Identify track fragmentation gaps and potential spatial ID handoffs."""
+    history: dict[int, list[TrackDetection]] = {}
+    for ft in frame_tracks:
+        for trk in ft.tracks:
+            history.setdefault(trk.track_id, []).append(trk)
+
+    fragmentations: list[dict[str, int | float]] = []
+    first_obs: dict[int, TrackDetection] = {}
+    last_obs: dict[int, TrackDetection] = {}
+
+    for track_id in sorted(history):
+        obs = sorted(history[track_id], key=lambda item: item.frame_id)
+        first_obs[track_id] = obs[0]
+        last_obs[track_id] = obs[-1]
+        for prev, curr in zip(obs, obs[1:], strict=False):
+            gap = curr.frame_id - prev.frame_id - 1
+            if gap >= 1:
+                fragmentations.append(
+                    {
+                        "track_id": track_id,
+                        "lost_after_frame": prev.frame_id,
+                        "reappeared_at_frame": curr.frame_id,
+                        "gap_frames": gap,
+                    }
+                )
+
+    potential_handoffs: list[dict[str, int | float]] = []
+    track_ids = sorted(history)
+    for old_id in track_ids:
+        end_trk = last_obs[old_id]
+        cx1, cy1, scale1 = _box_center_and_scale(end_trk)
+        for new_id in track_ids:
+            if new_id == old_id:
+                continue
+            start_trk = first_obs[new_id]
+            frame_delta = start_trk.frame_id - end_trk.frame_id
+            if not (0 <= frame_delta <= max_handoff_gap):
+                continue
+            cx2, cy2, scale2 = _box_center_and_scale(start_trk)
+            dist = ((cx2 - cx1) ** 2 + (cy2 - cy1) ** 2) ** 0.5
+            if dist <= max(scale1, scale2):
+                potential_handoffs.append(
+                    {
+                        "old_track_id": old_id,
+                        "new_track_id": new_id,
+                        "old_end_frame": end_trk.frame_id,
+                        "new_start_frame": start_trk.frame_id,
+                        "center_distance_px": round(dist, 2),
+                    }
+                )
+
+    return {
+        "fragmentations": fragmentations,
+        "potential_handoffs": potential_handoffs,
+    }
