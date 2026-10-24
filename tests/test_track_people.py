@@ -19,6 +19,8 @@ from evaluate_mot import (
     compute_iou_matrix,
     evaluate_tracking,
     load_mot17_gt,
+)
+from evaluate_mot import (
     main as evaluate_mot_main,
 )
 from track_people import (
