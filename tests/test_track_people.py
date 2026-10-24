@@ -19,8 +19,10 @@ from track_people import (
     TrackDetection,
     analyze_track_anomalies,
     compute_track_summaries,
+    draw_tracks,
     read_track_summary_csv,
     read_tracks_csv,
+    track_color,
     write_track_summary_csv,
     write_tracks_csv,
 )
@@ -249,6 +251,21 @@ class PersonTrackerUnitTests(unittest.TestCase):
         self.assertEqual(res[0].frame_id, 5)
         self.assertEqual(res[0].track_id, 4)
         self.assertAlmostEqual(res[0].confidence, 0.82)
+
+
+class DrawTracksTests(unittest.TestCase):
+    def test_track_color_and_draw_tracks(self):
+        c1 = track_color(1)
+        c2 = track_color(2)
+        self.assertNotEqual(c1, c2)
+        self.assertEqual(track_color(1), track_color(11))
+
+        blank = np.zeros((100, 120, 3), dtype=np.uint8)
+        tracks = [TrackDetection(0, 1, 10, 15, 60, 85, 0.92)]
+        annotated = draw_tracks(blank, tracks)
+        self.assertEqual(annotated.shape, blank.shape)
+        self.assertEqual(int(blank.sum()), 0)
+        self.assertGreater(int(annotated.sum()), 0)
 
 
 if __name__ == "__main__":
