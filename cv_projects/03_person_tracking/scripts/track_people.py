@@ -93,9 +93,7 @@ def read_tracks_csv(path: Path | str) -> list[FrameTracks]:
         reader = csv.reader(handle)
         header = next(reader, None)
         if header != TRACKS_CSV_HEADER:
-            raise ValueError(
-                f"Expected CSV header {TRACKS_CSV_HEADER}, got {header!r}"
-            )
+            raise ValueError(f"Expected CSV header {TRACKS_CSV_HEADER}, got {header!r}")
         for row in reader:
             if not row:
                 continue
