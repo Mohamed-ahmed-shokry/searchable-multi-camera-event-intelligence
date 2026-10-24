@@ -6,13 +6,27 @@ bounding box annotation, and CSV serialization.
 
 from __future__ import annotations
 
+import argparse
 import csv
+import json
+import sys
+import time
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
 import cv2
 import numpy as np
+
+try:
+    from video_source import VideoSource
+except ImportError:
+    _subproject_1_scripts = (
+        Path(__file__).resolve().parents[2] / "01_video_inspection" / "scripts"
+    )
+    if str(_subproject_1_scripts) not in sys.path:
+        sys.path.insert(0, str(_subproject_1_scripts))
+    from video_source import VideoSource
 
 DETECTIONS_CSV_HEADER = [
     "frame_id",
@@ -326,3 +340,235 @@ def create_video_writer(
     if not writer.isOpened():
         raise RuntimeError(f"Could not open VideoWriter for {path}")
     return writer
+
+
+def load_config(config_path: str | Path | None) -> dict[str, Any]:
+    """Load configuration from a YAML file with graceful fallback."""
+    if not config_path:
+        return {}
+    path = Path(config_path)
+    if not path.is_file():
+        raise FileNotFoundError(f"Configuration file not found: {path}")
+
+    try:
+        import yaml
+
+        with path.open("r", encoding="utf-8") as f:
+            return yaml.safe_load(f) or {}
+    except ImportError:
+        cfg: dict[str, Any] = {}
+        with path.open("r", encoding="utf-8") as f:
+            for line in f:
+                stripped = line.strip()
+                if not stripped or stripped.startswith("#"):
+                    continue
+                if ":" in stripped:
+                    key, val = stripped.split(":", 1)
+                    key = key.strip()
+                    val = val.split("#")[0].strip().strip('"').strip("'")
+                    if val.lower() == "true":
+                        cfg[key] = True
+                    elif val.lower() == "false":
+                        cfg[key] = False
+                    elif val.lower() == "null":
+                        cfg[key] = None
+                    else:
+                        try:
+                            cfg[key] = float(val) if "." in val else int(val)
+                        except ValueError:
+                            cfg[key] = val
+        return cfg
+
+
+def run_detection(
+    source_path: str | Path,
+    *,
+    output_dir: str | Path,
+    detector: PersonDetector | None = None,
+    config_path: str | Path | None = None,
+    model_name: str = "yolo11m.pt",
+    confidence_threshold: float = 0.4,
+    device: str | None = None,
+    save_video: bool = True,
+    save_sample_frames: bool = False,
+    sample_frame_interval: int = 50,
+    max_frames: int | None = None,
+) -> dict[str, Any]:
+    """Execute person detection against a video file or frame sequence.
+
+    Outputs schema-compliant detections.csv and optional annotated video.
+    """
+    config = load_config(config_path) if config_path else {}
+    final_model = config.get("model", model_name)
+    final_conf = float(config.get("confidence_threshold", confidence_threshold))
+    final_device = config.get("device", device)
+
+    out_dir = Path(output_dir)
+    out_dir.mkdir(parents=True, exist_ok=True)
+
+    if detector is None:
+        detector = PersonDetector(
+            model_name=final_model,
+            confidence_threshold=final_conf,
+            device=final_device,
+        )
+
+    frame_records: list[FrameDetections] = []
+    frames_with_detections = 0
+    start_time = time.perf_counter()
+
+    with VideoSource(source_path) as source:
+        meta = source.metadata
+        total_to_process = (
+            min(meta.frame_count, max_frames)
+            if max_frames is not None
+            else meta.frame_count
+        )
+
+        writer: cv2.VideoWriter | None = None
+        if save_video and total_to_process > 0:
+            writer = create_video_writer(
+                out_dir / "annotated_video.mp4",
+                fps=meta.fps if meta.fps > 0 else 25.0,
+                width=meta.width,
+                height=meta.height,
+            )
+
+        frames_dir = out_dir / "annotated_frames"
+        if save_sample_frames:
+            frames_dir.mkdir(parents=True, exist_ok=True)
+
+        try:
+            for frame_id, frame in source.iter_frames(stop=total_to_process):
+                detections = detector.detect(frame)
+                frame_records.append(FrameDetections(frame_id, detections))
+                if detections:
+                    frames_with_detections += 1
+
+                if writer is not None or save_sample_frames:
+                    annotated = draw_detections(frame, detections)
+                    if writer is not None:
+                        writer.write(annotated)
+                    if save_sample_frames and (
+                        frame_id % sample_frame_interval == 0
+                        or frame_id == total_to_process - 1
+                    ):
+                        cv2.imwrite(
+                            str(frames_dir / f"frame_{frame_id:06d}.jpg"),
+                            annotated,
+                        )
+        finally:
+            if writer is not None:
+                writer.release()
+
+    duration = max(1e-6, time.perf_counter() - start_time)
+    csv_path = out_dir / "detections.csv"
+    total_detections = write_detections_csv(frame_records, csv_path)
+
+    summary: dict[str, Any] = {
+        "source_path": str(Path(source_path).resolve()),
+        "frame_count": len(frame_records),
+        "total_detections": total_detections,
+        "frames_with_detections": frames_with_detections,
+        "model": detector.model_name,
+        "confidence_threshold": detector.confidence_threshold,
+        "device": detector.device,
+        "duration_seconds": round(duration, 3),
+        "fps": round(len(frame_records) / duration, 2),
+        "detections_csv": str(csv_path.resolve()),
+        "annotated_video": str((out_dir / "annotated_video.mp4").resolve())
+        if save_video
+        else None,
+    }
+
+    with (out_dir / "detection_summary.json").open("w", encoding="utf-8") as f:
+        json.dump(summary, f, indent=2)
+
+    return summary
+
+
+def main(argv: list[str] | None = None) -> int:
+    parser = build_parser()
+    args = parser.parse_args(argv)
+    try:
+        summary = run_detection(
+            args.source,
+            output_dir=args.output_dir,
+            config_path=args.config,
+            model_name=args.model,
+            confidence_threshold=args.conf,
+            device=args.device,
+            save_video=not args.no_video,
+            save_sample_frames=args.sample_frames,
+            max_frames=args.max_frames,
+        )
+        print(
+            f"Processed {summary['frame_count']} frames in {summary['duration_seconds']}s "
+            f"({summary['fps']} FPS) on {summary['device']}."
+        )
+        print(
+            f"Detected {summary['total_detections']} person instances across "
+            f"{summary['frames_with_detections']} frames."
+        )
+        print(f"Detections saved to: {summary['detections_csv']}")
+        return 0
+    except (OSError, ValueError, RuntimeError, cv2.error) as exc:
+        parser.exit(2, f"error: {exc}\n")
+
+
+def build_parser() -> argparse.ArgumentParser:
+    parser = argparse.ArgumentParser(
+        description="Run person detection on video files or MOT17 frame sequences."
+    )
+    parser.add_argument("source", help="Path to video file or frame sequence directory")
+    parser.add_argument(
+        "--output-dir",
+        "-o",
+        default="cv_projects/02_person_detection/outputs",
+        help="Target output directory",
+    )
+    parser.add_argument(
+        "--config",
+        "-c",
+        default=None,
+        help="Path to YAML configuration file",
+    )
+    parser.add_argument(
+        "--model",
+        "-m",
+        default="yolo11m.pt",
+        help="YOLO model weights name or path",
+    )
+    parser.add_argument(
+        "--conf",
+        type=float,
+        default=0.4,
+        help="Confidence threshold (default: 0.4)",
+    )
+    parser.add_argument(
+        "--device",
+        "-d",
+        default=None,
+        help="Inference device (e.g. 'cuda:0', 'cpu')",
+    )
+    parser.add_argument(
+        "--no-video",
+        action="store_true",
+        help="Skip annotated video rendering",
+    )
+    parser.add_argument(
+        "--sample-frames",
+        action="store_true",
+        help="Save annotated sample frames to annotated_frames/",
+    )
+    parser.add_argument(
+        "--max-frames",
+        type=int,
+        default=None,
+        help="Max frames to process (useful for quick smoke tests)",
+    )
+    return parser
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())
