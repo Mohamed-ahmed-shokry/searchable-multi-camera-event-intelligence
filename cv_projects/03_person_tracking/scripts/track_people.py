@@ -5,6 +5,7 @@ CSV exporters, track anomaly analyzer, and CLI entrypoint.
 from __future__ import annotations
 
 import csv
+import itertools
 from collections.abc import Sequence
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -243,7 +244,7 @@ def analyze_track_anomalies(
         obs = sorted(history[track_id], key=lambda item: item.frame_id)
         first_obs[track_id] = obs[0]
         last_obs[track_id] = obs[-1]
-        for prev, curr in zip(obs, obs[1:], strict=False):
+        for prev, curr in itertools.pairwise(obs):
             gap = curr.frame_id - prev.frame_id - 1
             if gap >= 1:
                 fragmentations.append(
