@@ -403,6 +403,10 @@ def run_detection(
     final_conf = float(config.get("confidence_threshold", confidence_threshold))
     final_device = config.get("device", device)
 
+    src_path = Path(source_path).expanduser().resolve()
+    if not src_path.exists():
+        raise FileNotFoundError(f"Source does not exist: {src_path}")
+
     out_dir = Path(output_dir)
     out_dir.mkdir(parents=True, exist_ok=True)
 
@@ -512,7 +516,7 @@ def main(argv: list[str] | None = None) -> int:
         )
         print(f"Detections saved to: {summary['detections_csv']}")
         return 0
-    except (OSError, ValueError, RuntimeError, cv2.error) as exc:
+    except (OSError, ValueError, RuntimeError, ImportError, cv2.error) as exc:
         parser.exit(2, f"error: {exc}\n")
 
 
