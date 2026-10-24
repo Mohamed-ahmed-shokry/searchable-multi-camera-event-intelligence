@@ -14,7 +14,13 @@ from types import SimpleNamespace
 import helpers
 import numpy as np
 from compare_trackers import compare_trackers
-from evaluate_mot import box_iou, compute_iou_matrix, evaluate_tracking, load_mot17_gt
+from evaluate_mot import (
+    box_iou,
+    compute_iou_matrix,
+    evaluate_tracking,
+    load_mot17_gt,
+    main as evaluate_mot_main,
+)
 from track_people import (
     TRACK_SUMMARY_CSV_HEADER,
     TRACKS_CSV_HEADER,
@@ -405,6 +411,23 @@ class EvaluateMotParserTests(unittest.TestCase):
         self.assertAlmostEqual(m_switched["mota"], 0.3333, places=4)
         # IDTP = 2 (for pred 42 matched on frames 0 & 1), denom = 3 GT + 4 pred = 7 -> IDF1 = 4/7 = 0.5714
         self.assertAlmostEqual(m_switched["idf1"], 0.5714, places=4)
+
+    def test_evaluate_mot_cli_entrypoint(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            gt_path = root / "gt.txt"
+            gt_path.write_text("1,1,10,10,40,80,1,1,1.0\n", encoding="utf-8")
+            tracks_path = root / "tracks.csv"
+            write_tracks_csv(
+                tracks_path,
+                [FrameTracks(0, [TrackDetection(0, 7, 10, 10, 50, 90, 0.95)])],
+            )
+            out_json = root / "eval.json"
+            rc = evaluate_mot_main(
+                [str(gt_path), str(tracks_path), "-o", str(out_json)]
+            )
+            self.assertEqual(rc, 0)
+            self.assertTrue(out_json.is_file())
 
 
 class CompareTrackersTests(unittest.TestCase):
