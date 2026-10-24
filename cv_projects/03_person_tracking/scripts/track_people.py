@@ -4,14 +4,29 @@ CSV exporters, track anomaly analyzer, and CLI entrypoint.
 
 from __future__ import annotations
 
+import argparse
 import csv
 import itertools
+import json
+import sys
+import time
 from collections.abc import Sequence
 from dataclasses import dataclass, field
 from pathlib import Path
+from typing import Any
 
 import cv2
 import numpy as np
+
+try:
+    from video_source import VideoSource
+except ImportError:
+    _subproject_1_scripts = (
+        Path(__file__).resolve().parents[2] / "01_video_inspection" / "scripts"
+    )
+    if str(_subproject_1_scripts) not in sys.path:
+        sys.path.insert(0, str(_subproject_1_scripts))
+    from video_source import VideoSource
 
 TRACKS_CSV_HEADER: list[str] = [
     "frame_id",
@@ -470,3 +485,226 @@ def create_video_writer(
     if not writer.isOpened():
         raise RuntimeError(f"Could not open VideoWriter for {path}")
     return writer
+
+
+def load_config(config_path: str | Path | None) -> dict[str, Any]:
+    """Load tracking configuration from YAML with fallback parser."""
+    if not config_path:
+        return {}
+    path = Path(config_path)
+    if not path.is_file():
+        raise FileNotFoundError(f"Configuration file not found: {path}")
+
+    try:
+        import yaml
+
+        with path.open("r", encoding="utf-8") as handle:
+            return yaml.safe_load(handle) or {}
+    except ImportError:
+        cfg: dict[str, Any] = {}
+        with path.open("r", encoding="utf-8") as handle:
+            for line in handle:
+                stripped = line.strip()
+                if not stripped or stripped.startswith("#") or ":" not in stripped:
+                    continue
+                key, val = stripped.split(":", 1)
+                key = key.strip()
+                val = val.split("#")[0].strip().strip('"').strip("'")
+                if not val:
+                    continue
+                if val.lower() == "true":
+                    cfg[key] = True
+                elif val.lower() == "false":
+                    cfg[key] = False
+                elif val.lower() == "null":
+                    cfg[key] = None
+                else:
+                    try:
+                        cfg[key] = float(val) if "." in val else int(val)
+                    except ValueError:
+                        cfg[key] = val
+        return cfg
+
+
+def run_tracking(
+    source_path: str | Path,
+    *,
+    output_dir: str | Path,
+    tracker: PersonTracker | None = None,
+    config_path: str | Path | None = None,
+    model_name: str = "yolo11m.pt",
+    tracker_config: str = "bytetrack.yaml",
+    confidence_threshold: float = 0.4,
+    device: str | None = None,
+    save_video: bool = True,
+    max_frames: int | None = None,
+) -> dict[str, Any]:
+    """Execute person tracking against a video file or MOT17 frame sequence."""
+    config = load_config(config_path) if config_path else {}
+    final_model = str(config.get("model", model_name))
+    final_tracker_cfg = str(config.get("tracker", tracker_config))
+    final_conf = float(config.get("confidence_threshold", confidence_threshold))
+    final_device = config.get("device", device)
+
+    src_path = Path(source_path).expanduser().resolve()
+    if not src_path.exists():
+        raise FileNotFoundError(f"Source does not exist: {src_path}")
+
+    out_dir = Path(output_dir)
+    out_dir.mkdir(parents=True, exist_ok=True)
+
+    if tracker is None:
+        tracker = PersonTracker(
+            model_name=final_model,
+            tracker_config=final_tracker_cfg,
+            confidence_threshold=final_conf,
+            device=final_device,
+        )
+
+    frame_records: list[FrameTracks] = []
+    start_time = time.perf_counter()
+
+    with VideoSource(src_path) as source:
+        meta = source.metadata
+        fps = meta.fps if meta.fps > 0 else 25.0
+        total_to_process = (
+            min(meta.frame_count, max_frames)
+            if max_frames is not None
+            else meta.frame_count
+        )
+
+        writer: cv2.VideoWriter | None = None
+        video_path = out_dir / "annotated_tracking_video.mp4"
+        if save_video and total_to_process > 0:
+            writer = create_video_writer(
+                video_path,
+                fps=fps,
+                width=meta.width,
+                height=meta.height,
+            )
+
+        try:
+            for frame_id, frame in source.iter_frames(stop=total_to_process):
+                tracks = tracker.track(frame, frame_id=frame_id)
+                frame_records.append(FrameTracks(frame_id=frame_id, tracks=tracks))
+                if writer is not None:
+                    writer.write(draw_tracks(frame, tracks))
+        finally:
+            if writer is not None:
+                writer.release()
+
+    duration = max(1e-6, time.perf_counter() - start_time)
+    tracks_csv = write_tracks_csv(out_dir / "tracks.csv", frame_records)
+    summaries = compute_track_summaries(frame_records, fps=fps)
+    summary_csv = write_track_summary_csv(out_dir / "track_summary.csv", summaries)
+    anomalies = analyze_track_anomalies(frame_records)
+    total_track_boxes = sum(len(ft.tracks) for ft in frame_records)
+
+    result: dict[str, Any] = {
+        "source_path": str(src_path),
+        "frame_count": len(frame_records),
+        "num_unique_tracks": len(summaries),
+        "total_track_observations": total_track_boxes,
+        "model": tracker.model_name,
+        "tracker": tracker.tracker_config,
+        "confidence_threshold": tracker.confidence_threshold,
+        "device": tracker.device,
+        "duration_seconds": round(duration, 3),
+        "fps": round(len(frame_records) / duration, 2),
+        "tracks_csv": str(tracks_csv.resolve()),
+        "track_summary_csv": str(summary_csv.resolve()),
+        "annotated_tracking_video": str(video_path.resolve()) if save_video else None,
+        "anomalies": anomalies,
+    }
+    (out_dir / "tracking_summary.json").write_text(
+        json.dumps(result, indent=2), encoding="utf-8"
+    )
+    return result
+
+
+def build_parser() -> argparse.ArgumentParser:
+    parser = argparse.ArgumentParser(
+        description="Run multi-object person tracking on video files or MOT17 sequences."
+    )
+    parser.add_argument("source", help="Path to video file or MOT17 sequence directory")
+    parser.add_argument(
+        "--output-dir",
+        "-o",
+        default="cv_projects/03_person_tracking/outputs",
+        help="Target output directory",
+    )
+    parser.add_argument(
+        "--config",
+        "-c",
+        default=None,
+        help="Path to YAML configuration file",
+    )
+    parser.add_argument(
+        "--model",
+        "-m",
+        default="yolo11m.pt",
+        help="YOLO model weights name or path",
+    )
+    parser.add_argument(
+        "--tracker",
+        "-t",
+        default="bytetrack.yaml",
+        help="Tracker configuration file (bytetrack.yaml or botsort.yaml)",
+    )
+    parser.add_argument(
+        "--conf",
+        type=float,
+        default=0.4,
+        help="Confidence threshold (default: 0.4)",
+    )
+    parser.add_argument(
+        "--device",
+        "-d",
+        default=None,
+        help="Inference device (e.g. 'cuda:0', 'cpu')",
+    )
+    parser.add_argument(
+        "--no-video",
+        action="store_true",
+        help="Skip annotated tracking video rendering",
+    )
+    parser.add_argument(
+        "--max-frames",
+        type=int,
+        default=None,
+        help="Max frames to process",
+    )
+    return parser
+
+
+def main(argv: list[str] | None = None) -> int:
+    parser = build_parser()
+    args = parser.parse_args(argv)
+    try:
+        summary = run_tracking(
+            args.source,
+            output_dir=args.output_dir,
+            config_path=args.config,
+            model_name=args.model,
+            tracker_config=args.tracker,
+            confidence_threshold=args.conf,
+            device=args.device,
+            save_video=not args.no_video,
+            max_frames=args.max_frames,
+        )
+        print(
+            f"Tracked {summary['frame_count']} frames in {summary['duration_seconds']}s "
+            f"({summary['fps']} FPS) with {summary['tracker']} on {summary['device']}."
+        )
+        print(
+            f"Unique tracks: {summary['num_unique_tracks']} "
+            f"({summary['total_track_observations']} total boxes)."
+        )
+        print(f"Tracks saved to: {summary['tracks_csv']}")
+        return 0
+    except (OSError, ValueError, RuntimeError, ImportError, cv2.error) as exc:
+        parser.exit(2, f"error: {exc}\n")
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())
