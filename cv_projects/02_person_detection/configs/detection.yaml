@@ -1,0 +1,11 @@
+# Default configuration for Phase 2 person detection
+model: "yolo11m.pt"
+weights_version: "ultralytics-yolo11-v8.4.132"
+confidence_threshold: 0.4
+iou_threshold: 0.45
+device: "cuda:0"
+target_classes:
+  - 0  # COCO person class
+save_annotated_video: true
+save_annotated_frames: false
+annotated_video_fps: null  # null = match input source fps
