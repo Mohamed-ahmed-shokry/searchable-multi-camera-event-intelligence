@@ -10,10 +10,14 @@ import unittest
 from pathlib import Path
 
 from track_people import (
+    TRACK_SUMMARY_CSV_HEADER,
     TRACKS_CSV_HEADER,
     FrameTracks,
     TrackDetection,
+    compute_track_summaries,
+    read_track_summary_csv,
     read_tracks_csv,
+    write_track_summary_csv,
     write_tracks_csv,
 )
 
@@ -107,6 +111,56 @@ class TrackSchemaTests(unittest.TestCase):
             self.assertEqual(len(loaded[1].tracks), 0)
             self.assertEqual(len(loaded[2].tracks), 2)
             self.assertEqual(loaded[2].tracks[1].track_id, 2)
+
+
+class TrackSummaryTests(unittest.TestCase):
+    def test_compute_and_serialize_track_summaries(self):
+        frames = [
+            FrameTracks(
+                frame_id=0,
+                tracks=[
+                    TrackDetection(0, 10, 0, 0, 20, 40, 0.9),
+                    TrackDetection(0, 20, 50, 0, 70, 40, 0.8),
+                ],
+            ),
+            FrameTracks(
+                frame_id=1, tracks=[TrackDetection(1, 20, 52, 0, 72, 40, 0.85)]
+            ),
+            FrameTracks(
+                frame_id=2,
+                tracks=[
+                    TrackDetection(2, 10, 4, 0, 24, 40, 0.88),
+                    TrackDetection(2, 20, 54, 0, 74, 40, 0.82),
+                ],
+            ),
+        ]
+        summaries = compute_track_summaries(frames, fps=10.0)
+        self.assertEqual(len(summaries), 2)
+
+        # Track 10: seen on frames 0 and 2 (gap at frame 1) -> duration_frames=3, observed=2
+        s10 = summaries[0]
+        self.assertEqual(s10.track_id, 10)
+        self.assertEqual(s10.start_frame, 0)
+        self.assertEqual(s10.end_frame, 2)
+        self.assertEqual(s10.duration_frames, 3)
+        self.assertAlmostEqual(s10.duration_seconds, 0.3)
+        self.assertEqual(s10.observed_frames, 2)
+
+        # Track 20: seen on frames 0, 1, 2 -> duration_frames=3, observed=3
+        s20 = summaries[1]
+        self.assertEqual(s20.track_id, 20)
+        self.assertEqual(s20.observed_frames, 3)
+
+        with tempfile.TemporaryDirectory() as tmp:
+            summary_csv = Path(tmp) / "track_summary.csv"
+            write_track_summary_csv(summary_csv, summaries)
+            with summary_csv.open("r", encoding="utf-8") as handle:
+                rows = list(csv.reader(handle))
+            self.assertEqual(rows[0], TRACK_SUMMARY_CSV_HEADER)
+            loaded = read_track_summary_csv(summary_csv)
+            self.assertEqual(len(loaded), 2)
+            self.assertEqual(loaded[0].track_id, 10)
+            self.assertEqual(loaded[0].observed_frames, 2)
 
 
 if __name__ == "__main__":
