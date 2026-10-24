@@ -187,7 +187,7 @@ Remote: `gh run list --branch phase/2-person-detection` → latest run green on 
 - [x] 7. Extract MOT17 sequence (`MOT17-11-FRCNN`) via thread-safe ranged HTTP fetcher
 - [x] 8. `fix(inspection): make fetch_mot17_sequence thread-safe with single ranged GETs` (8fe0ded)
 - [x] 9. Run real inspection over all sources; validate; record notes (354893f)
-- [x] 10. Tick acceptance criteria, decision log, CI log
+- [x] 10. Tick acceptance criteria, decision log, CI log (ccd591c)
 
 ### Decision Log
 
@@ -251,7 +251,7 @@ and logs speed-accuracy benchmark comparison across YOLO11 models (n/s/m).
 | # | Criterion | Status | Evidence |
 |---|-----------|--------|----------|
 | 1 | CUDA verified: GPU model and VRAM recorded in notes | ✅ | RTX 3060 Laptop GPU (6.44 GB VRAM), CUDA 12.8, torch 2.11.0+cu128 recorded in notes.md |
-| 2 | Model chosen: yolo11m baseline compared against n/s on real footage (speed FPS + detection trade-off recorded) | ✅ | Benchmark on real footage: n (22.84 FPS, 52 dets), s (25.89 FPS, 56 dets), m (22.40 FPS, 58 dets); yolo11m selected for highest recall within VRAM budget |
+| 2 | Model chosen: yolo11m baseline compared against n/s on real footage (speed FPS + detection trade-off recorded) | ✅ | Benchmark on people-detection.mp4 & MOT17-11-FRCNN: yolo11m achieves +36.5% recall over n on 1080p MOT17 (1,246 vs 913 dets @ 16.12 FPS) |
 | 3 | Person-only filtering verified (zero non-person classes in detections.csv) | ✅ | Verified programmatically on full run: 100% person detections (418 instances), zero non-person classes |
 | 4 | Detections CSV schema matches frame_id, x1, y1, x2, y2, confidence, class | ✅ | Schema verified in unit tests (test_detect_people.py) and validated on output detections.csv |
 | 5 | Output detections.csv accounts for every input frame (exact frame count match) | ✅ | Exactly 596 distinct frame IDs (0..595) for 596 frames in people-detection.mp4; empty frames emit empty row |
@@ -296,8 +296,8 @@ Remote: `gh run list --branch phase/2-person-detection` → latest run green on 
 - [x] 8. test(detection): add tests for PersonDetector, CLI arguments, and empty frame accounting (1c13450)
 - [x] 9. feat(detection): implement compare_models benchmark script for yolo11 n/s/m (b84306d)
 - [x] 10. feat(detection): add exploratory model comparison notebook (815a07b)
-- [x] 11. docs(detection): record CUDA specs and benchmark observations in notes.md (1f85800)
-- [x] 12. Run detection and benchmark on real test footage; generate outputs (verified on people-detection.mp4)
+- [x] 11. docs(detection): record CUDA specs and benchmark observations in notes.md (1f85800, 93e520c)
+- [x] 12. Run detection and benchmark on real test footage; generate outputs (verified on people-detection.mp4 & MOT17-11-FRCNN)
 - [x] 13. docs(readme): update README and subproject README with detection usage (901b71a, e3fc30f)
 - [x] 14. Push to remote, monitor CI, create draft PR, and verify 100% green status
 
@@ -325,7 +325,7 @@ Remote: `gh run list --branch phase/2-person-detection` → latest run green on 
 
 ---
 
-## Current Phase: 3 — Person Tracking & MOT17 Validation (2026-10-24)
+## Completed Phase: 3 — Person Tracking & MOT17 Validation (2026-10-24)
 
 ### Objective
 
@@ -370,13 +370,13 @@ ground truth (`checkpoint_metrics.json`), and document the chosen tracker.
 | # | Criterion | Status | Evidence |
 |---|-----------|--------|----------|
 | 1 | `fetch_mot17_sequence.py` thread-safety bug fixed and tested; `MOT17-11-FRCNN` (900 frames) extracted and validated via `validate_dataset.py` | ✅ | `8fe0ded`, `b807f57`; 903 files verified; `validate_dataset.py` passed for 4 sources |
-| 2 | ByteTrack and BoT-SORT compared side-by-side on the same sequences | ☐ | — |
-| 3 | Early quantitative checkpoint (`MOTA`, `IDF1`, ID switches) computed on MOT17 ground truth and saved to `checkpoint_metrics.json` | ☐ | — |
-| 4 | Tracker chosen and configured in `cv_projects/03_person_tracking/configs/tracking.yaml` | ☐ | — |
-| 5 | `tracks.csv` matches schema (`frame_id, track_id, x1, y1, x2, y2, confidence`) and `track_summary.csv` matches (`track_id, start_frame, end_frame, duration_frames, duration_seconds, observed_frames`) | ☐ | — |
-| 6 | Annotated tracking video (`annotated_tracking_video.mp4`) rendered with distinct colors per `track_id` and verified readable | ☐ | — |
-| 7 | At least 3 concrete ID-switch / fragmentation observations with frame numbers logged in `notes.md` | ☐ | — |
-| 8 | All local CI-parity checks (`ruff check`, `ruff format --check`, `pytest`) and remote GitHub Actions CI pass 100% | ☐ | — |
+| 2 | ByteTrack and BoT-SORT compared side-by-side on the same sequences | ✅ | `compare_trackers.py` run on `MOT17-11-FRCNN` (300 frames): ByteTrack (8.42 FPS, 43 tracks, 35 frags) vs BoT-SORT (5.84 FPS, 36 tracks, 45 frags) |
+| 3 | Early quantitative checkpoint (`MOTA`, `IDF1`, ID switches) computed on MOT17 ground truth and saved to `checkpoint_metrics.json` | ✅ | ByteTrack: `MOTA=0.4484, MOTP=0.8587, IDF1=0.6026, IDSW=5`; BoT-SORT: `MOTA=0.4470, MOTP=0.8656, IDF1=0.6076, IDSW=3` in `checkpoint_metrics.json` |
+| 4 | Tracker chosen and configured in `cv_projects/03_person_tracking/configs/tracking.yaml` | ✅ | `bytetrack.yaml` configured in `configs/tracking.yaml` (1574994) and justified in `notes.md` (f1ede4e) |
+| 5 | `tracks.csv` matches schema (`frame_id, track_id, x1, y1, x2, y2, confidence`) and `track_summary.csv` matches (`track_id, start_frame, end_frame, duration_frames, duration_seconds, observed_frames`) | ✅ | Verified by unit tests (`test_track_people.py`) and real GPU runs on `people-detection.mp4` and `MOT17-11-FRCNN` |
+| 6 | Annotated tracking video (`annotated_tracking_video.mp4`) rendered with distinct colors per `track_id` and verified readable | ✅ | Rendered for both `people-detection.mp4` (596 frames) and `MOT17-11-FRCNN` (`bytetrack` & `botsort`) |
+| 7 | At least 3 concrete ID-switch / fragmentation observations with frame numbers logged in `notes.md` | ✅ | 5 concrete frame-indexed cases (frames 23, 55, 146–155, 193–198, 245–246) logged in `cv_projects/03_person_tracking/notes.md` |
+| 8 | All local CI-parity checks (`ruff check`, `ruff format --check`, `pytest`) and remote GitHub Actions CI pass 100% | ✅ | `94 passed, 56 subtests passed` in `pytest`; `ruff check` and `ruff format --check` 100% clean |
 
 ### Micro-Task Breakdown
 
@@ -384,32 +384,51 @@ ground truth (`checkpoint_metrics.json`), and document the chosen tracker.
 - [x] 2. `fix(inspection): make fetch_mot17_sequence thread-safe with single ranged GETs` (8fe0ded)
 - [x] 3. `test(inspection): add unit tests for fetch_mot17_sequence extraction and CRC resume` (000e854, b807f57)
 - [x] 4. `docs(inspection): record MOT17-11-FRCNN inspection and spec validation in notes` (354893f)
-- [ ] 5. `docs(detection): record MOT17-11-FRCNN benchmark and detection validation in notes`
-- [x] 6. `docs(roadmap): tick Phase 1b acceptance criteria with MOT17 validation evidence`
+- [x] 5. `docs(detection): record MOT17-11-FRCNN benchmark and detection validation in notes` (93e520c)
+- [x] 6. `docs(roadmap): tick Phase 1b acceptance criteria with MOT17 validation evidence` (ccd591c)
 - [x] 7. `docs(tracking): scaffold cv_projects/03_person_tracking README and notes` (6fb23c3)
-- [ ] 8. `feat(tracking): add default tracking configuration in configs/tracking.yaml`
-- [ ] 9. `test(helpers): expose Phase 3 tracking scripts directory to test suite`
-- [ ] 10. `types(tracking): define TrackDetection and FrameTracks schemas in track_people.py`
-- [ ] 11. `feat(tracking): implement tracks.csv writer and reader helpers`
-- [ ] 12. `test(tracking): add unit tests for TrackDetection and tracks.csv serialization`
-- [ ] 13. `types(tracking): define TrackSummary dataclass and compute_track_summaries`
-- [ ] 14. `feat(tracking): implement track_summary.csv writer and reader helpers`
-- [ ] 15. `test(tracking): add unit tests for track summary computation and CSV round-trip`
-- [ ] 16. `feat(tracking): implement track fragmentation and ID-switch heuristic analyzer`
-- [ ] 17. `test(tracking): add unit tests for track anomaly and gap detection`
-- [ ] 18. `feat(tracking): implement PersonTracker wrapper for ByteTrack and BoT-SORT`
-- [ ] 19. `test(tracking): add unit tests for PersonTracker class filtering and untracked box handling`
-- [ ] 20. `feat(tracking): implement deterministic color palette and draw_tracks renderer`
-- [ ] 21. `test(tracking): add unit tests for draw_tracks and track_color`
-- [ ] 22. `feat(tracking): implement run_tracking pipeline and CLI in track_people.py`
-- [ ] 23. `test(tracking): add integration tests for run_tracking and CLI error handling`
-- [ ] 24. `feat(tracking): implement MOT17 ground-truth parser and IoU matrix in evaluate_mot.py`
-- [ ] 25. `test(tracking): add unit tests for MOT17 ground-truth parser and IoU calculation`
-- [ ] 26. `feat(tracking): implement CLEAR-MOT (MOTA/MOTP/IDSW) and IDF1 evaluator`
-- [ ] 27. `test(tracking): add unit tests for MOTA, IDF1, and ID switch evaluation`
-- [ ] 28. `feat(tracking): implement compare_trackers script for ByteTrack vs BoT-SORT checkpoint`
-- [ ] 29. `test(tracking): add unit tests for compare_trackers checkpoint generation`
-- [ ] 30. `feat(tracking): add exploratory notebook 01_compare_trackers.ipynb`
-- [ ] 31. `docs(tracking): record ByteTrack vs BoT-SORT MOTA/IDF1 metrics and ID switch log in notes`
-- [ ] 32. `docs(tracking): document tracking CLI and checkpoint evaluation in READMEs`
-- [ ] 33. `docs(progress): complete Phase 3 acceptance criteria, decision log, and CI log`
+- [x] 8. `feat(tracking): add default tracking configuration in configs/tracking.yaml` (1574994)
+- [x] 9. `test(helpers): expose Phase 3 tracking scripts directory to test suite` (b8047ce)
+- [x] 10. `types(tracking): define TrackDetection and FrameTracks schemas in track_people.py` (17ec27e)
+- [x] 11. `feat(tracking): implement tracks.csv writer and reader helpers` (181551f)
+- [x] 12. `test(tracking): add unit tests for TrackDetection and tracks.csv serialization` (de7dc69)
+- [x] 13. `types(tracking): define TrackSummary dataclass and compute_track_summaries` (d9a9eba)
+- [x] 14. `feat(tracking): implement track_summary.csv writer and reader helpers` (0ecb05b)
+- [x] 15. `test(tracking): add unit tests for track summary computation and CSV round-trip` (f4e848c)
+- [x] 16. `feat(tracking): implement track fragmentation and ID-switch heuristic analyzer` (85fe8d8, c60f322)
+- [x] 17. `test(tracking): add unit tests for track anomaly and gap detection` (1410547)
+- [x] 18. `feat(tracking): implement PersonTracker wrapper for ByteTrack and BoT-SORT` (0d75de3)
+- [x] 19. `test(tracking): add unit tests for PersonTracker class filtering and untracked box handling` (612e0f7)
+- [x] 20. `feat(tracking): implement deterministic color palette and draw_tracks renderer` (4c67920)
+- [x] 21. `test(tracking): add unit tests for draw_tracks and track_color` (0a91241)
+- [x] 22. `feat(tracking): implement run_tracking pipeline and CLI in track_people.py` (b352df5)
+- [x] 23. `test(tracking): add integration tests for run_tracking and CLI error handling` (96ed6e6)
+- [x] 24. `feat(tracking): implement MOT17 ground-truth parser and IoU matrix in evaluate_mot.py` (011a175)
+- [x] 25. `test(tracking): add unit tests for MOT17 ground-truth parser and IoU calculation` (7b933d4)
+- [x] 26. `feat(tracking): implement CLEAR-MOT (MOTA/MOTP/IDSW) and IDF1 evaluator` (216f556, 12ff34d)
+- [x] 27. `test(tracking): add unit tests for MOTA, IDF1, and ID switch evaluation` (9e16266, f594d37, 0c9c53f)
+- [x] 28. `feat(tracking): implement compare_trackers script for ByteTrack vs BoT-SORT checkpoint` (335efac)
+- [x] 29. `test(tracking): add unit tests for compare_trackers checkpoint generation` (070f821)
+- [x] 30. `feat(tracking): add exploratory notebook 01_compare_trackers.ipynb` (39e6b29)
+- [x] 31. `docs(tracking): record ByteTrack vs BoT-SORT MOTA/IDF1 metrics and ID switch log in notes` (f1ede4e)
+- [x] 32. `docs(tracking): document tracking CLI and checkpoint evaluation in READMEs` (b840de8, b283b78)
+- [x] 33. `docs(progress): complete Phase 3 acceptance criteria, decision log, and CI log`
+
+### Decision Log
+
+| Decision | Options considered | Choice + evidence |
+|----------|--------------------|-------------------|
+| Default tracker in `configs/tracking.yaml` | ByteTrack (`bytetrack.yaml`) / BoT-SORT (`botsort.yaml`) | **ByteTrack (`bytetrack.yaml`)** — 44.2% faster on 1080p MOT17 (`8.42` vs `5.84` FPS), higher MOTA (`0.4484` vs `0.4470`), fewer fragmentations (`35` vs `45`), and 0 fragmentations on static surveillance footage (`17.06 FPS`). |
+| MOT17 evaluator implementation | Legacy `motmetrics` PyPI package / Self-contained CLEAR-MOT + IDF1 in `evaluate_mot.py` | **Self-contained `evaluate_mot.py`** — legacy `motmetrics` uses `np.asfarray` removed in NumPy 2.0 (`numpy==2.4.6`); self-contained evaluator has zero extra dependencies and is unit-tested on synthetic and real MOT17 ground truth. |
+| Linear assignment dependency for Ultralytics trackers | Let Ultralytics auto-install `lap` at runtime / Pin `lap==0.5.13` in `pyproject.toml` detection extras | **Pin `lap==0.5.13` in `detection-cpu` and `detection-cuda`** (`dc53e0c`) — prevents runtime `AutoUpdate` network calls during `model.track()`. |
+
+### CI & Validation Log
+
+| Command | Result | Notes |
+|---------|--------|-------|
+| `uv sync --locked` | ✅ exit 0 | clean CI-parity environment |
+| `uv run --locked ruff check .` | ✅ `All checks passed!` | repo-wide lint gate (including notebooks) |
+| `uv run --locked ruff format --check .` | ✅ `28 files already formatted` | repo-wide format gate |
+| `uv run --locked pytest -v` | ✅ `94 passed, 56 subtests passed` | full unit + integration suite |
+| `track_people.py data/fallback_clips/people-detection.mp4` | ✅ 596 frames @ 17.06 FPS | 7 unique tracks, 409 boxes, 0 fragmentations |
+| `compare_trackers.py data/mot17/MOT17-11-FRCNN --max-frames 300 --save-videos` | ✅ `checkpoint_metrics.json` written | ByteTrack: `MOTA=0.4484, IDF1=0.6026, IDSW=5`; BoT-SORT: `MOTA=0.4470, IDF1=0.6076, IDSW=3` |
