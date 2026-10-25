@@ -6,14 +6,27 @@ from __future__ import annotations
 
 import csv
 import itertools
+import json
 import math
 import sys
+import time
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from pathlib import Path
+from typing import Any
 
 import cv2
 import numpy as np
+
+try:
+    from video_source import VideoSource
+except ImportError:
+    _subproject_1_scripts = (
+        Path(__file__).resolve().parents[2] / "01_video_inspection" / "scripts"
+    )
+    if str(_subproject_1_scripts) not in sys.path:
+        sys.path.insert(0, str(_subproject_1_scripts))
+    from video_source import VideoSource
 
 try:
     from track_people import FrameTracks, TrackDetection, read_tracks_csv, track_color
@@ -23,7 +36,7 @@ except ImportError:
     )
     if str(_subproject_3_scripts) not in sys.path:
         sys.path.insert(0, str(_subproject_3_scripts))
-    from track_people import (  # noqa: F401
+    from track_people import (
         FrameTracks,
         TrackDetection,
         read_tracks_csv,
@@ -432,3 +445,158 @@ def render_trajectory_map(
             cv2.LINE_AA,
         )
     return canvas
+
+
+def load_trajectory_config(path: Path | str | None = None) -> dict[str, Any]:
+    """Load simple YAML key: value settings for Phase 4 trajectory extraction."""
+    defaults: dict[str, Any] = {
+        "anchor": "bottom_center",
+        "smoothing_window": 3,
+        "max_trail_length": 60,
+        "line_thickness": 2,
+        "jump_threshold_px": 150.0,
+    }
+    if path is None:
+        return defaults
+    cfg_path = Path(path)
+    if not cfg_path.exists():
+        return defaults
+
+    for raw_line in cfg_path.read_text(encoding="utf-8").splitlines():
+        line = raw_line.split("#", 1)[0].strip()
+        if not line or ":" not in line:
+            continue
+        key, val_str = (part.strip() for part in line.split(":", 1))
+        val_str = val_str.strip("'\"")
+        if key in {"smoothing_window", "max_trail_length", "line_thickness"}:
+            defaults[key] = int(val_str)
+        elif key in {"jump_threshold_px"}:
+            defaults[key] = float(val_str)
+        elif key in defaults:
+            defaults[key] = val_str
+    return defaults
+
+
+def run_trajectory_extraction(
+    video_path: Path | str,
+    output_dir: Path | str,
+    *,
+    tracks_csv: Path | str | None = None,
+    frame_tracks: Sequence[FrameTracks] | None = None,
+    anchor: str = "bottom_center",
+    smoothing_window: int = 3,
+    max_trail_length: int = 60,
+    line_thickness: int = 2,
+    jump_threshold_px: float = 150.0,
+    max_frames: int | None = None,
+    save_video: bool = True,
+) -> dict[str, Any]:
+    """Extract trajectories from tracks.csv + video, smooth, summarize, and render."""
+    if frame_tracks is None and tracks_csv is None:
+        raise ValueError("Either tracks_csv or frame_tracks must be provided")
+
+    out_dir = Path(output_dir)
+    out_dir.mkdir(parents=True, exist_ok=True)
+    t0 = time.perf_counter()
+
+    loaded_tracks = (
+        list(frame_tracks)
+        if frame_tracks is not None
+        else read_tracks_csv(Path(tracks_csv))  # type: ignore[arg-type]
+    )
+    if max_frames is not None:
+        loaded_tracks = [ft for ft in loaded_tracks if ft.frame_id < max_frames]
+
+    boxes_by_frame: dict[int, list[TrackDetection]] = {
+        ft.frame_id: list(ft.tracks) for ft in loaded_tracks
+    }
+
+    with VideoSource(video_path) as src:
+        fps = src.fps if src.fps > 0 else 30.0
+        width, height = src.width, src.height
+
+        raw_trajectories = tracks_to_trajectories(loaded_tracks, fps=fps, anchor=anchor)
+        trajectories = smooth_trajectories(raw_trajectories, window=smoothing_window)
+        summaries = compute_trajectory_summaries(trajectories, fps=fps)
+
+        trajectories_csv_path = write_trajectories_csv(
+            out_dir / "trajectories.csv", trajectories
+        )
+        summary_csv_path = write_trajectory_summary_csv(
+            out_dir / "track_summary.csv", summaries
+        )
+
+        overlay_video_path = out_dir / "trajectory_overlay_video.mp4"
+        writer: cv2.VideoWriter | None = None
+        if save_video:
+            fourcc = cv2.VideoWriter_fourcc(*"mp4v")
+            writer = cv2.VideoWriter(
+                str(overlay_video_path), fourcc, fps, (width, height)
+            )
+
+        reference_frame: np.ndarray | None = None
+        processed_frames = 0
+        try:
+            for frame_id, frame in src:
+                if max_frames is not None and frame_id >= max_frames:
+                    break
+                if reference_frame is None:
+                    reference_frame = frame.copy()
+                if writer is not None:
+                    rendered = draw_trajectory_trails(
+                        frame,
+                        trajectories,
+                        current_frame_id=frame_id,
+                        max_trail_length=max_trail_length,
+                        thickness=line_thickness,
+                        current_boxes=boxes_by_frame.get(frame_id),
+                    )
+                    writer.write(rendered)
+                processed_frames += 1
+        finally:
+            if writer is not None:
+                writer.release()
+
+    if reference_frame is None:
+        reference_frame = np.zeros((height, width, 3), dtype=np.uint8)
+
+    map_img = render_trajectory_map(
+        reference_frame, trajectories, thickness=line_thickness
+    )
+    map_path = out_dir / "trajectory_map.png"
+    cv2.imwrite(str(map_path), map_img)
+
+    raw_quality = analyze_trajectory_quality(
+        raw_trajectories, jump_threshold_px=jump_threshold_px
+    )
+    smoothed_quality = analyze_trajectory_quality(
+        trajectories, jump_threshold_px=jump_threshold_px
+    )
+    elapsed_sec = time.perf_counter() - t0
+
+    report: dict[str, Any] = {
+        "video_path": str(video_path),
+        "tracks_csv": str(tracks_csv) if tracks_csv is not None else None,
+        "fps": round(fps, 3),
+        "resolution": [width, height],
+        "processed_frames": processed_frames,
+        "anchor": anchor,
+        "smoothing_window": smoothing_window,
+        "num_unique_tracks": len(trajectories),
+        "total_trajectory_points": sum(len(pts) for pts in trajectories.values()),
+        "total_path_length_px": round(
+            sum(item.path_length_px for item in summaries), 2
+        ),
+        "raw_quality": raw_quality,
+        "smoothed_quality": smoothed_quality,
+        "elapsed_seconds": round(elapsed_sec, 3),
+        "outputs": {
+            "trajectories_csv": str(trajectories_csv_path),
+            "track_summary_csv": str(summary_csv_path),
+            "trajectory_map_png": str(map_path),
+            "trajectory_overlay_video": str(overlay_video_path) if save_video else None,
+        },
+    }
+    report_path = out_dir / "trajectory_extraction_summary.json"
+    report_path.write_text(json.dumps(report, indent=2), encoding="utf-8")
+    return report
