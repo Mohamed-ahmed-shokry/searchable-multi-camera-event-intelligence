@@ -5,6 +5,8 @@ rolling-mean smoothing, CSV exporters, trail/map renderers, and CLI.
 from __future__ import annotations
 
 import csv
+import itertools
+import math
 import sys
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
@@ -26,6 +28,13 @@ TRAJECTORIES_CSV_HEADER: list[str] = [
     "timestamp",
     "x",
     "y",
+]
+
+TRAJECTORY_SUMMARY_CSV_HEADER: list[str] = [
+    "track_id",
+    "path_length_px",
+    "duration_seconds",
+    "frame_count",
 ]
 
 VALID_ANCHORS: tuple[str, ...] = ("bottom_center", "centroid")
@@ -199,3 +208,50 @@ def smooth_trajectories(
             )
         smoothed[tid] = track_out
     return smoothed
+
+
+@dataclass(frozen=True)
+class TrajectorySummary:
+    """Per-track trajectory metrics matching Phase 4 track_summary.csv schema."""
+
+    track_id: int
+    path_length_px: float
+    duration_seconds: float
+    frame_count: int
+
+    def to_row(self) -> list[str]:
+        return [
+            str(self.track_id),
+            f"{self.path_length_px:.2f}",
+            f"{self.duration_seconds:.3f}",
+            str(self.frame_count),
+        ]
+
+
+def compute_trajectory_summaries(
+    trajectories: Mapping[int, Sequence[TrajectoryPoint]],
+    fps: float,
+) -> list[TrajectorySummary]:
+    """Compute per-track Euclidean path length, span duration, and frame count."""
+    if fps <= 0.0:
+        raise ValueError(f"fps must be positive, got {fps}")
+
+    summaries: list[TrajectorySummary] = []
+    for tid in sorted(trajectories):
+        pts = sorted(trajectories[tid], key=lambda item: item.frame_id)
+        if not pts:
+            continue
+        path_length = sum(
+            math.hypot(nxt.x - cur.x, nxt.y - cur.y)
+            for cur, nxt in itertools.pairwise(pts)
+        )
+        duration = (pts[-1].frame_id - pts[0].frame_id + 1) / fps
+        summaries.append(
+            TrajectorySummary(
+                track_id=tid,
+                path_length_px=path_length,
+                duration_seconds=duration,
+                frame_count=len(pts),
+            )
+        )
+    return summaries
