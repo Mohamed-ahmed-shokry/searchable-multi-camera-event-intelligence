@@ -14,6 +14,7 @@ from extract_trajectories import (
     TrajectoryPoint,
     compute_anchor_point,
     read_trajectories_csv,
+    smooth_trajectories,
     tracks_to_trajectories,
     write_trajectories_csv,
 )
@@ -109,6 +110,30 @@ class TracksToTrajectoriesTests(unittest.TestCase):
 
         with self.assertRaises(ValueError):
             tracks_to_trajectories(frame_tracks, fps=0.0)
+
+
+class SmoothTrajectoriesTests(unittest.TestCase):
+    def test_smooth_trajectories_rolling_mean(self):
+        raw = {
+            1: [
+                TrajectoryPoint(1, 0, 0.0, 10.0, 100.0),
+                TrajectoryPoint(1, 1, 0.1, 20.0, 106.0),
+                TrajectoryPoint(1, 2, 0.2, 30.0, 100.0),
+                TrajectoryPoint(1, 3, 0.3, 40.0, 106.0),
+            ]
+        }
+        w1 = smooth_trajectories(raw, window=1)
+        self.assertEqual(w1[1], raw[1])
+
+        w3 = smooth_trajectories(raw, window=3)
+        self.assertAlmostEqual(w3[1][0].x, 10.0)
+        self.assertAlmostEqual(w3[1][1].x, 15.0)
+        self.assertAlmostEqual(w3[1][2].x, 20.0)
+        self.assertAlmostEqual(w3[1][2].y, 102.0)
+        self.assertAlmostEqual(w3[1][3].y, 104.0)
+
+        with self.assertRaises(ValueError):
+            smooth_trajectories(raw, window=0)
 
 
 if __name__ == "__main__":
