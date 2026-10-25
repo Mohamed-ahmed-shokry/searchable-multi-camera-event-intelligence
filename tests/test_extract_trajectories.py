@@ -9,6 +9,7 @@ import tempfile
 import unittest
 from pathlib import Path
 
+import numpy as np
 from extract_trajectories import (
     TRAJECTORIES_CSV_HEADER,
     TRAJECTORY_SUMMARY_CSV_HEADER,
@@ -16,8 +17,10 @@ from extract_trajectories import (
     analyze_trajectory_quality,
     compute_anchor_point,
     compute_trajectory_summaries,
+    draw_trajectory_trails,
     read_trajectories_csv,
     read_trajectory_summary_csv,
+    render_trajectory_map,
     smooth_trajectories,
     tracks_to_trajectories,
     write_trajectories_csv,
@@ -200,6 +203,32 @@ class TrajectoryQualityTests(unittest.TestCase):
             float(report_osc_smooth["mean_jitter_px"]),  # type: ignore[arg-type]
             float(report_osc_raw["mean_jitter_px"]),  # type: ignore[arg-type]
         )
+
+
+class TrajectoryRenderingTests(unittest.TestCase):
+    def test_draw_trajectory_trails_and_render_trajectory_map(self):
+        frame = np.zeros((160, 240, 3), dtype=np.uint8)
+        trajs = {
+            1: [
+                TrajectoryPoint(1, 0, 0.0, 20.0, 100.0),
+                TrajectoryPoint(1, 1, 0.1, 60.0, 105.0),
+                TrajectoryPoint(1, 2, 0.2, 100.0, 110.0),
+            ]
+        }
+        boxes = [TrackDetection(2, 1, 80.0, 50.0, 120.0, 110.0, 0.9)]
+        trailed = draw_trajectory_trails(
+            frame,
+            trajs,
+            current_frame_id=2,
+            max_trail_length=10,
+            current_boxes=boxes,
+        )
+        self.assertEqual(trailed.shape, frame.shape)
+        self.assertGreater(int(trailed.sum()), 0)
+
+        tmap = render_trajectory_map(frame, trajs)
+        self.assertEqual(tmap.shape, frame.shape)
+        self.assertGreater(int(tmap.sum()), 0)
 
 
 if __name__ == "__main__":
