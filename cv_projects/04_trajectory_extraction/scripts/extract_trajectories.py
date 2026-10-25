@@ -12,15 +12,23 @@ from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from pathlib import Path
 
+import cv2
+import numpy as np
+
 try:
-    from track_people import FrameTracks, read_tracks_csv, track_color
+    from track_people import FrameTracks, TrackDetection, read_tracks_csv, track_color
 except ImportError:
     _subproject_3_scripts = (
         Path(__file__).resolve().parents[2] / "03_person_tracking" / "scripts"
     )
     if str(_subproject_3_scripts) not in sys.path:
         sys.path.insert(0, str(_subproject_3_scripts))
-    from track_people import FrameTracks, read_tracks_csv, track_color  # noqa: F401
+    from track_people import (  # noqa: F401
+        FrameTracks,
+        TrackDetection,
+        read_tracks_csv,
+        track_color,
+    )
 
 TRAJECTORIES_CSV_HEADER: list[str] = [
     "track_id",
@@ -341,3 +349,86 @@ def analyze_trajectory_quality(
         "teleport_jump_count": len(teleport_jumps),
         "teleport_jumps": teleport_jumps,
     }
+
+
+def draw_trajectory_trails(
+    frame: np.ndarray,
+    trajectories: Mapping[int, Sequence[TrajectoryPoint]],
+    current_frame_id: int,
+    *,
+    max_trail_length: int = 60,
+    thickness: int = 2,
+    current_boxes: Sequence[TrackDetection] | None = None,
+) -> np.ndarray:
+    """Draw motion trails, anchor dots, and optional bounding boxes for active tracks."""
+    canvas = frame.copy()
+    if current_boxes:
+        for box in current_boxes:
+            color = track_color(box.track_id)
+            p1 = (int(round(box.x1)), int(round(box.y1)))
+            p2 = (int(round(box.x2)), int(round(box.y2)))
+            cv2.rectangle(canvas, p1, p2, color, 1)
+
+    for tid in sorted(trajectories):
+        pts_up_to = [pt for pt in trajectories[tid] if pt.frame_id <= current_frame_id]
+        if not pts_up_to or pts_up_to[-1].frame_id != current_frame_id:
+            continue
+        trail = pts_up_to[-max_trail_length:] if max_trail_length > 0 else pts_up_to
+        color = track_color(tid)
+        for cur, nxt in itertools.pairwise(trail):
+            c_xy = (int(round(cur.x)), int(round(cur.y)))
+            n_xy = (int(round(nxt.x)), int(round(nxt.y)))
+            cv2.line(canvas, c_xy, n_xy, color, thickness, cv2.LINE_AA)
+
+        head = trail[-1]
+        head_xy = (int(round(head.x)), int(round(head.y)))
+        cv2.circle(canvas, head_xy, 4, color, -1, cv2.LINE_AA)
+        cv2.putText(
+            canvas,
+            f"ID {tid}",
+            (head_xy[0] + 6, max(14, head_xy[1] - 6)),
+            cv2.FONT_HERSHEY_SIMPLEX,
+            0.45,
+            color,
+            1,
+            cv2.LINE_AA,
+        )
+    return canvas
+
+
+def render_trajectory_map(
+    reference_frame: np.ndarray,
+    trajectories: Mapping[int, Sequence[TrajectoryPoint]],
+    *,
+    thickness: int = 2,
+    dim_factor: float = 0.55,
+) -> np.ndarray:
+    """Render full-clip trajectory polylines for all tracks onto a reference frame."""
+    canvas = np.clip(reference_frame.astype(np.float32) * dim_factor, 0, 255).astype(
+        np.uint8
+    )
+    for tid in sorted(trajectories):
+        pts = sorted(trajectories[tid], key=lambda item: item.frame_id)
+        if not pts:
+            continue
+        color = track_color(tid)
+        for cur, nxt in itertools.pairwise(pts):
+            c_xy = (int(round(cur.x)), int(round(cur.y)))
+            n_xy = (int(round(nxt.x)), int(round(nxt.y)))
+            cv2.line(canvas, c_xy, n_xy, color, thickness, cv2.LINE_AA)
+
+        start_xy = (int(round(pts[0].x)), int(round(pts[0].y)))
+        end_xy = (int(round(pts[-1].x)), int(round(pts[-1].y)))
+        cv2.circle(canvas, start_xy, 5, color, 2, cv2.LINE_AA)
+        cv2.circle(canvas, end_xy, 5, color, -1, cv2.LINE_AA)
+        cv2.putText(
+            canvas,
+            f"ID {tid}",
+            (end_xy[0] + 6, max(14, end_xy[1] - 6)),
+            cv2.FONT_HERSHEY_SIMPLEX,
+            0.5,
+            color,
+            1,
+            cv2.LINE_AA,
+        )
+    return canvas
