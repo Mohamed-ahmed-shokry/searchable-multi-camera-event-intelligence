@@ -296,3 +296,48 @@ def read_trajectory_summary_csv(path: Path | str) -> list[TrajectorySummary]:
                 )
             )
     return sorted(summaries, key=lambda item: item.track_id)
+
+
+def analyze_trajectory_quality(
+    trajectories: Mapping[int, Sequence[TrajectoryPoint]],
+    *,
+    jump_threshold_px: float = 150.0,
+) -> dict[str, object]:
+    """Quantify step distances, second-order coordinate jitter, and teleport jumps."""
+    steps: list[float] = []
+    accelerations: list[float] = []
+    teleport_jumps: list[dict[str, float | int]] = []
+    total_points = 0
+
+    for tid in sorted(trajectories):
+        pts = sorted(trajectories[tid], key=lambda item: item.frame_id)
+        total_points += len(pts)
+        for cur, nxt in itertools.pairwise(pts):
+            dist = math.hypot(nxt.x - cur.x, nxt.y - cur.y)
+            steps.append(dist)
+            if dist > jump_threshold_px:
+                teleport_jumps.append(
+                    {
+                        "track_id": tid,
+                        "from_frame": cur.frame_id,
+                        "to_frame": nxt.frame_id,
+                        "distance_px": round(dist, 2),
+                    }
+                )
+        for idx in range(len(pts) - 2):
+            p0, p1, p2 = pts[idx], pts[idx + 1], pts[idx + 2]
+            ax = (p2.x - p1.x) - (p1.x - p0.x)
+            ay = (p2.y - p1.y) - (p1.y - p0.y)
+            accelerations.append(math.hypot(ax, ay))
+
+    return {
+        "num_tracks": len(trajectories),
+        "total_points": total_points,
+        "mean_step_px": round(sum(steps) / len(steps), 3) if steps else 0.0,
+        "max_step_px": round(max(steps), 3) if steps else 0.0,
+        "mean_jitter_px": (
+            round(sum(accelerations) / len(accelerations), 3) if accelerations else 0.0
+        ),
+        "teleport_jump_count": len(teleport_jumps),
+        "teleport_jumps": teleport_jumps,
+    }
