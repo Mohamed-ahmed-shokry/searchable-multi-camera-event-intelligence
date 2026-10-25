@@ -30,7 +30,13 @@ except ImportError:
     from video_source import VideoSource
 
 try:
-    from track_people import FrameTracks, TrackDetection, read_tracks_csv, track_color
+    from track_people import (
+        FrameTracks,
+        TrackDetection,
+        create_video_writer,
+        read_tracks_csv,
+        track_color,
+    )
 except ImportError:
     _subproject_3_scripts = (
         Path(__file__).resolve().parents[2] / "03_person_tracking" / "scripts"
@@ -40,6 +46,7 @@ except ImportError:
     from track_people import (
         FrameTracks,
         TrackDetection,
+        create_video_writer,
         read_tracks_csv,
         track_color,
     )
@@ -513,8 +520,14 @@ def run_trajectory_extraction(
     }
 
     with VideoSource(video_path) as src:
-        fps = src.fps if src.fps > 0 else 30.0
-        width, height = src.width, src.height
+        meta = src.metadata
+        fps = meta.fps if meta.fps > 0 else 30.0
+        width, height = meta.width, meta.height
+        total_to_process = (
+            min(meta.frame_count, max_frames)
+            if max_frames is not None
+            else meta.frame_count
+        )
 
         raw_trajectories = tracks_to_trajectories(loaded_tracks, fps=fps, anchor=anchor)
         trajectories = smooth_trajectories(raw_trajectories, window=smoothing_window)
@@ -529,18 +542,15 @@ def run_trajectory_extraction(
 
         overlay_video_path = out_dir / "trajectory_overlay_video.mp4"
         writer: cv2.VideoWriter | None = None
-        if save_video:
-            fourcc = cv2.VideoWriter_fourcc(*"mp4v")
-            writer = cv2.VideoWriter(
-                str(overlay_video_path), fourcc, fps, (width, height)
+        if save_video and total_to_process > 0:
+            writer = create_video_writer(
+                overlay_video_path, fps=fps, width=width, height=height
             )
 
         reference_frame: np.ndarray | None = None
         processed_frames = 0
         try:
-            for frame_id, frame in src:
-                if max_frames is not None and frame_id >= max_frames:
-                    break
+            for frame_id, frame in src.iter_frames(stop=total_to_process):
                 if reference_frame is None:
                     reference_frame = frame.copy()
                 if writer is not None:
