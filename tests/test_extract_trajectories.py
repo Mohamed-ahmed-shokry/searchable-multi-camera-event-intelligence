@@ -10,6 +10,8 @@ import unittest
 from pathlib import Path
 
 import numpy as np
+from compare_smoothing import compare_smoothing
+from compare_smoothing import main as compare_smoothing_main
 from extract_trajectories import (
     TRAJECTORIES_CSV_HEADER,
     TRAJECTORY_SUMMARY_CSV_HEADER,
@@ -290,6 +292,44 @@ class RunTrajectoryExtractionTests(unittest.TestCase):
             )
             self.assertEqual(rc, 0)
             self.assertTrue((cli_out / "trajectory_extraction_summary.json").exists())
+
+
+class CompareSmoothingTests(unittest.TestCase):
+    def test_compare_smoothing_and_cli(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            tracks_csv = root / "tracks.csv"
+            frame_tracks = [
+                FrameTracks(0, [TrackDetection(0, 1, 10.0, 20.0, 30.0, 80.0, 0.9)]),
+                FrameTracks(1, [TrackDetection(1, 1, 20.0, 20.0, 40.0, 86.0, 0.9)]),
+                FrameTracks(2, [TrackDetection(2, 1, 30.0, 20.0, 50.0, 80.0, 0.9)]),
+                FrameTracks(3, [TrackDetection(3, 1, 40.0, 20.0, 60.0, 86.0, 0.9)]),
+                FrameTracks(4, [TrackDetection(4, 1, 50.0, 20.0, 70.0, 80.0, 0.9)]),
+            ]
+            write_tracks_csv(tracks_csv, frame_tracks)
+            out_dir = root / "cmp"
+            report = compare_smoothing(
+                tracks_csv,
+                out_dir,
+                fps=10.0,
+                windows=[1, 3, 5],
+            )
+            bc = report["anchors"]["bottom_center"]
+            self.assertGreater(bc["window_3"]["jitter_reduction_pct"], 0.0)
+            self.assertTrue((out_dir / "smoothing_comparison.json").exists())
+
+            rc = compare_smoothing_main(
+                [
+                    str(tracks_csv),
+                    "-o",
+                    str(root / "cmp_cli"),
+                    "--fps",
+                    "10.0",
+                    "--windows",
+                    "1,3",
+                ]
+            )
+            self.assertEqual(rc, 0)
 
 
 if __name__ == "__main__":
