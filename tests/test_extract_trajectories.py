@@ -14,8 +14,10 @@ from extract_trajectories import (
     TrajectoryPoint,
     compute_anchor_point,
     read_trajectories_csv,
+    tracks_to_trajectories,
     write_trajectories_csv,
 )
+from track_people import FrameTracks, TrackBox
 
 
 class TrajectorySchemaTests(unittest.TestCase):
@@ -70,6 +72,43 @@ class TrajectorySchemaTests(unittest.TestCase):
             loaded = read_trajectories_csv(csv_path)
             self.assertEqual(sorted(loaded.keys()), [1, 2])
             self.assertEqual([p.frame_id for p in loaded[2]], [4, 5])
+
+
+class TracksToTrajectoriesTests(unittest.TestCase):
+    def test_tracks_to_trajectories_bottom_center_and_centroid(self):
+        frame_tracks = [
+            FrameTracks(
+                frame_id=2,
+                tracks=[TrackBox(2, 2, 100.0, 100.0, 140.0, 200.0, 0.9)],
+            ),
+            FrameTracks(
+                frame_id=0,
+                tracks=[
+                    TrackBox(0, 1, 10.0, 20.0, 50.0, 120.0, 0.85),
+                    TrackBox(0, 2, 90.0, 100.0, 130.0, 200.0, 0.88),
+                ],
+            ),
+            FrameTracks(
+                frame_id=1,
+                tracks=[TrackBox(1, 1, 14.0, 22.0, 54.0, 122.0, 0.87)],
+            ),
+        ]
+        trajs_bc = tracks_to_trajectories(
+            frame_tracks, fps=10.0, anchor="bottom_center"
+        )
+        self.assertEqual(list(trajs_bc.keys()), [1, 2])
+        self.assertEqual([p.frame_id for p in trajs_bc[2]], [0, 2])
+        self.assertAlmostEqual(trajs_bc[1][0].timestamp, 0.0)
+        self.assertAlmostEqual(trajs_bc[1][1].timestamp, 0.1)
+        self.assertAlmostEqual(trajs_bc[1][0].x, 30.0)
+        self.assertAlmostEqual(trajs_bc[1][0].y, 120.0)
+
+        trajs_c = tracks_to_trajectories(frame_tracks, fps=10.0, anchor="centroid")
+        self.assertAlmostEqual(trajs_c[1][0].x, 30.0)
+        self.assertAlmostEqual(trajs_c[1][0].y, 70.0)
+
+        with self.assertRaises(ValueError):
+            tracks_to_trajectories(frame_tracks, fps=0.0)
 
 
 if __name__ == "__main__":
