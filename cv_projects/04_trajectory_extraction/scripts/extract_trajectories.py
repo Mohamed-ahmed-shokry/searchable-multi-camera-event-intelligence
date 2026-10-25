@@ -165,3 +165,37 @@ def tracks_to_trajectories(
         tid: sorted(by_track[tid], key=lambda item: item.frame_id)
         for tid in sorted(by_track)
     }
+
+
+def smooth_trajectories(
+    trajectories: Mapping[int, Sequence[TrajectoryPoint]],
+    window: int = 3,
+) -> dict[int, list[TrajectoryPoint]]:
+    """Apply a causal rolling-mean filter of size `window` independently per track."""
+    if window < 1:
+        raise ValueError(f"smoothing window must be >= 1, got {window}")
+
+    smoothed: dict[int, list[TrajectoryPoint]] = {}
+    for tid in sorted(trajectories):
+        pts = sorted(trajectories[tid], key=lambda item: item.frame_id)
+        if window == 1 or len(pts) <= 1:
+            smoothed[tid] = list(pts)
+            continue
+
+        track_out: list[TrajectoryPoint] = []
+        for idx, pt in enumerate(pts):
+            start = max(0, idx - window + 1)
+            win_pts = pts[start : idx + 1]
+            mean_x = sum(p.x for p in win_pts) / len(win_pts)
+            mean_y = sum(p.y for p in win_pts) / len(win_pts)
+            track_out.append(
+                TrajectoryPoint(
+                    track_id=pt.track_id,
+                    frame_id=pt.frame_id,
+                    timestamp=pt.timestamp,
+                    x=mean_x,
+                    y=mean_y,
+                )
+            )
+        smoothed[tid] = track_out
+    return smoothed
