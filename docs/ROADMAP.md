@@ -432,3 +432,109 @@ ground truth (`checkpoint_metrics.json`), and document the chosen tracker.
 | `uv run --locked pytest -v` | ✅ `94 passed, 56 subtests passed` | full unit + integration suite |
 | `track_people.py data/fallback_clips/people-detection.mp4` | ✅ 596 frames @ 17.06 FPS | 7 unique tracks, 409 boxes, 0 fragmentations |
 | `compare_trackers.py data/mot17/MOT17-11-FRCNN --max-frames 300 --save-videos` | ✅ `checkpoint_metrics.json` written | ByteTrack: `MOTA=0.4484, IDF1=0.6026, IDSW=5`; BoT-SORT: `MOTA=0.4470, IDF1=0.6076, IDSW=3` |
+
+
+---
+
+## Current Phase: 4 — Trajectory Extraction (2026-10-25)
+
+### Objective
+
+Convert multi-object person tracks (`tracks.csv`) into timestamped ground-plane movement
+paths (`trajectories.csv`) using the bottom-center bounding-box anchor point (foot
+position), evaluate raw vs rolling-mean smoothed trajectories, compute per-track path
+length and duration (`track_summary.csv`), render color-coded trajectory trail overlay
+videos (`trajectory_overlay_video.mp4`) and full-scene movement maps
+(`trajectory_map.png`), and cross-check extracted trajectories against source footage.
+
+### Scope
+
+1. Scaffold `cv_projects/04_trajectory_extraction/` (`README.md`, `notes.md`,
+   `configs/trajectory.yaml`, `scripts/`, `notebooks/`, `outputs/`).
+2. Implement `cv_projects/04_trajectory_extraction/scripts/extract_trajectories.py`:
+   - `TrajectoryPoint` and `TrajectorySummary` dataclasses.
+   - Anchor-point calculation (`compute_anchor_point`) defaulting to `bottom_center`
+     (`(0.5 * (x1 + x2), y2)`) with `centroid` option for comparison.
+   - CSV writers and readers for `trajectories.csv` (`track_id, frame_id, timestamp, x, y`)
+     and `track_summary.csv` (`track_id, path_length_px, duration_seconds, frame_count`).
+   - Conversion from `FrameTracks` (`tracks.csv`) + source FPS to per-identity ordered
+     trajectories (`tracks_to_trajectories`).
+   - Optional rolling-mean trajectory smoothing (`smooth_trajectories`).
+   - Trajectory quality and anomaly analyzer (`analyze_trajectory_quality`) measuring
+     step-to-step jitter and flagging impossible "teleport" jumps caused by ID switches
+     or occlusion boundary shifts.
+   - Trail renderer (`draw_trajectory_trails`), static reference-frame trajectory map
+     generator (`render_trajectory_map` -> `trajectory_map.png`), and full overlay video
+     exporter (`trajectory_overlay_video.mp4`).
+3. Implement `cv_projects/04_trajectory_extraction/scripts/compare_smoothing.py`:
+   - Quantitatively compares raw (`window=1`) vs smoothed (`window=3`, `window=5`)
+     trajectories on total path length, mean step displacement, and direction-change
+     jitter.
+4. Create exploratory notebook `cv_projects/04_trajectory_extraction/notebooks/01_explore_trajectories.ipynb`.
+5. Add unit and integration tests in `tests/test_extract_trajectories.py`.
+6. Execute trajectory extraction and smoothing comparison on real Phase 3 outputs
+   (`people-detection.mp4` and `MOT17-11-FRCNN`), cross-check a track against source
+   video frames, and record findings in `notes.md`.
+
+### Acceptance Criteria
+
+| # | Criterion | Status | Evidence |
+|---|-----------|--------|----------|
+| 1 | Bottom-center anchor-point decision implemented and documented with quantitative comparison against centroid | ☐ | — |
+| 2 | `trajectories.csv` matches schema (`track_id, frame_id, timestamp, x, y`) with timestamps derived from `frame_id / fps` | ☐ | — |
+| 3 | `track_summary.csv` matches schema (`track_id, path_length_px, duration_seconds, frame_count`) | ☐ | — |
+| 4 | Raw vs rolling-mean smoothed trajectories compared quantitatively (`compare_smoothing.py`) and in notebook | ☐ | — |
+| 5 | `trajectory_map.png` and `trajectory_overlay_video.mp4` generated on real surveillance and MOT17 footage and verified valid | ☐ | — |
+| 6 | At least one track manually cross-checked frame-by-frame against the source video and documented in `notes.md` | ☐ | — |
+| 7 | All local CI-parity checks (`ruff check`, `ruff format --check`, `pytest`) and remote GitHub Actions CI pass 100% | ☐ | — |
+
+### Validation & CI Plan
+
+```bash
+uv sync --locked
+uv run --locked ruff check .
+uv run --locked ruff format --check .
+uv run --locked pytest -v
+# phase-specific execution:
+uv run python cv_projects/04_trajectory_extraction/scripts/extract_trajectories.py \
+    data/fallback_clips/people-detection.mp4 \
+    --tracks-csv cv_projects/03_person_tracking/outputs/people_detection_bytetrack/tracks.csv
+uv run python cv_projects/04_trajectory_extraction/scripts/compare_smoothing.py \
+    cv_projects/03_person_tracking/outputs/people_detection_bytetrack/tracks.csv --fps 12.0
+```
+
+### Exclusions
+
+- **Polygon zone entry/exit and line-crossing events:** Deferred to Phase 5 (`05_zone_line_reasoning`), which will consume the bottom-center `(x, y)` trajectories produced here.
+- **Homography / world-coordinate projection:** Camera calibration matrices are not provided for the fallback surveillance clips; trajectories are represented in image-plane pixel coordinates `(x, y)` using the bottom-center foot proxy per `docs/project_phases.md`.
+
+### Micro-Task Breakdown
+
+- [x] 1. `docs(roadmap): define Phase 4 trajectory extraction scope and micro-task checklist`
+- [ ] 2. `docs(trajectory): scaffold cv_projects/04_trajectory_extraction README and notes`
+- [ ] 3. `feat(trajectory): add default trajectory configuration in configs/trajectory.yaml`
+- [ ] 4. `test(helpers): expose Phase 4 trajectory scripts directory to test suite`
+- [ ] 5. `types(trajectory): define TrajectoryPoint schema and anchor point helper`
+- [ ] 6. `test(trajectory): add unit tests for TrajectoryPoint schema and anchor computation`
+- [ ] 7. `feat(trajectory): implement trajectories.csv writer and reader helpers`
+- [ ] 8. `test(trajectory): add unit tests for trajectories.csv round-trip serialization`
+- [ ] 9. `feat(trajectory): implement tracks-to-trajectories converter sorted by track and frame`
+- [ ] 10. `test(trajectory): add unit tests for tracks_to_trajectories timestamp and anchor derivation`
+- [ ] 11. `feat(trajectory): implement rolling-mean trajectory smoothing per track`
+- [ ] 12. `test(trajectory): add unit tests for rolling-mean trajectory smoothing`
+- [ ] 13. `types(trajectory): define TrajectorySummary dataclass and path length calculator`
+- [ ] 14. `feat(trajectory): implement track_summary.csv writer and reader for trajectory metrics`
+- [ ] 15. `test(trajectory): add unit tests for path length computation and summary CSV export`
+- [ ] 16. `feat(trajectory): implement trajectory jitter and teleport-jump anomaly detector`
+- [ ] 17. `test(trajectory): add unit tests for trajectory teleport-jump and jitter analysis`
+- [ ] 18. `feat(trajectory): implement draw_trajectory_trails and render_trajectory_map`
+- [ ] 19. `test(trajectory): add unit tests for draw_trajectory_trails and render_trajectory_map`
+- [ ] 20. `feat(trajectory): implement load_trajectory_config and run_trajectory_extraction pipeline`
+- [ ] 21. `feat(trajectory): implement CLI parser and main entrypoint in extract_trajectories.py`
+- [ ] 22. `test(trajectory): add end-to-end pipeline and CLI tests for extract_trajectories`
+- [ ] 23. `feat(trajectory): implement compare_smoothing script for raw vs rolling-mean analysis`
+- [ ] 24. `test(trajectory): add unit tests for compare_smoothing script`
+- [ ] 25. `feat(trajectory): add exploratory notebook 01_explore_trajectories.ipynb`
+- [ ] 26. `docs(trajectory): document anchor-point rationale, smoothing comparison, and track cross-check in notes`
+- [ ] 27. `docs(trajectory): document trajectory extraction CLI and output schemas in READMEs`
+- [ ] 28. `docs(progress): complete Phase 4 acceptance criteria, decision log, and CI log`
