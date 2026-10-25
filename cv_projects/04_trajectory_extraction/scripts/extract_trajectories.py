@@ -365,8 +365,8 @@ def draw_trajectory_trails(
     if current_boxes:
         for box in current_boxes:
             color = track_color(box.track_id)
-            p1 = (int(round(box.x1)), int(round(box.y1)))
-            p2 = (int(round(box.x2)), int(round(box.y2)))
+            p1 = (round(box.x1), round(box.y1))
+            p2 = (round(box.x2), round(box.y2))
             cv2.rectangle(canvas, p1, p2, color, 1)
 
     for tid in sorted(trajectories):
@@ -376,12 +376,12 @@ def draw_trajectory_trails(
         trail = pts_up_to[-max_trail_length:] if max_trail_length > 0 else pts_up_to
         color = track_color(tid)
         for cur, nxt in itertools.pairwise(trail):
-            c_xy = (int(round(cur.x)), int(round(cur.y)))
-            n_xy = (int(round(nxt.x)), int(round(nxt.y)))
+            c_xy = (round(cur.x), round(cur.y))
+            n_xy = (round(nxt.x), round(nxt.y))
             cv2.line(canvas, c_xy, n_xy, color, thickness, cv2.LINE_AA)
 
         head = trail[-1]
-        head_xy = (int(round(head.x)), int(round(head.y)))
+        head_xy = (round(head.x), round(head.y))
         cv2.circle(canvas, head_xy, 4, color, -1, cv2.LINE_AA)
         cv2.putText(
             canvas,
@@ -413,12 +413,12 @@ def render_trajectory_map(
             continue
         color = track_color(tid)
         for cur, nxt in itertools.pairwise(pts):
-            c_xy = (int(round(cur.x)), int(round(cur.y)))
-            n_xy = (int(round(nxt.x)), int(round(nxt.y)))
+            c_xy = (round(cur.x), round(cur.y))
+            n_xy = (round(nxt.x), round(nxt.y))
             cv2.line(canvas, c_xy, n_xy, color, thickness, cv2.LINE_AA)
 
-        start_xy = (int(round(pts[0].x)), int(round(pts[0].y)))
-        end_xy = (int(round(pts[-1].x)), int(round(pts[-1].y)))
+        start_xy = (round(pts[0].x), round(pts[0].y))
+        end_xy = (round(pts[-1].x), round(pts[-1].y))
         cv2.circle(canvas, start_xy, 5, color, 2, cv2.LINE_AA)
         cv2.circle(canvas, end_xy, 5, color, -1, cv2.LINE_AA)
         cv2.putText(
