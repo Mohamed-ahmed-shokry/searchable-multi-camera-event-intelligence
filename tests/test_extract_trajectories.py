@@ -18,15 +18,19 @@ from extract_trajectories import (
     compute_anchor_point,
     compute_trajectory_summaries,
     draw_trajectory_trails,
+    load_trajectory_config,
+    main,
     read_trajectories_csv,
     read_trajectory_summary_csv,
     render_trajectory_map,
+    run_trajectory_extraction,
     smooth_trajectories,
     tracks_to_trajectories,
     write_trajectories_csv,
     write_trajectory_summary_csv,
 )
-from track_people import FrameTracks, TrackDetection
+from helpers import PROJECT_ROOT, make_sequence
+from track_people import FrameTracks, TrackDetection, write_tracks_csv
 
 
 class TrajectorySchemaTests(unittest.TestCase):
@@ -229,6 +233,63 @@ class TrajectoryRenderingTests(unittest.TestCase):
         tmap = render_trajectory_map(frame, trajs)
         self.assertEqual(tmap.shape, frame.shape)
         self.assertGreater(int(tmap.sum()), 0)
+
+
+class RunTrajectoryExtractionTests(unittest.TestCase):
+    def test_load_trajectory_config_and_run_pipeline_and_cli(self):
+        cfg_path = (
+            PROJECT_ROOT
+            / "cv_projects"
+            / "04_trajectory_extraction"
+            / "configs"
+            / "trajectory.yaml"
+        )
+        cfg = load_trajectory_config(cfg_path)
+        self.assertEqual(cfg["anchor"], "bottom_center")
+        self.assertEqual(cfg["smoothing_window"], 3)
+
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            seq_dir = make_sequence(root, count=4)
+            tracks_csv = root / "tracks.csv"
+            frame_tracks = [
+                FrameTracks(0, [TrackDetection(0, 1, 4.0, 10.0, 14.0, 40.0, 0.9)]),
+                FrameTracks(1, [TrackDetection(1, 1, 8.0, 10.0, 18.0, 40.0, 0.9)]),
+                FrameTracks(2, [TrackDetection(2, 1, 12.0, 10.0, 22.0, 40.0, 0.9)]),
+                FrameTracks(3, [TrackDetection(3, 1, 16.0, 10.0, 26.0, 40.0, 0.9)]),
+            ]
+            write_tracks_csv(tracks_csv, frame_tracks)
+
+            out_dir = root / "outputs"
+            report = run_trajectory_extraction(
+                seq_dir,
+                out_dir,
+                tracks_csv=tracks_csv,
+                smoothing_window=1,
+            )
+            self.assertEqual(report["num_unique_tracks"], 1)
+            self.assertAlmostEqual(report["total_path_length_px"], 12.0)
+            self.assertTrue((out_dir / "trajectories.csv").exists())
+            self.assertTrue((out_dir / "track_summary.csv").exists())
+            self.assertTrue((out_dir / "trajectory_map.png").exists())
+            self.assertTrue((out_dir / "trajectory_overlay_video.mp4").exists())
+
+            cli_out = root / "cli_outputs"
+            rc = main(
+                [
+                    str(seq_dir),
+                    "--tracks-csv",
+                    str(tracks_csv),
+                    "-o",
+                    str(cli_out),
+                    "--config",
+                    str(cfg_path),
+                    "--smoothing-window",
+                    "3",
+                ]
+            )
+            self.assertEqual(rc, 0)
+            self.assertTrue((cli_out / "trajectory_extraction_summary.json").exists())
 
 
 if __name__ == "__main__":
