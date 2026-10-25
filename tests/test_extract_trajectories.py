@@ -13,6 +13,7 @@ from extract_trajectories import (
     TRAJECTORIES_CSV_HEADER,
     TRAJECTORY_SUMMARY_CSV_HEADER,
     TrajectoryPoint,
+    analyze_trajectory_quality,
     compute_anchor_point,
     compute_trajectory_summaries,
     read_trajectories_csv,
@@ -175,6 +176,30 @@ class TrajectorySummaryTests(unittest.TestCase):
             loaded = read_trajectory_summary_csv(summary_csv)
             self.assertEqual(len(loaded), 2)
             self.assertAlmostEqual(loaded[0].path_length_px, 10.0)
+
+
+class TrajectoryQualityTests(unittest.TestCase):
+    def test_analyze_trajectory_quality_detects_teleport_and_jitter_reduction(self):
+        raw = {
+            1: [
+                TrajectoryPoint(1, 0, 0.0, 10.0, 100.0),
+                TrajectoryPoint(1, 1, 0.1, 20.0, 108.0),
+                TrajectoryPoint(1, 2, 0.2, 30.0, 100.0),
+                TrajectoryPoint(1, 3, 0.3, 40.0, 108.0),
+                TrajectoryPoint(1, 4, 0.4, 240.0, 108.0),  # 200 px jump
+            ]
+        }
+        report_raw = analyze_trajectory_quality(raw, jump_threshold_px=150.0)
+        self.assertEqual(report_raw["teleport_jump_count"], 1)
+        smoothed = smooth_trajectories(
+            {1: raw[1][:4]}, window=3
+        )  # check jitter on oscillating segment
+        report_osc_raw = analyze_trajectory_quality({1: raw[1][:4]})
+        report_osc_smooth = analyze_trajectory_quality(smoothed)
+        self.assertLess(
+            float(report_osc_smooth["mean_jitter_px"]),  # type: ignore[arg-type]
+            float(report_osc_raw["mean_jitter_px"]),  # type: ignore[arg-type]
+        )
 
 
 if __name__ == "__main__":
