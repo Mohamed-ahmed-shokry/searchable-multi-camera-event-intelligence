@@ -4,12 +4,17 @@ CSV serialization, rolling-mean smoothing, path summaries, and rendering.
 
 from __future__ import annotations
 
+import csv
+import tempfile
 import unittest
+from pathlib import Path
 
 from extract_trajectories import (
     TRAJECTORIES_CSV_HEADER,
     TrajectoryPoint,
     compute_anchor_point,
+    read_trajectories_csv,
+    write_trajectories_csv,
 )
 
 
@@ -40,6 +45,31 @@ class TrajectorySchemaTests(unittest.TestCase):
             TrajectoryPoint(track_id=1, frame_id=-1, timestamp=0.0, x=0.0, y=0.0)
         with self.assertRaises(ValueError):
             TrajectoryPoint(track_id=1, frame_id=0, timestamp=-0.1, x=0.0, y=0.0)
+
+    def test_trajectories_csv_round_trip(self):
+        trajs = {
+            2: [
+                TrajectoryPoint(2, 5, 0.5, 100.0, 200.0),
+                TrajectoryPoint(2, 4, 0.4, 95.0, 198.0),
+            ],
+            1: [
+                TrajectoryPoint(1, 0, 0.0, 10.0, 50.0),
+                TrajectoryPoint(1, 1, 0.1, 12.0, 52.0),
+            ],
+        }
+        with tempfile.TemporaryDirectory() as tmp:
+            csv_path = Path(tmp) / "trajectories.csv"
+            write_trajectories_csv(csv_path, trajs)
+            with csv_path.open("r", encoding="utf-8") as handle:
+                rows = list(csv.reader(handle))
+            self.assertEqual(rows[0], TRAJECTORIES_CSV_HEADER)
+            # Track 1 frame 0 comes first, then Track 1 frame 1, then Track 2 frame 4, frame 5
+            self.assertEqual(rows[1], ["1", "0", "0.0000", "10.00", "50.00"])
+            self.assertEqual(rows[3], ["2", "4", "0.4000", "95.00", "198.00"])
+
+            loaded = read_trajectories_csv(csv_path)
+            self.assertEqual(sorted(loaded.keys()), [1, 2])
+            self.assertEqual([p.frame_id for p in loaded[2]], [4, 5])
 
 
 if __name__ == "__main__":
