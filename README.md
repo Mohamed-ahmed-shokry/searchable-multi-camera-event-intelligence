@@ -96,6 +96,12 @@ uv run python cv_projects/03_person_tracking/scripts/track_people.py <source_pat
 
 # Compare ByteTrack vs BoT-SORT and generate MOT17 checkpoint_metrics.json
 uv run python cv_projects/03_person_tracking/scripts/compare_trackers.py <source_path>
+
+# Run Phase 4 trajectory extraction (runs in the default locked environment)
+uv run --locked python cv_projects/04_trajectory_extraction/scripts/extract_trajectories.py <source_path> --tracks-csv <tracks.csv>
+
+# Compare anchor strategies and rolling-mean smoothing windows
+uv run --locked python cv_projects/04_trajectory_extraction/scripts/compare_smoothing.py <tracks.csv>
 ```
 
 The two detection extras conflict intentionally; do not use `--all-extras`.
@@ -322,18 +328,19 @@ These can be valuable later, but the first priority is a working CV intelligence
 
 ## Repository Status
 
-The repository has completed **Phase 0 (Foundation)**, **Phase 1 (Video Inspection & Dataset Validation)**, **Phase 2 (Person Detection)**, and **Phase 3 (Person Tracking & Early Quantitative MOT17 Checkpoint)**.
+The repository has completed **Phase 0 (Foundation)**, **Phase 1 (Video Inspection & Dataset Validation)**, **Phase 2 (Person Detection)**, **Phase 3 (Person Tracking & Early Quantitative MOT17 Checkpoint)**, and **Phase 4 (Trajectory Extraction)**.
 
 Completed capabilities:
 
 - `cv_projects/01_video_inspection/` — unified `VideoSource` reader, contact sheets, and MOT17 spec validator
 - `cv_projects/02_person_detection/` — CUDA-verified YOLO11 person detection, `detections.csv`, and `n`/`s`/`m` model benchmark
 - `cv_projects/03_person_tracking/` — ByteTrack and BoT-SORT person tracking, `tracks.csv`, `track_summary.csv`, `annotated_tracking_video.mp4`, and CLEAR-MOT (`MOTA`/`IDF1`/`IDSW`) checkpoint evaluation
+- `cv_projects/04_trajectory_extraction/` — ordered ground-plane trajectories (`trajectories.csv`), per-track path-length summaries (`track_summary.csv`), causal rolling-mean smoothing, static `trajectory_map.png`, and `trajectory_overlay_video.mp4`
 
 Next recommended step:
 
 ```text
-Start Phase 4 — Trajectory Extraction (cv_projects/04_trajectory_extraction/)
+Start Phase 5 — Zone and Line Reasoning (cv_projects/05_zone_line_reasoning/)
 ```
 
 ## License
