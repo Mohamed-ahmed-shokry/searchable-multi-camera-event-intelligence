@@ -11,4 +11,5 @@ from helpers import (  # noqa: F401
     INSPECTION_SCRIPTS,
     PROJECT_ROOT,
     TRACKING_SCRIPTS,
+    TRAJECTORY_SCRIPTS,
 )
