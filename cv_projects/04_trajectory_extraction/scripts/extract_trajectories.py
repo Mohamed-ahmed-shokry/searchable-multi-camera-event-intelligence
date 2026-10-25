@@ -5,9 +5,20 @@ rolling-mean smoothing, CSV exporters, trail/map renderers, and CLI.
 from __future__ import annotations
 
 import csv
+import sys
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from pathlib import Path
+
+try:
+    from track_people import FrameTracks, read_tracks_csv, track_color
+except ImportError:
+    _subproject_3_scripts = (
+        Path(__file__).resolve().parents[2] / "03_person_tracking" / "scripts"
+    )
+    if str(_subproject_3_scripts) not in sys.path:
+        sys.path.insert(0, str(_subproject_3_scripts))
+    from track_people import FrameTracks, read_tracks_csv, track_color  # noqa: F401
 
 TRAJECTORIES_CSV_HEADER: list[str] = [
     "track_id",
@@ -117,6 +128,39 @@ def read_trajectories_csv(path: Path | str) -> dict[int, list[TrajectoryPoint]]:
                 y=float(row[4]),
             )
             by_track.setdefault(pt.track_id, []).append(pt)
+    return {
+        tid: sorted(by_track[tid], key=lambda item: item.frame_id)
+        for tid in sorted(by_track)
+    }
+
+
+def tracks_to_trajectories(
+    frame_tracks: Sequence[FrameTracks],
+    fps: float,
+    *,
+    anchor: str = "bottom_center",
+) -> dict[int, list[TrajectoryPoint]]:
+    """Convert per-frame TrackDetections into per-track ordered TrajectoryPoint lists."""
+    if fps <= 0.0:
+        raise ValueError(f"fps must be positive, got {fps}")
+    if anchor not in VALID_ANCHORS:
+        raise ValueError(
+            f"Unsupported anchor {anchor!r}; expected one of {VALID_ANCHORS}"
+        )
+
+    by_track: dict[int, list[TrajectoryPoint]] = {}
+    for ft in frame_tracks:
+        for trk in ft.tracks:
+            ax, ay = compute_anchor_point(trk.x1, trk.y1, trk.x2, trk.y2, anchor=anchor)
+            pt = TrajectoryPoint(
+                track_id=trk.track_id,
+                frame_id=trk.frame_id,
+                timestamp=trk.frame_id / fps,
+                x=ax,
+                y=ay,
+            )
+            by_track.setdefault(trk.track_id, []).append(pt)
+
     return {
         tid: sorted(by_track[tid], key=lambda item: item.frame_id)
         for tid in sorted(by_track)
