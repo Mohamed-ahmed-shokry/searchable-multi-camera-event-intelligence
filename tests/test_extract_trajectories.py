@@ -11,12 +11,16 @@ from pathlib import Path
 
 from extract_trajectories import (
     TRAJECTORIES_CSV_HEADER,
+    TRAJECTORY_SUMMARY_CSV_HEADER,
     TrajectoryPoint,
     compute_anchor_point,
+    compute_trajectory_summaries,
     read_trajectories_csv,
+    read_trajectory_summary_csv,
     smooth_trajectories,
     tracks_to_trajectories,
     write_trajectories_csv,
+    write_trajectory_summary_csv,
 )
 from track_people import FrameTracks, TrackDetection
 
@@ -134,6 +138,43 @@ class SmoothTrajectoriesTests(unittest.TestCase):
 
         with self.assertRaises(ValueError):
             smooth_trajectories(raw, window=0)
+
+
+class TrajectorySummaryTests(unittest.TestCase):
+    def test_compute_trajectory_summaries_and_csv_round_trip(self):
+        self.assertEqual(
+            TRAJECTORY_SUMMARY_CSV_HEADER,
+            ["track_id", "path_length_px", "duration_seconds", "frame_count"],
+        )
+        # 3-4-5 right triangles: (0,0) -> (3,4) -> (6,8) => path length = 5 + 5 = 10 px
+        trajs = {
+            1: [
+                TrajectoryPoint(1, 0, 0.0, 0.0, 0.0),
+                TrajectoryPoint(1, 1, 0.1, 3.0, 4.0),
+                TrajectoryPoint(1, 3, 0.3, 6.0, 8.0),
+            ],
+            2: [
+                TrajectoryPoint(2, 5, 0.5, 50.0, 50.0),
+            ],
+        }
+        summaries = compute_trajectory_summaries(trajs, fps=10.0)
+        self.assertEqual(len(summaries), 2)
+        self.assertEqual(summaries[0].track_id, 1)
+        self.assertAlmostEqual(summaries[0].path_length_px, 10.0)
+        self.assertAlmostEqual(summaries[0].duration_seconds, 0.4)  # (3 - 0 + 1) / 10
+        self.assertEqual(summaries[0].frame_count, 3)
+
+        self.assertEqual(summaries[1].track_id, 2)
+        self.assertAlmostEqual(summaries[1].path_length_px, 0.0)
+        self.assertAlmostEqual(summaries[1].duration_seconds, 0.1)
+        self.assertEqual(summaries[1].frame_count, 1)
+
+        with tempfile.TemporaryDirectory() as tmp:
+            summary_csv = Path(tmp) / "track_summary.csv"
+            write_trajectory_summary_csv(summary_csv, summaries)
+            loaded = read_trajectory_summary_csv(summary_csv)
+            self.assertEqual(len(loaded), 2)
+            self.assertAlmostEqual(loaded[0].path_length_px, 10.0)
 
 
 if __name__ == "__main__":
