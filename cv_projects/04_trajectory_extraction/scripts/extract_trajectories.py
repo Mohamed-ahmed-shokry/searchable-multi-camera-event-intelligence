@@ -4,6 +4,7 @@ rolling-mean smoothing, CSV exporters, trail/map renderers, and CLI.
 
 from __future__ import annotations
 
+import argparse
 import csv
 import itertools
 import json
@@ -600,3 +601,100 @@ def run_trajectory_extraction(
     report_path = out_dir / "trajectory_extraction_summary.json"
     report_path.write_text(json.dumps(report, indent=2), encoding="utf-8")
     return report
+
+
+def build_parser() -> argparse.ArgumentParser:
+    """Create the CLI argument parser for extract_trajectories.py."""
+    parser = argparse.ArgumentParser(
+        description=(
+            "Phase 4: Convert tracks.csv into ordered trajectories, "
+            "track_summary.csv, trajectory_map.png, and trajectory_overlay_video.mp4."
+        )
+    )
+    parser.add_argument(
+        "video",
+        help="Path to the input video file or MOT image-sequence directory.",
+    )
+    parser.add_argument(
+        "--tracks-csv",
+        required=True,
+        help="Path to Phase 3 tracks.csv file.",
+    )
+    parser.add_argument(
+        "-o",
+        "--output-dir",
+        default="cv_projects/04_trajectory_extraction/outputs",
+        help="Directory for generated trajectory artifacts.",
+    )
+    parser.add_argument(
+        "--config",
+        default="cv_projects/04_trajectory_extraction/configs/trajectory.yaml",
+        help="Path to trajectory YAML configuration file.",
+    )
+    parser.add_argument(
+        "--anchor",
+        choices=list(VALID_ANCHORS),
+        default=None,
+        help="Anchor point strategy ('bottom_center' or 'centroid').",
+    )
+    parser.add_argument(
+        "--smoothing-window",
+        type=int,
+        default=None,
+        help="Rolling-mean smoothing window in frames (1 = raw).",
+    )
+    parser.add_argument(
+        "--max-trail-length",
+        type=int,
+        default=None,
+        help="Maximum trail length (in points) rendered on overlay video.",
+    )
+    parser.add_argument(
+        "--max-frames",
+        type=int,
+        default=None,
+        help="Optional cap on the number of frames to process.",
+    )
+    parser.add_argument(
+        "--no-video",
+        action="store_true",
+        help="Skip writing trajectory_overlay_video.mp4.",
+    )
+    return parser
+
+
+def main(argv: Sequence[str] | None = None) -> int:
+    parser = build_parser()
+    args = parser.parse_args(argv)
+    cfg = load_trajectory_config(args.config)
+
+    anchor = args.anchor if args.anchor is not None else cfg["anchor"]
+    smoothing_window = (
+        args.smoothing_window
+        if args.smoothing_window is not None
+        else int(cfg["smoothing_window"])
+    )
+    max_trail_length = (
+        args.max_trail_length
+        if args.max_trail_length is not None
+        else int(cfg["max_trail_length"])
+    )
+
+    report = run_trajectory_extraction(
+        args.video,
+        args.output_dir,
+        tracks_csv=args.tracks_csv,
+        anchor=anchor,
+        smoothing_window=smoothing_window,
+        max_trail_length=max_trail_length,
+        line_thickness=int(cfg["line_thickness"]),
+        jump_threshold_px=float(cfg["jump_threshold_px"]),
+        max_frames=args.max_frames,
+        save_video=not args.no_video,
+    )
+    print(json.dumps(report, indent=2))
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())
