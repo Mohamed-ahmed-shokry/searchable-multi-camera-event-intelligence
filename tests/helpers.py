@@ -11,8 +11,10 @@ import numpy as np
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 INSPECTION_SCRIPTS = PROJECT_ROOT / "cv_projects" / "01_video_inspection" / "scripts"
 DETECTION_SCRIPTS = PROJECT_ROOT / "cv_projects" / "02_person_detection" / "scripts"
+TRACKING_SCRIPTS = PROJECT_ROOT / "cv_projects" / "03_person_tracking" / "scripts"
 sys.path.insert(0, str(INSPECTION_SCRIPTS))
 sys.path.insert(0, str(DETECTION_SCRIPTS))
+sys.path.insert(0, str(TRACKING_SCRIPTS))
 
 
 def make_sequence(root: Path, *, name: str = "sequence", count: int = 5) -> Path:

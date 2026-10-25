@@ -1,0 +1,11 @@
+# Phase 3: Person Tracking Configuration
+# Default detector and tracker settings for multi-object pedestrian tracking
+
+model: yolo11m.pt
+tracker: bytetrack.yaml
+comparison_tracker: botsort.yaml
+confidence_threshold: 0.4
+iou_threshold: 0.45
+device: cuda:0
+target_classes:
+  - 0  # COCO class 0: person
