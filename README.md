@@ -73,7 +73,7 @@ the published dataset specs:
 uv run --locked python cv_projects/01_video_inspection/scripts/validate_dataset.py <run_dir>/video_info.json
 ```
 
-Choose one detection environment when needed:
+Choose one detection/tracking environment when needed:
 
 ```bash
 # NVIDIA CUDA 12.8 wheels on Windows/Linux
@@ -90,6 +90,18 @@ uv run python cv_projects/02_person_detection/scripts/detect_people.py <source_p
 
 # Benchmark YOLO11 model variants (n vs s vs m)
 uv run python cv_projects/02_person_detection/scripts/compare_models.py <source_path>
+
+# Run Phase 3 person tracking (ByteTrack / BoT-SORT)
+uv run python cv_projects/03_person_tracking/scripts/track_people.py <source_path>
+
+# Compare ByteTrack vs BoT-SORT and generate MOT17 checkpoint_metrics.json
+uv run python cv_projects/03_person_tracking/scripts/compare_trackers.py <source_path>
+
+# Run Phase 4 trajectory extraction (runs in the default locked environment)
+uv run --locked python cv_projects/04_trajectory_extraction/scripts/extract_trajectories.py <source_path> --tracks-csv <tracks.csv>
+
+# Compare anchor strategies and rolling-mean smoothing windows
+uv run --locked python cv_projects/04_trajectory_extraction/scripts/compare_smoothing.py <tracks.csv>
 ```
 
 The two detection extras conflict intentionally; do not use `--all-extras`.
@@ -316,23 +328,19 @@ These can be valuable later, but the first priority is a working CV intelligence
 
 ## Repository Status
 
-The repository is in **Phase 1 — Video Inspection**. Phase 0 (foundation) is complete.
+The repository has completed **Phase 0 (Foundation)**, **Phase 1 (Video Inspection & Dataset Validation)**, **Phase 2 (Person Detection)**, **Phase 3 (Person Tracking & Early Quantitative MOT17 Checkpoint)**, and **Phase 4 (Trajectory Extraction)**.
 
-Completed foundation work:
+Completed capabilities:
 
-- project direction defined
-- agent rules added in `AGENTS.md`
-- CV-first roadmap agreed
-- notebook-based subproject workflow agreed
-- canonical phase plan in `docs/project_phases.md`
-- Phase 1 subproject scaffold at `cv_projects/01_video_inspection/`
-- `data/README.md` provenance template
-- Phase 1 dependencies added (`opencv-python`, `numpy`, `jupyter`)
+- `cv_projects/01_video_inspection/` — unified `VideoSource` reader, contact sheets, and MOT17 spec validator
+- `cv_projects/02_person_detection/` — CUDA-verified YOLO11 person detection, `detections.csv`, and `n`/`s`/`m` model benchmark
+- `cv_projects/03_person_tracking/` — ByteTrack and BoT-SORT person tracking, `tracks.csv`, `track_summary.csv`, `annotated_tracking_video.mp4`, and CLEAR-MOT (`MOTA`/`IDF1`/`IDSW`) checkpoint evaluation
+- `cv_projects/04_trajectory_extraction/` — ordered ground-plane trajectories (`trajectories.csv`), per-track path-length summaries (`track_summary.csv`), causal rolling-mean smoothing, static `trajectory_map.png`, and `trajectory_overlay_video.mp4`
 
 Next recommended step:
 
 ```text
-Create docs/project_phases.md or start cv_projects/01_video_inspection/
+Start Phase 5 — Zone and Line Reasoning (cv_projects/05_zone_line_reasoning/)
 ```
 
 ## License

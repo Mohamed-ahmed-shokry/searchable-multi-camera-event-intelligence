@@ -6,4 +6,10 @@ directory into ``sys.path``) before modules that import ``inspect_video`` et al.
 Importing helpers here makes every test module order-independent.
 """
 
-from helpers import INSPECTION_SCRIPTS, PROJECT_ROOT  # noqa: F401
+from helpers import (  # noqa: F401
+    DETECTION_SCRIPTS,
+    INSPECTION_SCRIPTS,
+    PROJECT_ROOT,
+    TRACKING_SCRIPTS,
+    TRAJECTORY_SCRIPTS,
+)

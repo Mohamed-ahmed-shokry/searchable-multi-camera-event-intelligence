@@ -11,11 +11,13 @@ dependencies = [
 
 [project.optional-dependencies]
 detection-cpu = [
+    "lap==0.5.13",
     "torch==2.11.0",
     "torchvision==0.26.0",
     "ultralytics==8.4.132",
 ]
 detection-cuda = [
+    "lap==0.5.13",
     "torch==2.11.0",
     "torchvision==0.26.0",
     "ultralytics==8.4.132",
