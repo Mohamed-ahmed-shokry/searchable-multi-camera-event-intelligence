@@ -17,7 +17,7 @@ from extract_trajectories import (
     tracks_to_trajectories,
     write_trajectories_csv,
 )
-from track_people import FrameTracks, TrackBox
+from track_people import FrameTracks, TrackDetection
 
 
 class TrajectorySchemaTests(unittest.TestCase):
@@ -79,18 +79,18 @@ class TracksToTrajectoriesTests(unittest.TestCase):
         frame_tracks = [
             FrameTracks(
                 frame_id=2,
-                tracks=[TrackBox(2, 2, 100.0, 100.0, 140.0, 200.0, 0.9)],
+                tracks=[TrackDetection(2, 2, 100.0, 100.0, 140.0, 200.0, 0.9)],
             ),
             FrameTracks(
                 frame_id=0,
                 tracks=[
-                    TrackBox(0, 1, 10.0, 20.0, 50.0, 120.0, 0.85),
-                    TrackBox(0, 2, 90.0, 100.0, 130.0, 200.0, 0.88),
+                    TrackDetection(0, 1, 10.0, 20.0, 50.0, 120.0, 0.85),
+                    TrackDetection(0, 2, 90.0, 100.0, 130.0, 200.0, 0.88),
                 ],
             ),
             FrameTracks(
                 frame_id=1,
-                tracks=[TrackBox(1, 1, 14.0, 22.0, 54.0, 122.0, 0.87)],
+                tracks=[TrackDetection(1, 1, 14.0, 22.0, 54.0, 122.0, 0.87)],
             ),
         ]
         trajs_bc = tracks_to_trajectories(
