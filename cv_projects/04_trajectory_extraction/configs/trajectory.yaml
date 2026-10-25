@@ -1,0 +1,11 @@
+# Phase 4: Trajectory Extraction Configuration
+# Default anchor point, smoothing window, and trail rendering settings
+
+anchor: bottom_center
+smoothing_window: 3
+comparison_windows:
+  - 1
+  - 3
+  - 5
+trail_max_length: 60
+teleport_jump_threshold_px: 150.0
