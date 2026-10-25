@@ -255,3 +255,44 @@ def compute_trajectory_summaries(
             )
         )
     return summaries
+
+
+def write_trajectory_summary_csv(
+    path: Path | str,
+    summaries: Sequence[TrajectorySummary],
+) -> Path:
+    """Write per-track trajectory summaries to CSV matching TRAJECTORY_SUMMARY_CSV_HEADER."""
+    out_path = Path(path)
+    out_path.parent.mkdir(parents=True, exist_ok=True)
+    ordered = sorted(summaries, key=lambda item: item.track_id)
+    with out_path.open("w", newline="", encoding="utf-8") as handle:
+        writer = csv.writer(handle)
+        writer.writerow(TRAJECTORY_SUMMARY_CSV_HEADER)
+        for item in ordered:
+            writer.writerow(item.to_row())
+    return out_path
+
+
+def read_trajectory_summary_csv(path: Path | str) -> list[TrajectorySummary]:
+    """Read a Phase 4 track_summary.csv file into TrajectorySummary records."""
+    in_path = Path(path)
+    summaries: list[TrajectorySummary] = []
+    with in_path.open("r", newline="", encoding="utf-8") as handle:
+        reader = csv.reader(handle)
+        header = next(reader, None)
+        if header != TRAJECTORY_SUMMARY_CSV_HEADER:
+            raise ValueError(
+                f"Expected CSV header {TRAJECTORY_SUMMARY_CSV_HEADER}, got {header!r}"
+            )
+        for row in reader:
+            if not row:
+                continue
+            summaries.append(
+                TrajectorySummary(
+                    track_id=int(row[0]),
+                    path_length_px=float(row[1]),
+                    duration_seconds=float(row[2]),
+                    frame_count=int(row[3]),
+                )
+            )
+    return sorted(summaries, key=lambda item: item.track_id)
