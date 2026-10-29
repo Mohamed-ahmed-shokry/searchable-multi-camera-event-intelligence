@@ -6,6 +6,7 @@ analyzer, spatial video renderer, and CLI entrypoint.
 from __future__ import annotations
 
 import csv
+import itertools
 import sys
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
@@ -361,3 +362,59 @@ def check_line_crossing(
         return None
 
     return "A->B" if crossed_a_to_b else "B->A"
+
+
+def detect_line_signals(
+    trajectories: Mapping[int, Sequence[TrajectoryPoint]],
+    lines: Sequence[LineSpec],
+) -> list[ZoneLineSignal]:
+    """Emit raw line_cross signals per (track_id, line_id) across consecutive trajectory steps."""
+    signals: list[ZoneLineSignal] = []
+
+    for tid in sorted(trajectories):
+        pts = sorted(trajectories[tid], key=lambda item: item.frame_id)
+        if len(pts) < 2:
+            continue
+        for line in lines:
+            for cur, nxt in itertools.pairwise(pts):
+                direction = check_line_crossing(
+                    (cur.x, cur.y),
+                    (nxt.x, nxt.y),
+                    line,
+                )
+                if direction is not None:
+                    signals.append(
+                        ZoneLineSignal(
+                            frame_id=nxt.frame_id,
+                            track_id=nxt.track_id,
+                            signal_type="line_cross",
+                            line_id=line.id,
+                            direction=direction,
+                            timestamp=nxt.timestamp,
+                        )
+                    )
+
+    return sorted(
+        signals,
+        key=lambda item: (item.frame_id, item.track_id, item.signal_type, item.line_id),
+    )
+
+
+def evaluate_scene_signals(
+    trajectories: Mapping[int, Sequence[TrajectoryPoint]],
+    scene_config: SceneConfig,
+) -> list[ZoneLineSignal]:
+    """Evaluate all zone enter/exit and directional line-crossing signals for a SceneConfig."""
+    zone_sigs = detect_zone_signals(trajectories, scene_config.zones)
+    line_sigs = detect_line_signals(trajectories, scene_config.lines)
+    return sorted(
+        [*zone_sigs, *line_sigs],
+        key=lambda item: (
+            item.frame_id,
+            item.track_id,
+            item.signal_type,
+            item.zone_id,
+            item.line_id,
+        ),
+    )
+
