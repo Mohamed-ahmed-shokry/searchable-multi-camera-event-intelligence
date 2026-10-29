@@ -417,3 +417,64 @@ def evaluate_scene_signals(
             item.line_id,
         ),
     )
+
+
+def analyze_boundary_flicker(
+    signals: Sequence[ZoneLineSignal],
+    *,
+    max_flicker_frames: int = 5,
+) -> dict[str, Any]:
+    """Detect rapid zone enter/exit oscillations and back-and-forth line-crossing jitter."""
+    if max_flicker_frames < 1:
+        raise ValueError(f"max_flicker_frames must be >= 1, got {max_flicker_frames}")
+
+    by_zone: dict[tuple[int, str], list[ZoneLineSignal]] = {}
+    by_line: dict[tuple[int, str], list[ZoneLineSignal]] = {}
+
+    for sig in sorted(signals, key=lambda item: (item.frame_id, item.track_id)):
+        if sig.signal_type in {"zone_enter", "zone_exit"}:
+            by_zone.setdefault((sig.track_id, sig.zone_id), []).append(sig)
+        elif sig.signal_type == "line_cross":
+            by_line.setdefault((sig.track_id, sig.line_id), []).append(sig)
+
+    zone_flicker_cases: list[dict[str, Any]] = []
+    for (tid, zid), group in sorted(by_zone.items()):
+        for cur, nxt in itertools.pairwise(group):
+            gap = nxt.frame_id - cur.frame_id
+            if gap <= max_flicker_frames:
+                zone_flicker_cases.append(
+                    {
+                        "track_id": tid,
+                        "zone_id": zid,
+                        "from_signal": cur.signal_type,
+                        "to_signal": nxt.signal_type,
+                        "from_frame": cur.frame_id,
+                        "to_frame": nxt.frame_id,
+                        "gap_frames": gap,
+                    }
+                )
+
+    line_jitter_cases: list[dict[str, Any]] = []
+    for (tid, lid), group in sorted(by_line.items()):
+        for cur, nxt in itertools.pairwise(group):
+            gap = nxt.frame_id - cur.frame_id
+            if gap <= max_flicker_frames:
+                line_jitter_cases.append(
+                    {
+                        "track_id": tid,
+                        "line_id": lid,
+                        "from_direction": cur.direction,
+                        "to_direction": nxt.direction,
+                        "from_frame": cur.frame_id,
+                        "to_frame": nxt.frame_id,
+                        "gap_frames": gap,
+                    }
+                )
+
+    return {
+        "max_flicker_frames": max_flicker_frames,
+        "zone_flicker_count": len(zone_flicker_cases),
+        "line_jitter_count": len(line_jitter_cases),
+        "zone_flicker_cases": zone_flicker_cases,
+        "line_jitter_cases": line_jitter_cases,
+    }
