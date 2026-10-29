@@ -18,6 +18,7 @@ from reason_zones_lines import (
     SceneConfig,
     ZoneLineSignal,
     ZoneSpec,
+    check_line_crossing,
     detect_zone_signals,
     load_scene_config,
     point_in_zone,
@@ -176,6 +177,26 @@ class DetectZoneSignalsTests(unittest.TestCase):
         self.assertEqual(sigs[0].frame_id, 1)
         self.assertEqual(sigs[1].signal_type, "zone_exit")
         self.assertEqual(sigs[1].frame_id, 3)
+
+
+class CheckLineCrossingTests(unittest.TestCase):
+    def test_check_line_crossing_directions_and_finite_segment_bounds(self):
+        # Horizontal line from (10, 50) to (100, 50)
+        line = LineSpec(id="gate", points=((10.0, 50.0), (100.0, 50.0)))
+        # Moving from y=40 (s < 0, Side A) to y=60 (s > 0, Side B) at x=50
+        self.assertEqual(
+            check_line_crossing((50.0, 40.0), (50.0, 60.0), line),
+            "A->B",
+        )
+        # Moving from y=60 (Side B) to y=40 (Side A) at x=50
+        self.assertEqual(
+            check_line_crossing((50.0, 60.0), (50.0, 40.0), line),
+            "B->A",
+        )
+        # Passing outside the finite segment at x=200 -> None
+        self.assertIsNone(check_line_crossing((200.0, 40.0), (200.0, 60.0), line))
+        # Staying on the same side -> None
+        self.assertIsNone(check_line_crossing((50.0, 30.0), (50.0, 40.0), line))
 
 
 if __name__ == "__main__":
