@@ -1,0 +1,31 @@
+# Phase 5: Scene geometry configuration for data/fallback_clips/people-detection.mp4 (768x432)
+# Generated and verified with cv_projects/05_zone_line_reasoning/scripts/define_scene_geometry.py
+zones:
+  - id: entrance_area
+    polygon:
+      - [110, 431]
+      - [560, 431]
+      - [520, 350]
+      - [140, 350]
+  - id: center_concourse
+    polygon:
+      - [160, 350]
+      - [540, 350]
+      - [560, 250]
+      - [180, 250]
+  - id: right_aisle
+    polygon:
+      - [460, 360]
+      - [755, 360]
+      - [755, 200]
+      - [460, 200]
+
+lines:
+  - id: doorway_line
+    points:
+      - [100, 360]
+      - [620, 360]
+  - id: aisle_split_line
+    points:
+      - [370, 180]
+      - [370, 420]
