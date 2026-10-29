@@ -5,6 +5,8 @@ analyzer, spatial video renderer, and CLI entrypoint.
 
 from __future__ import annotations
 
+import csv
+from collections.abc import Sequence
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -188,3 +190,65 @@ class ZoneLineSignal:
             self.direction,
             f"{self.timestamp:.4f}",
         ]
+
+
+def write_zone_line_events_csv(
+    path: Path | str,
+    signals: Sequence[ZoneLineSignal],
+) -> Path:
+    """Write raw spatial signals to CSV matching ZONE_LINE_EVENTS_CSV_HEADER."""
+    out_path = Path(path)
+    out_path.parent.mkdir(parents=True, exist_ok=True)
+    ordered = sorted(
+        signals,
+        key=lambda item: (
+            item.frame_id,
+            item.track_id,
+            item.signal_type,
+            item.zone_id,
+            item.line_id,
+        ),
+    )
+    with out_path.open("w", newline="", encoding="utf-8") as handle:
+        writer = csv.writer(handle)
+        writer.writerow(ZONE_LINE_EVENTS_CSV_HEADER)
+        for sig in ordered:
+            writer.writerow(sig.to_row())
+    return out_path
+
+
+def read_zone_line_events_csv(path: Path | str) -> list[ZoneLineSignal]:
+    """Read a zone_line_events.csv file into ordered ZoneLineSignal records."""
+    in_path = Path(path)
+    signals: list[ZoneLineSignal] = []
+    with in_path.open("r", newline="", encoding="utf-8") as handle:
+        reader = csv.reader(handle)
+        header = next(reader, None)
+        if header != ZONE_LINE_EVENTS_CSV_HEADER:
+            raise ValueError(
+                f"Expected CSV header {ZONE_LINE_EVENTS_CSV_HEADER}, got {header!r}"
+            )
+        for row in reader:
+            if not row:
+                continue
+            signals.append(
+                ZoneLineSignal(
+                    frame_id=int(row[0]),
+                    track_id=int(row[1]),
+                    signal_type=row[2],
+                    zone_id=row[3],
+                    line_id=row[4],
+                    direction=row[5],
+                    timestamp=float(row[6]),
+                )
+            )
+    return sorted(
+        signals,
+        key=lambda item: (
+            item.frame_id,
+            item.track_id,
+            item.signal_type,
+            item.zone_id,
+            item.line_id,
+        ),
+    )
