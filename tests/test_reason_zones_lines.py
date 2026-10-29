@@ -14,9 +14,11 @@ import numpy as np
 from define_scene_geometry import (
     export_scene_geometry,
     extract_reference_frame,
-    main as define_geometry_main,
     render_coordinate_grid,
     render_scene_preview,
+)
+from define_scene_geometry import (
+    main as define_geometry_main,
 )
 from extract_trajectories import TrajectoryPoint, write_trajectories_csv
 from helpers import PROJECT_ROOT, make_video
