@@ -128,3 +128,63 @@ def save_scene_config(path: Path | str, config: SceneConfig) -> Path:
         encoding="utf-8",
     )
     return out_path
+
+
+ZONE_LINE_EVENTS_CSV_HEADER: list[str] = [
+    "frame_id",
+    "track_id",
+    "signal_type",
+    "zone_id",
+    "line_id",
+    "direction",
+    "timestamp",
+]
+
+VALID_SIGNAL_TYPES: tuple[str, ...] = ("zone_enter", "zone_exit", "line_cross")
+VALID_DIRECTIONS: tuple[str, ...] = ("", "A->B", "B->A")
+
+
+@dataclass(frozen=True)
+class ZoneLineSignal:
+    """A raw spatial signal (zone_enter, zone_exit, or line_cross) on a frame."""
+
+    frame_id: int
+    track_id: int
+    signal_type: str
+    zone_id: str = ""
+    line_id: str = ""
+    direction: str = ""
+    timestamp: float = 0.0
+
+    def __post_init__(self) -> None:
+        if self.frame_id < 0:
+            raise ValueError(f"frame_id must be >= 0, got {self.frame_id}")
+        if self.track_id < 0:
+            raise ValueError(f"track_id must be >= 0, got {self.track_id}")
+        if self.signal_type not in VALID_SIGNAL_TYPES:
+            raise ValueError(
+                f"signal_type must be one of {VALID_SIGNAL_TYPES}, got {self.signal_type!r}"
+            )
+        if self.direction not in VALID_DIRECTIONS:
+            raise ValueError(
+                f"direction must be one of {VALID_DIRECTIONS}, got {self.direction!r}"
+            )
+        if self.timestamp < 0.0:
+            raise ValueError(f"timestamp must be >= 0.0, got {self.timestamp}")
+        if self.signal_type in {"zone_enter", "zone_exit"} and not self.zone_id:
+            raise ValueError(f"{self.signal_type} requires a non-empty zone_id")
+        if self.signal_type == "line_cross" and (
+            not self.line_id or not self.direction
+        ):
+            raise ValueError("line_cross requires both line_id and direction")
+
+    def to_row(self) -> list[str]:
+        return [
+            str(self.frame_id),
+            str(self.track_id),
+            self.signal_type,
+            self.zone_id,
+            self.line_id,
+            self.direction,
+            f"{self.timestamp:.4f}",
+        ]
