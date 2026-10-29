@@ -11,8 +11,8 @@ import unittest
 from pathlib import Path
 
 import numpy as np
-from extract_trajectories import TrajectoryPoint
-from helpers import PROJECT_ROOT
+from extract_trajectories import TrajectoryPoint, write_trajectories_csv
+from helpers import PROJECT_ROOT, make_video
 from reason_zones_lines import (
     ZONE_LINE_EVENTS_CSV_HEADER,
     LineSpec,
@@ -26,8 +26,10 @@ from reason_zones_lines import (
     draw_zones_and_lines,
     evaluate_scene_signals,
     load_scene_config,
+    main,
     point_in_zone,
     read_zone_line_events_csv,
+    run_zone_line_reasoning,
     save_scene_config,
     write_zone_line_events_csv,
 )
@@ -307,6 +309,74 @@ class DrawZonesAndLinesTests(unittest.TestCase):
         ]
         highlighted = draw_zones_and_lines(frame, cfg, active_signals=active)
         self.assertFalse(np.array_equal(rendered, highlighted))
+
+
+class RunZoneLineReasoningPipelineTests(unittest.TestCase):
+    def test_end_to_end_pipeline_and_cli_write_events_csv_and_annotated_video(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            video_path = make_video(root, count=4)
+            trajs = {
+                1: [
+                    TrajectoryPoint(1, 0, 0.0, 5.0, 24.0),
+                    TrajectoryPoint(1, 1, 0.1, 20.0, 24.0),
+                    TrajectoryPoint(1, 2, 0.2, 45.0, 24.0),
+                    TrajectoryPoint(1, 3, 0.3, 55.0, 24.0),
+                ]
+            }
+            traj_csv = write_trajectories_csv(root / "trajectories.csv", trajs)
+            cfg = SceneConfig(
+                zones=(
+                    ZoneSpec(
+                        id="mid_zone",
+                        polygon=(
+                            (10.0, 10.0),
+                            (40.0, 10.0),
+                            (40.0, 40.0),
+                            (10.0, 40.0),
+                        ),
+                    ),
+                ),
+                lines=(
+                    LineSpec(
+                        id="exit_line",
+                        points=((40.0, 5.0), (40.0, 45.0)),
+                    ),
+                ),
+            )
+            cfg_path = save_scene_config(root / "scene_config.yaml", cfg)
+            out_dir = root / "outputs"
+
+            report = run_zone_line_reasoning(
+                video_path,
+                out_dir,
+                trajectories_csv=traj_csv,
+                scene_config_path=cfg_path,
+                save_video=True,
+            )
+            self.assertEqual(report["processed_frames"], 4)
+            self.assertEqual(report["total_signals"], 3)
+            self.assertTrue((out_dir / "zone_line_events.csv").exists())
+            self.assertTrue((out_dir / "scene_config.yaml").exists())
+            self.assertTrue((out_dir / "scene_layout_preview.png").exists())
+            self.assertTrue((out_dir / "annotated_spatial_video.mp4").exists())
+            self.assertTrue((out_dir / "spatial_reasoning_summary.json").exists())
+
+            cli_out = root / "cli_outputs"
+            rc = main(
+                [
+                    str(video_path),
+                    "--trajectories-csv",
+                    str(traj_csv),
+                    "--scene-config",
+                    str(cfg_path),
+                    "-o",
+                    str(cli_out),
+                    "--no-video",
+                ]
+            )
+            self.assertEqual(rc, 0)
+            self.assertTrue((cli_out / "zone_line_events.csv").exists())
 
 
 if __name__ == "__main__":
