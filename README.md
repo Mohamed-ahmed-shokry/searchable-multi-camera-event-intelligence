@@ -51,8 +51,8 @@ Productization comes later, after the CV outputs are useful.
 
 Use Python 3.12 (the tested interpreter is 3.12.12) and
 [uv](https://docs.astral.sh/uv/getting-started/installation/). The default install
-contains only NumPy and OpenCV plus dev tooling (`pytest`, `ruff` in the `dev`
-dependency group).
+contains NumPy, OpenCV, Shapely, and PyYAML plus dev tooling (`pytest`, `ruff` in the
+`dev` dependency group).
 
 ```bash
 uv sync --locked
@@ -102,6 +102,12 @@ uv run --locked python cv_projects/04_trajectory_extraction/scripts/extract_traj
 
 # Compare anchor strategies and rolling-mean smoothing windows
 uv run --locked python cv_projects/04_trajectory_extraction/scripts/compare_smoothing.py <tracks.csv>
+
+# Preview or interactively author Phase 5 polygon zones and tripwire lines
+uv run --locked python cv_projects/05_zone_line_reasoning/scripts/define_scene_geometry.py <source_path>
+
+# Run Phase 5 zone and line reasoning (runs in the default locked environment)
+uv run --locked python cv_projects/05_zone_line_reasoning/scripts/reason_zones_lines.py <source_path> --trajectories-csv <trajectories.csv>
 ```
 
 The two detection extras conflict intentionally; do not use `--all-extras`.
@@ -328,7 +334,7 @@ These can be valuable later, but the first priority is a working CV intelligence
 
 ## Repository Status
 
-The repository has completed **Phase 0 (Foundation)**, **Phase 1 (Video Inspection & Dataset Validation)**, **Phase 2 (Person Detection)**, **Phase 3 (Person Tracking & Early Quantitative MOT17 Checkpoint)**, and **Phase 4 (Trajectory Extraction)**.
+The repository has completed **Phase 0 (Foundation)**, **Phase 1 (Video Inspection & Dataset Validation)**, **Phase 2 (Person Detection)**, **Phase 3 (Person Tracking & Early Quantitative MOT17 Checkpoint)**, **Phase 4 (Trajectory Extraction)**, and **Phase 5 (Zone and Line Reasoning)**.
 
 Completed capabilities:
 
@@ -336,11 +342,12 @@ Completed capabilities:
 - `cv_projects/02_person_detection/` — CUDA-verified YOLO11 person detection, `detections.csv`, and `n`/`s`/`m` model benchmark
 - `cv_projects/03_person_tracking/` — ByteTrack and BoT-SORT person tracking, `tracks.csv`, `track_summary.csv`, `annotated_tracking_video.mp4`, and CLEAR-MOT (`MOTA`/`IDF1`/`IDSW`) checkpoint evaluation
 - `cv_projects/04_trajectory_extraction/` — ordered ground-plane trajectories (`trajectories.csv`), per-track path-length summaries (`track_summary.csv`), causal rolling-mean smoothing, static `trajectory_map.png`, and `trajectory_overlay_video.mp4`
+- `cv_projects/05_zone_line_reasoning/` — named polygon zones and directed tripwire lines (`scene_config.yaml`), visual scene authoring (`define_scene_geometry.py`), `zone_enter`/`zone_exit`/`line_cross` signals (`zone_line_events.csv`), boundary flicker analysis, and `annotated_spatial_video.mp4`
 
 Next recommended step:
 
 ```text
-Start Phase 5 — Zone and Line Reasoning (cv_projects/05_zone_line_reasoning/)
+Start Phase 6 — Dwell-Time Events (cv_projects/06_dwell_time_events/)
 ```
 
 ## License
