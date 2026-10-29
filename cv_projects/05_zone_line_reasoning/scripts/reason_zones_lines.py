@@ -6,6 +6,7 @@ analyzer, spatial video renderer, and CLI entrypoint.
 from __future__ import annotations
 
 from dataclasses import dataclass
+
 from shapely.geometry import LineString, Polygon
 
 
