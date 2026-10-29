@@ -417,4 +417,3 @@ def evaluate_scene_signals(
             item.line_id,
         ),
     )
-
