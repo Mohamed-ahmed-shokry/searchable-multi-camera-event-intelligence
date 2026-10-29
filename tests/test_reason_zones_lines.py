@@ -18,6 +18,7 @@ from reason_zones_lines import (
     ZoneLineSignal,
     ZoneSpec,
     load_scene_config,
+    point_in_zone,
     read_zone_line_events_csv,
     save_scene_config,
     write_zone_line_events_csv,
@@ -138,6 +139,19 @@ class ZoneLineSignalCsvTests(unittest.TestCase):
             )
             loaded = read_zone_line_events_csv(csv_path)
             self.assertEqual(loaded, [s_enter, s_cross])
+
+
+class PointInZoneTests(unittest.TestCase):
+    def test_point_in_zone_interior_boundary_and_exterior(self):
+        zone = ZoneSpec(
+            id="box",
+            polygon=((10.0, 20.0), (50.0, 20.0), (50.0, 60.0), (10.0, 60.0)),
+        )
+        self.assertTrue(point_in_zone(30.0, 40.0, zone))
+        self.assertTrue(point_in_zone(10.0, 20.0, zone))  # vertex on boundary
+        self.assertTrue(point_in_zone(30.0, 60.0, zone))  # edge on boundary
+        self.assertFalse(point_in_zone(9.9, 40.0, zone))
+        self.assertFalse(point_in_zone(30.0, 60.1, zone))
 
 
 if __name__ == "__main__":
