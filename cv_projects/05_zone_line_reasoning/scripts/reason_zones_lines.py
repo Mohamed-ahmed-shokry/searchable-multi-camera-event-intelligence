@@ -74,7 +74,7 @@ def load_scene_config(path: Path | str) -> SceneConfig:
     cfg_path = Path(path)
     raw: dict[str, Any] = yaml.safe_load(cfg_path.read_text(encoding="utf-8")) or {}
     if not isinstance(raw, dict):
-        raise ValueError(f"Expected mapping in {cfg_path}, got {type(raw).__name__}")
+        raise TypeError(f"Expected mapping in {cfg_path}, got {type(raw).__name__}")
 
     seen_zones: set[str] = set()
     zones: list[ZoneSpec] = []
