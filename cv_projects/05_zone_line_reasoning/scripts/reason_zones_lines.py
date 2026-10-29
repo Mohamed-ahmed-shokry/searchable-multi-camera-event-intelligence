@@ -551,8 +551,9 @@ def draw_zones_and_lines(
             thickness=thickness,
             lineType=cv2.LINE_AA,
         )
-        lx = round(zone.polygon[0][0]) + 6
-        ly = max(18, round(zone.polygon[0][1]) + 18)
+        top_left = min(zone.polygon, key=lambda pt: (pt[1], pt[0]))
+        lx = round(top_left[0]) + 6
+        ly = max(18, round(top_left[1]) + 18)
         cv2.putText(
             out,
             zone.id,
