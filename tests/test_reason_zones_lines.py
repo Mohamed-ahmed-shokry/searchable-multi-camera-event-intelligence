@@ -19,7 +19,9 @@ from reason_zones_lines import (
     ZoneLineSignal,
     ZoneSpec,
     check_line_crossing,
+    detect_line_signals,
     detect_zone_signals,
+    evaluate_scene_signals,
     load_scene_config,
     point_in_zone,
     read_zone_line_events_csv,
@@ -197,6 +199,39 @@ class CheckLineCrossingTests(unittest.TestCase):
         self.assertIsNone(check_line_crossing((200.0, 40.0), (200.0, 60.0), line))
         # Staying on the same side -> None
         self.assertIsNone(check_line_crossing((50.0, 30.0), (50.0, 40.0), line))
+
+
+class EvaluateSceneSignalsTests(unittest.TestCase):
+    def test_evaluate_scene_signals_combines_zones_and_lines_in_frame_order(self):
+        cfg = SceneConfig(
+            zones=(
+                ZoneSpec(
+                    id="zone_a",
+                    polygon=((0.0, 0.0), (60.0, 0.0), (60.0, 100.0), (0.0, 100.0)),
+                ),
+            ),
+            lines=(LineSpec(id="mid_line", points=((60.0, 0.0), (60.0, 100.0))),),
+        )
+        trajs = {
+            2: [
+                TrajectoryPoint(2, 0, 0.0, 30.0, 50.0),  # enter zone_a
+                TrajectoryPoint(2, 1, 0.1, 80.0, 50.0),  # exit zone_a + cross mid_line
+            ]
+        }
+        line_only = detect_line_signals(trajs, cfg.lines)
+        self.assertEqual(len(line_only), 1)
+        self.assertEqual(line_only[0].signal_type, "line_cross")
+        self.assertEqual(line_only[0].line_id, "mid_line")
+
+        combined = evaluate_scene_signals(trajs, cfg)
+        self.assertEqual(
+            [(s.frame_id, s.signal_type) for s in combined],
+            [
+                (0, "zone_enter"),
+                (1, "line_cross"),
+                (1, "zone_exit"),
+            ],
+        )
 
 
 if __name__ == "__main__":
