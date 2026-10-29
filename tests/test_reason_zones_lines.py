@@ -5,9 +5,18 @@ analysis, and spatial video rendering.
 
 from __future__ import annotations
 
+import tempfile
 import unittest
+from pathlib import Path
 
-from reason_zones_lines import LineSpec, SceneConfig, ZoneSpec
+from helpers import PROJECT_ROOT
+from reason_zones_lines import (
+    LineSpec,
+    SceneConfig,
+    ZoneSpec,
+    load_scene_config,
+    save_scene_config,
+)
 
 
 class SpatialGeometrySpecsTests(unittest.TestCase):
@@ -36,10 +45,41 @@ class SpatialGeometrySpecsTests(unittest.TestCase):
             LineSpec(id="zero", points=((5.0, 5.0), (5.0, 5.0)))
 
         cfg = SceneConfig(
-            zones=(z := ZoneSpec("z", ((0, 0), (1, 0), (0, 1))),), lines=(line,)
+            zones=(z := ZoneSpec("z", ((0, 0), (1, 0), (0, 1))),),
+            lines=(line,),
         )
         self.assertEqual(len(cfg.zones), 1)
         self.assertEqual(cfg.zones[0], z)
+
+    def test_load_and_save_scene_config_round_trip(self):
+        default_cfg_path = (
+            PROJECT_ROOT
+            / "cv_projects"
+            / "05_zone_line_reasoning"
+            / "configs"
+            / "scene_config.yaml"
+        )
+        cfg = load_scene_config(default_cfg_path)
+        self.assertEqual(len(cfg.zones), 3)
+        self.assertEqual(len(cfg.lines), 2)
+        self.assertEqual(cfg.zones[0].id, "entrance_area")
+        self.assertEqual(cfg.lines[0].id, "doorway_line")
+
+        with tempfile.TemporaryDirectory() as tmp:
+            out_yaml = Path(tmp) / "roundtrip.yaml"
+            save_scene_config(out_yaml, cfg)
+            reloaded = load_scene_config(out_yaml)
+            self.assertEqual(reloaded, cfg)
+
+            dup_zone = Path(tmp) / "dup_zone.yaml"
+            dup_zone.write_text(
+                "zones:\n"
+                "  - id: z1\n    polygon: [[0,0],[10,0],[10,10]]\n"
+                "  - id: z1\n    polygon: [[0,0],[20,0],[20,20]]\n",
+                encoding="utf-8",
+            )
+            with self.assertRaises(ValueError):
+                load_scene_config(dup_zone)
 
 
 if __name__ == "__main__":
