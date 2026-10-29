@@ -13,11 +13,17 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
+import cv2
+import numpy as np
 import yaml
 from shapely.geometry import LineString, Point, Polygon
 
 try:
-    from extract_trajectories import TrajectoryPoint, read_trajectories_csv
+    from extract_trajectories import (
+        TrajectoryPoint,
+        draw_trajectory_trails,
+        read_trajectories_csv,
+    )
 except ImportError:
     _subproject_4_scripts = (
         Path(__file__).resolve().parents[2] / "04_trajectory_extraction" / "scripts"
@@ -26,6 +32,7 @@ except ImportError:
         sys.path.insert(0, str(_subproject_4_scripts))
     from extract_trajectories import (  # noqa: F401
         TrajectoryPoint,
+        draw_trajectory_trails,
         read_trajectories_csv,
     )
 
@@ -478,3 +485,133 @@ def analyze_boundary_flicker(
         "zone_flicker_cases": zone_flicker_cases,
         "line_jitter_cases": line_jitter_cases,
     }
+
+
+ZONE_PALETTE_BGR: tuple[tuple[int, int, int], ...] = (
+    (75, 180, 60),
+    (0, 165, 255),
+    (255, 105, 180),
+    (255, 215, 0),
+    (240, 50, 230),
+)
+
+LINE_PALETTE_BGR: tuple[tuple[int, int, int], ...] = (
+    (255, 220, 0),
+    (220, 80, 255),
+    (120, 255, 80),
+    (50, 200, 255),
+)
+
+
+def draw_zones_and_lines(
+    frame: np.ndarray,
+    scene_config: SceneConfig,
+    *,
+    active_signals: Sequence[ZoneLineSignal] | None = None,
+    alpha: float = 0.22,
+) -> np.ndarray:
+    """Render semi-transparent polygon zones, tripwire lines, and active signal highlights."""
+    out = frame.copy()
+    fill_layer = frame.copy()
+
+    active_zones = {s.zone_id for s in (active_signals or ()) if s.zone_id}
+    active_lines = {s.line_id for s in (active_signals or ()) if s.line_id}
+
+    if scene_config.zones and alpha > 0.0:
+        for idx, zone in enumerate(scene_config.zones):
+            color = ZONE_PALETTE_BGR[idx % len(ZONE_PALETTE_BGR)]
+            pts = np.array(
+                [[round(x), round(y)] for x, y in zone.polygon],
+                dtype=np.int32,
+            ).reshape((-1, 1, 2))
+            cv2.fillPoly(fill_layer, [pts], color)
+        cv2.addWeighted(fill_layer, alpha, out, 1.0 - alpha, 0.0, dst=out)
+
+    for idx, zone in enumerate(scene_config.zones):
+        base_color = ZONE_PALETTE_BGR[idx % len(ZONE_PALETTE_BGR)]
+        is_active = zone.id in active_zones
+        border_color = (0, 255, 255) if is_active else base_color
+        thickness = 3 if is_active else 2
+        pts = np.array(
+            [[round(x), round(y)] for x, y in zone.polygon],
+            dtype=np.int32,
+        ).reshape((-1, 1, 2))
+        cv2.polylines(
+            out,
+            [pts],
+            isClosed=True,
+            color=border_color,
+            thickness=thickness,
+            lineType=cv2.LINE_AA,
+        )
+        lx = round(zone.polygon[0][0]) + 6
+        ly = max(18, round(zone.polygon[0][1]) + 18)
+        cv2.putText(
+            out,
+            zone.id,
+            (lx, ly),
+            cv2.FONT_HERSHEY_SIMPLEX,
+            0.5,
+            border_color,
+            1,
+            cv2.LINE_AA,
+        )
+
+    for idx, line in enumerate(scene_config.lines):
+        base_color = LINE_PALETTE_BGR[idx % len(LINE_PALETTE_BGR)]
+        is_active = line.id in active_lines
+        line_color = (0, 0, 255) if is_active else base_color
+        thickness = 4 if is_active else 2
+        p0 = (round(line.points[0][0]), round(line.points[0][1]))
+        p1 = (round(line.points[1][0]), round(line.points[1][1]))
+        cv2.line(out, p0, p1, line_color, thickness, lineType=cv2.LINE_AA)
+        cv2.circle(out, p0, 4, line_color, -1, lineType=cv2.LINE_AA)
+        cv2.circle(out, p1, 4, line_color, -1, lineType=cv2.LINE_AA)
+        cv2.putText(
+            out,
+            "A",
+            (p0[0] + 5, max(14, p0[1] - 5)),
+            cv2.FONT_HERSHEY_SIMPLEX,
+            0.45,
+            line_color,
+            1,
+            cv2.LINE_AA,
+        )
+        cv2.putText(
+            out,
+            "B",
+            (p1[0] + 5, max(14, p1[1] - 5)),
+            cv2.FONT_HERSHEY_SIMPLEX,
+            0.45,
+            line_color,
+            1,
+            cv2.LINE_AA,
+        )
+        mx = round((p0[0] + p1[0]) / 2.0) + 6
+        my = round((p0[1] + p1[1]) / 2.0) - 6
+        cv2.putText(
+            out,
+            line.id,
+            (mx, max(16, my)),
+            cv2.FONT_HERSHEY_SIMPLEX,
+            0.45,
+            line_color,
+            1,
+            cv2.LINE_AA,
+        )
+
+    for s_idx, sig in enumerate(active_signals or ()):
+        target = f"{sig.zone_id}" if sig.zone_id else f"{sig.line_id} ({sig.direction})"
+        banner = f"T{sig.track_id} {sig.signal_type}: {target}"
+        cv2.putText(
+            out,
+            banner,
+            (12, 52 + s_idx * 20),
+            cv2.FONT_HERSHEY_SIMPLEX,
+            0.5,
+            (0, 255, 255),
+            2,
+            cv2.LINE_AA,
+        )
+
+    return out
