@@ -316,3 +316,48 @@ def detect_zone_signals(
         signals,
         key=lambda item: (item.frame_id, item.track_id, item.signal_type, item.zone_id),
     )
+
+
+def _side_of_line(
+    x: float,
+    y: float,
+    p0: tuple[float, float],
+    p1: tuple[float, float],
+) -> float:
+    """Return the signed 2D cross product of (p1 - p0) x ((x, y) - p0)."""
+    return (p1[0] - p0[0]) * (y - p0[1]) - (p1[1] - p0[1]) * (x - p0[0])
+
+
+def check_line_crossing(
+    prev_xy: tuple[float, float],
+    curr_xy: tuple[float, float],
+    line: LineSpec,
+) -> str | None:
+    """Return 'A->B', 'B->A', or None for a consecutive step across a finite LineSpec.
+
+    Side A has signed cross-product < 0; Side B has signed cross-product > 0.
+    Also verifies that the finite trajectory step intersects the finite line segment.
+    """
+    if prev_xy == curr_xy:
+        return None
+    p0, p1 = line.points
+    s_prev = _side_of_line(prev_xy[0], prev_xy[1], p0, p1)
+    s_curr = _side_of_line(curr_xy[0], curr_xy[1], p0, p1)
+    if s_prev == s_curr:
+        return None
+
+    # Require opposite signs (or one endpoint on the line while moving from/to a strict side)
+    crossed_a_to_b = (s_prev < 0.0 and s_curr >= 0.0) or (
+        s_prev <= 0.0 and s_curr > 0.0
+    )
+    crossed_b_to_a = (s_prev > 0.0 and s_curr <= 0.0) or (
+        s_prev >= 0.0 and s_curr < 0.0
+    )
+    if not (crossed_a_to_b or crossed_b_to_a):
+        return None
+
+    step_seg = LineString([prev_xy, curr_xy])
+    if not step_seg.intersects(line.shapely_line):
+        return None
+
+    return "A->B" if crossed_a_to_b else "B->A"
