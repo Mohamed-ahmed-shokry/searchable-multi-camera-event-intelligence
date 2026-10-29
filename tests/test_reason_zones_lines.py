@@ -11,6 +11,13 @@ import unittest
 from pathlib import Path
 
 import numpy as np
+from define_scene_geometry import (
+    export_scene_geometry,
+    extract_reference_frame,
+    main as define_geometry_main,
+    render_coordinate_grid,
+    render_scene_preview,
+)
 from extract_trajectories import TrajectoryPoint, write_trajectories_csv
 from helpers import PROJECT_ROOT, make_video
 from reason_zones_lines import (
@@ -377,6 +384,66 @@ class RunZoneLineReasoningPipelineTests(unittest.TestCase):
             )
             self.assertEqual(rc, 0)
             self.assertTrue((cli_out / "zone_line_events.csv").exists())
+
+
+class DefineSceneGeometryTests(unittest.TestCase):
+    def test_extract_frame_render_grid_preview_and_cli_export(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            video_path = make_video(root, count=3)
+            frame0 = extract_reference_frame(video_path, frame_index=0)
+            self.assertEqual(frame0.shape, (48, 64, 3))
+
+            with self.assertRaises(ValueError):
+                extract_reference_frame(video_path, frame_index=-1)
+            with self.assertRaises(ValueError):
+                render_coordinate_grid(frame0, step=5)
+
+            grid = render_coordinate_grid(frame0, step=20)
+            self.assertEqual(grid.shape, frame0.shape)
+            self.assertFalse(np.array_equal(frame0, grid))
+
+            cfg = SceneConfig(
+                zones=(
+                    ZoneSpec(
+                        id="z1",
+                        polygon=((5.0, 5.0), (30.0, 5.0), (30.0, 30.0), (5.0, 30.0)),
+                    ),
+                ),
+                lines=(LineSpec(id="l1", points=((35.0, 5.0), (35.0, 40.0))),),
+            )
+            preview = render_scene_preview(frame0, cfg, show_grid=True, grid_step=20)
+            self.assertEqual(preview.shape, frame0.shape)
+
+            cfg_yaml = save_scene_config(root / "in_scene.yaml", cfg)
+            out_dir = root / "geom_out"
+            report = export_scene_geometry(
+                video_path,
+                out_dir,
+                scene_config_path=cfg_yaml,
+                frame_index=1,
+                grid_step=20,
+            )
+            self.assertEqual(report["num_zones"], 1)
+            self.assertEqual(report["num_lines"], 1)
+            self.assertTrue((out_dir / "reference_frame_grid.png").exists())
+            self.assertTrue((out_dir / "scene_layout_preview.png").exists())
+            self.assertTrue((out_dir / "scene_config.yaml").exists())
+
+            cli_dir = root / "geom_cli"
+            rc = define_geometry_main(
+                [
+                    str(video_path),
+                    "--scene-config",
+                    str(cfg_yaml),
+                    "-o",
+                    str(cli_dir),
+                    "--grid-step",
+                    "20",
+                ]
+            )
+            self.assertEqual(rc, 0)
+            self.assertTrue((cli_dir / "scene_layout_preview.png").exists())
 
 
 if __name__ == "__main__":
