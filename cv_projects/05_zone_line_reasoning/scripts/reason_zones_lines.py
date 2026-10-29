@@ -6,13 +6,27 @@ analyzer, spatial video renderer, and CLI entrypoint.
 from __future__ import annotations
 
 import csv
-from collections.abc import Sequence
+import sys
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
 import yaml
 from shapely.geometry import LineString, Point, Polygon
+
+try:
+    from extract_trajectories import TrajectoryPoint, read_trajectories_csv
+except ImportError:
+    _subproject_4_scripts = (
+        Path(__file__).resolve().parents[2] / "04_trajectory_extraction" / "scripts"
+    )
+    if str(_subproject_4_scripts) not in sys.path:
+        sys.path.insert(0, str(_subproject_4_scripts))
+    from extract_trajectories import (  # noqa: F401
+        TrajectoryPoint,
+        read_trajectories_csv,
+    )
 
 
 @dataclass(frozen=True)
@@ -258,3 +272,47 @@ def point_in_zone(x: float, y: float, zone: ZoneSpec | Polygon) -> bool:
     """Return True if point (x, y) lies inside or on the boundary of `zone`."""
     poly = zone.shapely_polygon if isinstance(zone, ZoneSpec) else zone
     return bool(poly.covers(Point(x, y)))
+
+
+def detect_zone_signals(
+    trajectories: Mapping[int, Sequence[TrajectoryPoint]],
+    zones: Sequence[ZoneSpec],
+) -> list[ZoneLineSignal]:
+    """Emit raw zone_enter and zone_exit signals per (track_id, zone_id)."""
+    signals: list[ZoneLineSignal] = []
+    zone_polys = [(z.id, z.shapely_polygon) for z in zones]
+
+    for tid in sorted(trajectories):
+        pts = sorted(trajectories[tid], key=lambda item: item.frame_id)
+        if not pts:
+            continue
+        for zid, poly in zone_polys:
+            was_inside = False
+            for pt in pts:
+                is_inside = point_in_zone(pt.x, pt.y, poly)
+                if is_inside and not was_inside:
+                    signals.append(
+                        ZoneLineSignal(
+                            frame_id=pt.frame_id,
+                            track_id=pt.track_id,
+                            signal_type="zone_enter",
+                            zone_id=zid,
+                            timestamp=pt.timestamp,
+                        )
+                    )
+                elif not is_inside and was_inside:
+                    signals.append(
+                        ZoneLineSignal(
+                            frame_id=pt.frame_id,
+                            track_id=pt.track_id,
+                            signal_type="zone_exit",
+                            zone_id=zid,
+                            timestamp=pt.timestamp,
+                        )
+                    )
+                was_inside = is_inside
+
+    return sorted(
+        signals,
+        key=lambda item: (item.frame_id, item.track_id, item.signal_type, item.zone_id),
+    )
