@@ -10,6 +10,7 @@ import tempfile
 import unittest
 from pathlib import Path
 
+import numpy as np
 from extract_trajectories import TrajectoryPoint
 from helpers import PROJECT_ROOT
 from reason_zones_lines import (
@@ -22,6 +23,7 @@ from reason_zones_lines import (
     check_line_crossing,
     detect_line_signals,
     detect_zone_signals,
+    draw_zones_and_lines,
     evaluate_scene_signals,
     load_scene_config,
     point_in_zone,
@@ -268,6 +270,43 @@ class BoundaryFlickerTests(unittest.TestCase):
 
         with self.assertRaises(ValueError):
             analyze_boundary_flicker(signals, max_flicker_frames=0)
+
+
+class DrawZonesAndLinesTests(unittest.TestCase):
+    def test_draw_zones_and_lines_modifies_frame_and_preserves_shape(self):
+        frame = np.zeros((160, 240, 3), dtype=np.uint8)
+        cfg = SceneConfig(
+            zones=(
+                ZoneSpec(
+                    id="zone_a",
+                    polygon=(
+                        (20.0, 20.0),
+                        (120.0, 20.0),
+                        (120.0, 100.0),
+                        (20.0, 100.0),
+                    ),
+                ),
+            ),
+            lines=(LineSpec(id="line_a", points=((140.0, 20.0), (140.0, 140.0))),),
+        )
+        rendered = draw_zones_and_lines(frame, cfg)
+        self.assertEqual(rendered.shape, frame.shape)
+        self.assertEqual(rendered.dtype, np.uint8)
+        self.assertGreater(int(rendered.sum()), 0)
+
+        active = [
+            ZoneLineSignal(0, 1, "zone_enter", zone_id="zone_a", timestamp=0.0),
+            ZoneLineSignal(
+                0,
+                1,
+                "line_cross",
+                line_id="line_a",
+                direction="A->B",
+                timestamp=0.0,
+            ),
+        ]
+        highlighted = draw_zones_and_lines(frame, cfg, active_signals=active)
+        self.assertFalse(np.array_equal(rendered, highlighted))
 
 
 if __name__ == "__main__":
