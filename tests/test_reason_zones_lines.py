@@ -5,17 +5,22 @@ analysis, and spatial video rendering.
 
 from __future__ import annotations
 
+import csv
 import tempfile
 import unittest
 from pathlib import Path
 
 from helpers import PROJECT_ROOT
 from reason_zones_lines import (
+    ZONE_LINE_EVENTS_CSV_HEADER,
     LineSpec,
     SceneConfig,
+    ZoneLineSignal,
     ZoneSpec,
     load_scene_config,
+    read_zone_line_events_csv,
     save_scene_config,
+    write_zone_line_events_csv,
 )
 
 
@@ -80,6 +85,59 @@ class SpatialGeometrySpecsTests(unittest.TestCase):
             )
             with self.assertRaises(ValueError):
                 load_scene_config(dup_zone)
+
+
+class ZoneLineSignalCsvTests(unittest.TestCase):
+    def test_signal_validation_and_csv_round_trip(self):
+        self.assertEqual(
+            ZONE_LINE_EVENTS_CSV_HEADER,
+            [
+                "frame_id",
+                "track_id",
+                "signal_type",
+                "zone_id",
+                "line_id",
+                "direction",
+                "timestamp",
+            ],
+        )
+        s_enter = ZoneLineSignal(
+            frame_id=10,
+            track_id=1,
+            signal_type="zone_enter",
+            zone_id="entrance_area",
+            timestamp=0.8333,
+        )
+        s_cross = ZoneLineSignal(
+            frame_id=12,
+            track_id=1,
+            signal_type="line_cross",
+            line_id="doorway_line",
+            direction="A->B",
+            timestamp=1.0,
+        )
+        with self.assertRaises(ValueError):
+            ZoneLineSignal(frame_id=0, track_id=1, signal_type="zone_enter")
+        with self.assertRaises(ValueError):
+            ZoneLineSignal(
+                frame_id=0,
+                track_id=1,
+                signal_type="line_cross",
+                line_id="doorway",
+            )
+
+        with tempfile.TemporaryDirectory() as tmp:
+            csv_path = Path(tmp) / "zone_line_events.csv"
+            write_zone_line_events_csv(csv_path, [s_cross, s_enter])
+            with csv_path.open("r", encoding="utf-8") as handle:
+                rows = list(csv.reader(handle))
+            self.assertEqual(rows[0], ZONE_LINE_EVENTS_CSV_HEADER)
+            self.assertEqual(
+                rows[1],
+                ["10", "1", "zone_enter", "entrance_area", "", "", "0.8333"],
+            )
+            loaded = read_zone_line_events_csv(csv_path)
+            self.assertEqual(loaded, [s_enter, s_cross])
 
 
 if __name__ == "__main__":
