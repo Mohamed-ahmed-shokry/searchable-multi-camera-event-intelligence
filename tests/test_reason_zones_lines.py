@@ -10,6 +10,7 @@ import tempfile
 import unittest
 from pathlib import Path
 
+from extract_trajectories import TrajectoryPoint
 from helpers import PROJECT_ROOT
 from reason_zones_lines import (
     ZONE_LINE_EVENTS_CSV_HEADER,
@@ -17,6 +18,7 @@ from reason_zones_lines import (
     SceneConfig,
     ZoneLineSignal,
     ZoneSpec,
+    detect_zone_signals,
     load_scene_config,
     point_in_zone,
     read_zone_line_events_csv,
@@ -152,6 +154,28 @@ class PointInZoneTests(unittest.TestCase):
         self.assertTrue(point_in_zone(30.0, 60.0, zone))  # edge on boundary
         self.assertFalse(point_in_zone(9.9, 40.0, zone))
         self.assertFalse(point_in_zone(30.0, 60.1, zone))
+
+
+class DetectZoneSignalsTests(unittest.TestCase):
+    def test_detect_zone_signals_enter_and_exit_transitions(self):
+        zone = ZoneSpec(
+            id="lobby",
+            polygon=((20.0, 20.0), (80.0, 20.0), (80.0, 80.0), (20.0, 80.0)),
+        )
+        trajs = {
+            1: [
+                TrajectoryPoint(1, 0, 0.0, 10.0, 50.0),  # outside
+                TrajectoryPoint(1, 1, 0.1, 30.0, 50.0),  # enter
+                TrajectoryPoint(1, 2, 0.2, 60.0, 50.0),  # stay inside
+                TrajectoryPoint(1, 3, 0.3, 90.0, 50.0),  # exit
+            ]
+        }
+        sigs = detect_zone_signals(trajs, [zone])
+        self.assertEqual(len(sigs), 2)
+        self.assertEqual(sigs[0].signal_type, "zone_enter")
+        self.assertEqual(sigs[0].frame_id, 1)
+        self.assertEqual(sigs[1].signal_type, "zone_exit")
+        self.assertEqual(sigs[1].frame_id, 3)
 
 
 if __name__ == "__main__":
