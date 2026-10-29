@@ -5,9 +5,12 @@ analyzer, spatial video renderer, and CLI entrypoint.
 
 from __future__ import annotations
 
+import argparse
 import csv
 import itertools
+import json
 import sys
+import time
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from pathlib import Path
@@ -21,6 +24,8 @@ from shapely.geometry import LineString, Point, Polygon
 try:
     from extract_trajectories import (
         TrajectoryPoint,
+        VideoSource,
+        create_video_writer,
         draw_trajectory_trails,
         read_trajectories_csv,
     )
@@ -30,8 +35,10 @@ except ImportError:
     )
     if str(_subproject_4_scripts) not in sys.path:
         sys.path.insert(0, str(_subproject_4_scripts))
-    from extract_trajectories import (  # noqa: F401
+    from extract_trajectories import (
         TrajectoryPoint,
+        VideoSource,
+        create_video_writer,
         draw_trajectory_trails,
         read_trajectories_csv,
     )
@@ -615,3 +622,251 @@ def draw_zones_and_lines(
         )
 
     return out
+
+
+def run_zone_line_reasoning(
+    video_path: Path | str,
+    output_dir: Path | str,
+    *,
+    trajectories_csv: Path | str | None = None,
+    trajectories: Mapping[int, Sequence[TrajectoryPoint]] | None = None,
+    scene_config_path: Path | str | None = None,
+    scene_config: SceneConfig | None = None,
+    max_trail_length: int = 60,
+    max_flicker_frames: int = 5,
+    max_frames: int | None = None,
+    save_video: bool = True,
+) -> dict[str, Any]:
+    """Evaluate zone enter/exit and directional line crossings on trajectories and render spatial video."""
+    if trajectories is None and trajectories_csv is None:
+        raise ValueError("Either trajectories_csv or trajectories must be provided")
+    if scene_config is None and scene_config_path is None:
+        raise ValueError("Either scene_config_path or scene_config must be provided")
+
+    out_dir = Path(output_dir)
+    out_dir.mkdir(parents=True, exist_ok=True)
+    t0 = time.perf_counter()
+
+    cfg = (
+        scene_config
+        if scene_config is not None
+        else load_scene_config(Path(scene_config_path))  # type: ignore[arg-type]
+    )
+    loaded_trajs: dict[int, list[TrajectoryPoint]] = (
+        {tid: list(pts) for tid, pts in trajectories.items()}
+        if trajectories is not None
+        else read_trajectories_csv(Path(trajectories_csv))  # type: ignore[arg-type]
+    )
+    if max_frames is not None:
+        loaded_trajs = {
+            tid: [pt for pt in pts if pt.frame_id < max_frames]
+            for tid, pts in loaded_trajs.items()
+        }
+        loaded_trajs = {tid: pts for tid, pts in loaded_trajs.items() if pts}
+
+    signals = evaluate_scene_signals(loaded_trajs, cfg)
+    flicker_report = analyze_boundary_flicker(
+        signals,
+        max_flicker_frames=max_flicker_frames,
+    )
+
+    events_csv_path = write_zone_line_events_csv(
+        out_dir / "zone_line_events.csv",
+        signals,
+    )
+    saved_cfg_path = save_scene_config(out_dir / "scene_config.yaml", cfg)
+
+    signals_by_frame: dict[int, list[ZoneLineSignal]] = {}
+    for sig in signals:
+        signals_by_frame.setdefault(sig.frame_id, []).append(sig)
+
+    with VideoSource(video_path) as src:
+        meta = src.metadata
+        fps = meta.fps if meta.fps > 0 else 30.0
+        width, height = meta.width, meta.height
+        total_to_process = (
+            min(meta.frame_count, max_frames)
+            if max_frames is not None
+            else meta.frame_count
+        )
+
+        video_out_path = out_dir / "annotated_spatial_video.mp4"
+        writer: cv2.VideoWriter | None = None
+        if save_video and total_to_process > 0:
+            writer = create_video_writer(
+                video_out_path,
+                fps=fps,
+                width=width,
+                height=height,
+            )
+
+        reference_frame: np.ndarray | None = None
+        processed_frames = 0
+        try:
+            for frame_id, frame in src.iter_frames(stop=total_to_process):
+                if reference_frame is None:
+                    reference_frame = frame.copy()
+                if writer is not None:
+                    active_sigs = signals_by_frame.get(frame_id, [])
+                    with_geometry = draw_zones_and_lines(
+                        frame,
+                        cfg,
+                        active_signals=active_sigs,
+                    )
+                    rendered = draw_trajectory_trails(
+                        with_geometry,
+                        loaded_trajs,
+                        current_frame_id=frame_id,
+                        max_trail_length=max_trail_length,
+                    )
+                    writer.write(rendered)
+                processed_frames += 1
+        finally:
+            if writer is not None:
+                writer.release()
+
+    if reference_frame is None:
+        reference_frame = np.zeros((height, width, 3), dtype=np.uint8)
+
+    preview_img = draw_zones_and_lines(reference_frame, cfg)
+    preview_path = out_dir / "scene_layout_preview.png"
+    cv2.imwrite(str(preview_path), preview_img)
+
+    counts_by_type: dict[str, int] = {
+        "zone_enter": sum(1 for s in signals if s.signal_type == "zone_enter"),
+        "zone_exit": sum(1 for s in signals if s.signal_type == "zone_exit"),
+        "line_cross": sum(1 for s in signals if s.signal_type == "line_cross"),
+    }
+    counts_by_zone: dict[str, dict[str, int]] = {
+        z.id: {
+            "zone_enter": sum(
+                1
+                for s in signals
+                if s.zone_id == z.id and s.signal_type == "zone_enter"
+            ),
+            "zone_exit": sum(
+                1 for s in signals if s.zone_id == z.id and s.signal_type == "zone_exit"
+            ),
+        }
+        for z in cfg.zones
+    }
+    counts_by_line: dict[str, dict[str, int]] = {
+        ln.id: {
+            "A->B": sum(
+                1 for s in signals if s.line_id == ln.id and s.direction == "A->B"
+            ),
+            "B->A": sum(
+                1 for s in signals if s.line_id == ln.id and s.direction == "B->A"
+            ),
+        }
+        for ln in cfg.lines
+    }
+
+    elapsed_sec = time.perf_counter() - t0
+    report: dict[str, Any] = {
+        "video_path": str(video_path),
+        "trajectories_csv": (
+            str(trajectories_csv) if trajectories_csv is not None else None
+        ),
+        "scene_config_path": (
+            str(scene_config_path)
+            if scene_config_path is not None
+            else str(saved_cfg_path)
+        ),
+        "fps": round(fps, 3),
+        "resolution": [width, height],
+        "processed_frames": processed_frames,
+        "num_zones": len(cfg.zones),
+        "num_lines": len(cfg.lines),
+        "num_tracks": len(loaded_trajs),
+        "total_signals": len(signals),
+        "counts_by_type": counts_by_type,
+        "counts_by_zone": counts_by_zone,
+        "counts_by_line": counts_by_line,
+        "boundary_flicker": flicker_report,
+        "elapsed_seconds": round(elapsed_sec, 3),
+        "outputs": {
+            "zone_line_events_csv": str(events_csv_path),
+            "scene_config_yaml": str(saved_cfg_path),
+            "scene_layout_preview_png": str(preview_path),
+            "annotated_spatial_video": str(video_out_path) if save_video else None,
+        },
+    }
+    summary_path = out_dir / "spatial_reasoning_summary.json"
+    summary_path.write_text(json.dumps(report, indent=2), encoding="utf-8")
+    return report
+
+
+def build_parser() -> argparse.ArgumentParser:
+    """Create the CLI argument parser for reason_zones_lines.py."""
+    parser = argparse.ArgumentParser(
+        description=(
+            "Phase 5: Evaluate point-in-polygon zone enter/exit and directional "
+            "line-crossing signals from trajectories.csv + scene_config.yaml."
+        )
+    )
+    parser.add_argument(
+        "video",
+        help="Path to the input video file or MOT image-sequence directory.",
+    )
+    parser.add_argument(
+        "--trajectories-csv",
+        required=True,
+        help="Path to Phase 4 trajectories.csv file.",
+    )
+    parser.add_argument(
+        "--scene-config",
+        default="cv_projects/05_zone_line_reasoning/configs/scene_config.yaml",
+        help="Path to Phase 5 scene_config.yaml file.",
+    )
+    parser.add_argument(
+        "-o",
+        "--output-dir",
+        default="cv_projects/05_zone_line_reasoning/outputs",
+        help="Directory for generated spatial reasoning artifacts.",
+    )
+    parser.add_argument(
+        "--max-trail-length",
+        type=int,
+        default=60,
+        help="Maximum trail length (in points) rendered on annotated_spatial_video.mp4.",
+    )
+    parser.add_argument(
+        "--max-flicker-frames",
+        type=int,
+        default=5,
+        help="Maximum frame gap flagged as boundary flicker or line jitter.",
+    )
+    parser.add_argument(
+        "--max-frames",
+        type=int,
+        default=None,
+        help="Optional cap on the number of frames to process.",
+    )
+    parser.add_argument(
+        "--no-video",
+        action="store_true",
+        help="Skip writing annotated_spatial_video.mp4.",
+    )
+    return parser
+
+
+def main(argv: Sequence[str] | None = None) -> int:
+    parser = build_parser()
+    args = parser.parse_args(argv)
+    report = run_zone_line_reasoning(
+        args.video,
+        args.output_dir,
+        trajectories_csv=args.trajectories_csv,
+        scene_config_path=args.scene_config,
+        max_trail_length=args.max_trail_length,
+        max_flicker_frames=args.max_flicker_frames,
+        max_frames=args.max_frames,
+        save_video=not args.no_video,
+    )
+    print(json.dumps(report, indent=2))
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())
