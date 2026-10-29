@@ -12,7 +12,7 @@ from pathlib import Path
 from typing import Any
 
 import yaml
-from shapely.geometry import LineString, Polygon
+from shapely.geometry import LineString, Point, Polygon
 
 
 @dataclass(frozen=True)
@@ -252,3 +252,9 @@ def read_zone_line_events_csv(path: Path | str) -> list[ZoneLineSignal]:
             item.line_id,
         ),
     )
+
+
+def point_in_zone(x: float, y: float, zone: ZoneSpec | Polygon) -> bool:
+    """Return True if point (x, y) lies inside or on the boundary of `zone`."""
+    poly = zone.shapely_polygon if isinstance(zone, ZoneSpec) else zone
+    return bool(poly.covers(Point(x, y)))
