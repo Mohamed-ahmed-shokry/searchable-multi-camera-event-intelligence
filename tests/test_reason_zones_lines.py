@@ -18,6 +18,7 @@ from reason_zones_lines import (
     SceneConfig,
     ZoneLineSignal,
     ZoneSpec,
+    analyze_boundary_flicker,
     check_line_crossing,
     detect_line_signals,
     detect_zone_signals,
@@ -232,6 +233,41 @@ class EvaluateSceneSignalsTests(unittest.TestCase):
                 (1, "zone_exit"),
             ],
         )
+
+
+class BoundaryFlickerTests(unittest.TestCase):
+    def test_analyze_boundary_flicker_flags_rapid_zone_and_line_oscillations(self):
+        signals = [
+            ZoneLineSignal(10, 1, "zone_enter", zone_id="z1", timestamp=1.0),
+            ZoneLineSignal(12, 1, "zone_exit", zone_id="z1", timestamp=1.2),
+            ZoneLineSignal(14, 1, "zone_enter", zone_id="z1", timestamp=1.4),
+            ZoneLineSignal(40, 1, "zone_exit", zone_id="z1", timestamp=4.0),
+            ZoneLineSignal(
+                11,
+                1,
+                "line_cross",
+                line_id="l1",
+                direction="A->B",
+                timestamp=1.1,
+            ),
+            ZoneLineSignal(
+                13,
+                1,
+                "line_cross",
+                line_id="l1",
+                direction="B->A",
+                timestamp=1.3,
+            ),
+        ]
+        report = analyze_boundary_flicker(signals, max_flicker_frames=5)
+        self.assertEqual(report["zone_flicker_count"], 2)
+        self.assertEqual(report["line_jitter_count"], 1)
+        self.assertEqual(report["zone_flicker_cases"][0]["gap_frames"], 2)
+        self.assertEqual(report["line_jitter_cases"][0]["from_direction"], "A->B")
+        self.assertEqual(report["line_jitter_cases"][0]["to_direction"], "B->A")
+
+        with self.assertRaises(ValueError):
+            analyze_boundary_flicker(signals, max_flicker_frames=0)
 
 
 if __name__ == "__main__":
