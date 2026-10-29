@@ -556,3 +556,117 @@ uv run --locked python cv_projects/04_trajectory_extraction/scripts/compare_smoo
 | `extract_trajectories.py data/fallback_clips/people-detection.mp4 ...` | ✅ 596 frames in 2.44 s | 7 tracks, 409 points, `3230.20 px` path length, 0 teleport jumps |
 | `extract_trajectories.py data/mot17/MOT17-11-FRCNN --max-frames 300 ...` | ✅ 300 frames in 17.63 s | 43 tracks, 2,435 points, `15369.41 px` path length |
 | `compare_smoothing.py ...` (both sequences) | ✅ `smoothing_comparison.json` written | `w=3` cuts jitter by `39.89%` (`people-detection.mp4`) and `46.87%` (`MOT17-11-FRCNN`) |
+
+
+---
+
+## Current Phase: 5 — Zone and Line Reasoning (2026-10-29)
+
+### Objective
+
+Enable spatial reasoning over extracted person trajectories (`trajectories.csv`) using
+named polygon zones and directed crossing lines (`scene_config.yaml`), emit raw
+`zone_enter`, `zone_exit`, and directional `line_cross` (`A->B` / `B->A`) signals to
+`zone_line_events.csv`, render `annotated_spatial_video.mp4` and `scene_layout_preview.png`,
+and capture real boundary-flicker / jitter cases to inform Phase 6 dwell-time state
+machines.
+
+### Scope
+
+1. Add `shapely` and `pyyaml` to `pyproject.toml` and `uv.lock` per the Phase 5
+   dependency schedule in `docs/project_phases.md`.
+2. Scaffold `cv_projects/05_zone_line_reasoning/` (`README.md`, `notes.md`,
+   `configs/scene_config.yaml`, `scripts/`, `notebooks/`, `outputs/`).
+3. Implement `cv_projects/05_zone_line_reasoning/scripts/reason_zones_lines.py`:
+   - `ZoneSpec`, `LineSpec`, `SceneConfig`, and `ZoneLineSignal` dataclasses.
+   - YAML loader and writer (`load_scene_config`, `save_scene_config`) for `scene_config.yaml`.
+   - CSV writer and reader (`write_zone_line_events_csv`, `read_zone_line_events_csv`)
+     matching the canonical schema:
+     `frame_id, track_id, signal_type, zone_id, line_id, direction, timestamp`.
+   - Point-in-polygon evaluation (`point_in_zone`) via `shapely.geometry.Polygon.covers`.
+   - Per-track zone entry/exit signal emitter (`detect_zone_signals`).
+   - Directional line-crossing evaluator (`check_line_crossing`, `detect_line_signals`)
+     combining segment intersection (`LineString.intersects`) with cross-product
+     side-of-line sign change (`A->B` vs `B->A`).
+   - Boundary-flicker and rapid re-crossing analyzer (`analyze_boundary_flicker`) to
+     quantify edge hover oscillations for Phase 6.
+   - Spatial overlay renderer (`draw_zones_and_lines`) and pipeline runner
+     (`run_zone_line_reasoning`) producing `zone_line_events.csv`,
+     `annotated_spatial_video.mp4`, `scene_layout_preview.png`, and
+     `spatial_reasoning_summary.json`.
+4. Implement `cv_projects/05_zone_line_reasoning/scripts/define_scene_geometry.py` and
+   notebook `cv_projects/05_zone_line_reasoning/notebooks/01_define_and_explore_zones.ipynb`
+   for visual reference-frame coordinate grid/preview and interactive point-click authoring
+   of `scene_config.yaml`.
+5. Add unit and integration tests in `tests/test_reason_zones_lines.py`.
+6. Run spatial reasoning on real surveillance footage (`people-detection.mp4` and
+   `store-aisle-detection.mp4` / `MOT17-11-FRCNN`), compare raw (`w=1`) vs smoothed (`w=3`)
+   trajectories for boundary flicker, and document findings in `notes.md`.
+
+### Acceptance Criteria
+
+| # | Criterion | Status | Evidence |
+|---|-----------|--------|----------|
+| 1 | `shapely` and `pyyaml` pinned in `pyproject.toml` and `uv.lock` | ☐ | — |
+| 2 | Visual zone/line authoring helper (`define_scene_geometry.py` + `01_define_and_explore_zones.ipynb`) generates `scene_config.yaml` and `scene_layout_preview.png` | ☐ | — |
+| 3 | `zone_line_events.csv` matches schema (`frame_id, track_id, signal_type, zone_id, line_id, direction, timestamp`) | ☐ | — |
+| 4 | Point-in-polygon (`zone_enter` / `zone_exit`) and directional line crossings (`A->B` / `B->A`) verified by unit tests and visual review on real footage | ☐ | — |
+| 5 | `annotated_spatial_video.mp4` rendered with translucent polygon zones, directed tripwire lines, trajectories, and active signal highlights | ☐ | — |
+| 6 | Boundary-flicker and trajectory-jitter edge cases captured and documented in `notes.md` for Phase 6 | ☐ | — |
+| 7 | All local CI-parity checks (`ruff check`, `ruff format --check`, `pytest`) and remote GitHub Actions CI pass 100% | ☐ | — |
+
+### Validation & CI Plan
+
+```bash
+uv sync --locked
+uv run --locked ruff check .
+uv run --locked ruff format --check .
+uv run --locked pytest -v
+# phase-specific execution:
+uv run --locked python cv_projects/05_zone_line_reasoning/scripts/reason_zones_lines.py \
+    data/fallback_clips/people-detection.mp4 \
+    --trajectories-csv cv_projects/04_trajectory_extraction/outputs/people_detection/trajectories.csv \
+    --scene-config cv_projects/05_zone_line_reasoning/configs/scene_config.yaml
+```
+
+### Exclusions
+
+- **Stateful dwell-time accumulation, grace periods, and hysteresis deduplication:**
+  Explicitly deferred to Phase 6 (`06_dwell_time_events`) per `docs/project_phases.md`
+  ("Emit raw entry/exit/crossing signals (deduplication is Phase 6)").
+
+### Micro-Task Breakdown
+
+- [x] 1. `docs(roadmap): define Phase 5 zone and line reasoning scope and micro-task checklist`
+- [ ] 2. `build(deps): add shapely and pyyaml to project dependencies for Phase 5`
+- [ ] 3. `docs(spatial): scaffold cv_projects/05_zone_line_reasoning README and notes`
+- [ ] 4. `feat(spatial): add default scene_config.yaml for retail surveillance clip`
+- [ ] 5. `test(helpers): expose Phase 5 zone and line scripts directory to test suite`
+- [ ] 6. `types(spatial): define ZoneSpec and LineSpec geometry dataclasses with shapely validation`
+- [ ] 7. `test(spatial): add unit tests for ZoneSpec and LineSpec validation`
+- [ ] 8. `feat(spatial): implement load_scene_config and save_scene_config YAML helpers`
+- [ ] 9. `test(spatial): add unit tests for scene_config.yaml round-trip serialization`
+- [ ] 10. `types(spatial): define ZoneLineSignal dataclass and zone_line_events.csv schema`
+- [ ] 11. `feat(spatial): implement write_zone_line_events_csv and read_zone_line_events_csv`
+- [ ] 12. `test(spatial): add unit tests for ZoneLineSignal and zone_line_events.csv round-trip`
+- [ ] 13. `feat(spatial): implement point_in_zone helper using shapely Polygon covers`
+- [ ] 14. `test(spatial): add unit tests for point_in_zone interior, boundary, and exterior points`
+- [ ] 15. `feat(spatial): implement detect_zone_signals per track for zone_enter and zone_exit`
+- [ ] 16. `test(spatial): add unit tests for detect_zone_signals state transitions`
+- [ ] 17. `feat(spatial): implement check_line_crossing with side-of-line sign and segment intersection`
+- [ ] 18. `test(spatial): add unit tests for directional line crossing A->B and B->A`
+- [ ] 19. `feat(spatial): implement detect_line_signals and combined evaluate_scene_signals`
+- [ ] 20. `test(spatial): add unit tests for combined zone and line signal evaluation`
+- [ ] 21. `feat(spatial): implement analyze_boundary_flicker for rapid zone enter/exit oscillations`
+- [ ] 22. `test(spatial): add unit tests for boundary flicker and line-jitter detection`
+- [ ] 23. `feat(spatial): implement draw_zones_and_lines overlay renderer with active signal highlights`
+- [ ] 24. `test(spatial): add unit tests for draw_zones_and_lines rendering`
+- [ ] 25. `feat(spatial): implement run_zone_line_reasoning pipeline and CLI entrypoint`
+- [ ] 26. `test(spatial): add end-to-end pipeline and CLI tests for reason_zones_lines`
+- [ ] 27. `feat(spatial): implement define_scene_geometry helper script for visual zone/line authoring`
+- [ ] 28. `test(spatial): add unit tests for define_scene_geometry preview and config export`
+- [ ] 29. `feat(spatial): add interactive zone/line authoring notebook 01_define_and_explore_zones.ipynb`
+- [ ] 30. `docs(spatial): document visual zone layout, entry/exit/crossing events, and boundary flicker in notes`
+- [ ] 31. `docs(spatial): document CLI, scene_config.yaml, and zone_line_events.csv in subproject README`
+- [ ] 32. `docs(readme): add Phase 5 zone and line reasoning CLI instructions to root README`
+- [ ] 33. `docs(progress): complete Phase 5 acceptance criteria, decision log, and CI log`
