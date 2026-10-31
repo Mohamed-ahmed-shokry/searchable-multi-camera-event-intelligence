@@ -20,12 +20,14 @@ from generate_dwell_events import (
     EventRecord,
     StayDebugTrace,
     ZoneDwellStateMachine,
+    evaluate_dwell_events,
     load_events_config,
     read_events_csv,
     save_events_config,
     write_events_csv,
 )
 from helpers import PROJECT_ROOT
+from reason_zones_lines import LineSpec, SceneConfig, TrajectoryPoint, ZoneSpec
 
 
 class EventDataStructuresTests(unittest.TestCase):
@@ -320,6 +322,56 @@ class TrackLossInZoneTests(unittest.TestCase):
         self.assertEqual(trace.resolution_reason, "track_lost_in_zone")
         self.assertEqual(trace.resolved_frame, 30)
         self.assertAlmostEqual(trace.resolved_time, 3.0)
+
+
+class EvaluateDwellEventsTests(unittest.TestCase):
+    def test_evaluate_dwell_events_combines_zones_and_deduplicates_line_jitter(self):
+        scene = SceneConfig(
+            zones=(
+                ZoneSpec(
+                    id="zone_a",
+                    polygon=((10.0, 10.0), (50.0, 10.0), (50.0, 50.0), (10.0, 50.0)),
+                ),
+            ),
+            lines=(LineSpec(id="gate", points=((50.0, 0.0), (50.0, 60.0))),),
+        )
+        cfg = EventConfig(
+            min_dwell_seconds=1.0,
+            min_entry_frames=1,
+            grace_frames=1,
+            line_cooldown_frames=3,
+            include_line_crossings=True,
+        )
+        trajs = {
+            1: [
+                TrajectoryPoint(1, 0, 0.0, 20.0, 30.0),  # inside zone_a
+                TrajectoryPoint(1, 1, 0.5, 30.0, 30.0),  # inside zone_a
+                TrajectoryPoint(
+                    1, 2, 1.2, 40.0, 30.0
+                ),  # inside zone_a (1.2s -> triggered)
+                TrajectoryPoint(1, 3, 1.5, 60.0, 30.0),  # cross gate (B->A), outside 1
+                TrajectoryPoint(
+                    1, 4, 1.6, 45.0, 30.0
+                ),  # re-enter (flicker absorbed! line cross ignored by cooldown!)
+                TrajectoryPoint(
+                    1, 5, 2.0, 65.0, 30.0
+                ),  # outside 1 (cross within cooldown)
+                TrajectoryPoint(
+                    1, 6, 2.2, 70.0, 30.0
+                ),  # outside 2 (> grace_frames=1 -> resolved!)
+            ]
+        }
+        events, traces = evaluate_dwell_events(trajs, scene, cfg)
+        self.assertEqual(
+            [e.event_id for e in events],
+            ["evt_0001", "evt_0002", "evt_0003", "evt_0004"],
+        )
+        self.assertEqual(
+            [e.event_type for e in events],
+            ["zone_entry", "dwell_time_event", "line_crossing", "zone_exit"],
+        )
+        self.assertEqual(len(traces), 1)
+        self.assertEqual(traces[0].flicker_absorbed_count, 1)
 
 
 if __name__ == "__main__":
