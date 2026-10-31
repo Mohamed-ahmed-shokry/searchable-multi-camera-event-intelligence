@@ -19,6 +19,7 @@ from generate_dwell_events import (
     EventConfig,
     EventRecord,
     StayDebugTrace,
+    ZoneDwellStateMachine,
     load_events_config,
     read_events_csv,
     save_events_config,
@@ -163,6 +164,71 @@ class EventsCsvRoundTripTests(unittest.TestCase):
             bad_csv.write_text("wrong,header\n1,2\n", encoding="utf-8")
             with self.assertRaises(ValueError):
                 read_events_csv(bad_csv)
+
+
+class ZoneDwellStateMachineLifecycleTests(unittest.TestCase):
+    def test_normal_stay_reaching_dwell_threshold_emits_entry_dwell_and_exit(self):
+        cfg = EventConfig(
+            min_dwell_seconds=1.0,
+            min_entry_frames=2,
+            grace_frames=1,
+        )
+        sm = ZoneDwellStateMachine(track_id=1, zone_id="lobby", config=cfg)
+
+        # Frame 0: outside
+        self.assertEqual(sm.step(0, 0.0, is_inside=False), [])
+        self.assertEqual(sm.state, "outside")
+
+        # Frame 1: first inside frame -> candidate (min_entry_frames=2 not yet met)
+        self.assertEqual(sm.step(1, 0.5, is_inside=True), [])
+        self.assertEqual(sm.state, "candidate")
+
+        # Frame 2: second inside frame -> promoted to active, emits zone_entry at t=0.5
+        ev_f2 = sm.step(2, 1.0, is_inside=True)
+        self.assertEqual(sm.state, "active")
+        self.assertEqual(len(ev_f2), 1)
+        self.assertEqual(ev_f2[0].event_type, "zone_entry")
+        self.assertAlmostEqual(ev_f2[0].start_time, 0.5)
+
+        # Frame 3: t=1.5 -> duration = 1.5 - 0.5 = 1.0s >= 1.0s -> triggered
+        self.assertEqual(sm.step(3, 1.5, is_inside=True), [])
+        self.assertEqual(sm.state, "triggered")
+
+        # Frame 4: t=2.0 -> still inside, accumulating dwell (1.5s)
+        self.assertEqual(sm.step(4, 2.0, is_inside=True), [])
+        self.assertAlmostEqual(sm.current_dwell_seconds(), 1.5)
+
+        # Frame 5: first outside frame (within grace_frames=1 -> not resolved yet)
+        self.assertEqual(sm.step(5, 2.5, is_inside=False), [])
+        self.assertEqual(sm.state, "triggered")
+
+        # Frame 6: second outside frame (outside_streak=2 > grace_frames=1) -> resolved!
+        ev_f6 = sm.step(6, 3.0, is_inside=False)
+        self.assertEqual(sm.state, "outside")
+        self.assertEqual(
+            [e.event_type for e in ev_f6], ["dwell_time_event", "zone_exit"]
+        )
+        dwell_ev, exit_ev = ev_f6[0], ev_f6[1]
+        self.assertAlmostEqual(dwell_ev.start_time, 0.5)
+        self.assertAlmostEqual(dwell_ev.end_time, 2.0)
+        self.assertAlmostEqual(dwell_ev.duration_seconds, 1.5)
+        self.assertAlmostEqual(exit_ev.start_time, 2.5)
+        self.assertEqual(len(sm.completed_traces), 1)
+        self.assertEqual(sm.completed_traces[0].peak_state, "triggered")
+        self.assertEqual(sm.completed_traces[0].resolution_reason, "exited")
+
+    def test_short_pass_through_emits_entry_and_exit_without_dwell_event(self):
+        cfg = EventConfig(min_dwell_seconds=2.0, min_entry_frames=1, grace_frames=0)
+        sm = ZoneDwellStateMachine(track_id=2, zone_id="corridor", config=cfg)
+
+        ev1 = sm.step(10, 1.0, is_inside=True)
+        self.assertEqual([e.event_type for e in ev1], ["zone_entry"])
+        self.assertEqual(sm.state, "active")
+
+        self.assertEqual(sm.step(11, 1.5, is_inside=True), [])
+        ev2 = sm.step(12, 2.0, is_inside=False)
+        self.assertEqual([e.event_type for e in ev2], ["zone_exit"])
+        self.assertEqual(sm.completed_traces[0].peak_state, "active")
 
 
 if __name__ == "__main__":
