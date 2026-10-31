@@ -10,6 +10,7 @@
 from __future__ import annotations
 
 import csv
+import json
 import tempfile
 import unittest
 from pathlib import Path
@@ -24,6 +25,7 @@ from generate_dwell_events import (
     load_events_config,
     read_events_csv,
     save_events_config,
+    write_event_debug_logs,
     write_events_csv,
 )
 from helpers import PROJECT_ROOT
@@ -372,6 +374,40 @@ class EvaluateDwellEventsTests(unittest.TestCase):
         )
         self.assertEqual(len(traces), 1)
         self.assertEqual(traces[0].flicker_absorbed_count, 1)
+
+
+class EventDebugLogTests(unittest.TestCase):
+    def test_write_event_debug_logs_creates_combined_and_individual_trace_files(self):
+        trace = StayDebugTrace(
+            stay_id="stay_t1_zone_a_001",
+            track_id=1,
+            zone_id="zone_a",
+            enter_frame=5,
+            enter_time=0.5,
+            last_inside_frame=20,
+            last_inside_time=2.0,
+            resolved_frame=26,
+            resolved_time=2.6,
+            duration_seconds=1.5,
+            peak_state="triggered",
+            resolution_reason="exited",
+            track_lost_in_zone=False,
+            flicker_absorbed_count=0,
+            transitions=(
+                {"frame_id": 5, "from": "outside", "to": "candidate"},
+                {"frame_id": 5, "from": "candidate", "to": "active"},
+            ),
+        )
+        with tempfile.TemporaryDirectory() as tmp:
+            debug_dir = Path(tmp) / "event_debug_log"
+            combined_path = write_event_debug_logs(debug_dir, [trace])
+            self.assertTrue(combined_path.exists())
+            single_path = debug_dir / "stay_t1_zone_a_001.json"
+            self.assertTrue(single_path.exists())
+
+            loaded_all = json.loads(combined_path.read_text(encoding="utf-8"))
+            self.assertEqual(len(loaded_all), 1)
+            self.assertEqual(loaded_all[0]["stay_id"], "stay_t1_zone_a_001")
 
 
 if __name__ == "__main__":
