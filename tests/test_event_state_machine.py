@@ -231,5 +231,60 @@ class ZoneDwellStateMachineLifecycleTests(unittest.TestCase):
         self.assertEqual(sm.completed_traces[0].peak_state, "active")
 
 
+class HysteresisAndFlickerTests(unittest.TestCase):
+    def test_grace_period_absorbs_boundary_flicker_without_resetting_dwell(self):
+        cfg = EventConfig(
+            min_dwell_seconds=1.0,
+            min_entry_frames=1,
+            grace_frames=3,
+        )
+        sm = ZoneDwellStateMachine(track_id=3, zone_id="entrance_area", config=cfg)
+
+        emitted: list[EventRecord] = []
+        # Enter at frame 0 (t=0.0)
+        emitted.extend(sm.step(0, 0.0, is_inside=True))
+        emitted.extend(sm.step(1, 0.4, is_inside=True))
+        # Boundary flicker: 3 frames outside (<= grace_frames=3)
+        emitted.extend(sm.step(2, 0.5, is_inside=False))
+        emitted.extend(sm.step(3, 0.6, is_inside=False))
+        emitted.extend(sm.step(4, 0.7, is_inside=False))
+        # Re-enter at frame 5 (t=1.2) -> flicker absorbed, dwell reaches 1.2s >= 1.0s!
+        emitted.extend(sm.step(5, 1.2, is_inside=True))
+        self.assertEqual(sm.state, "triggered")
+        self.assertEqual(sm.flicker_absorbed_count, 1)
+
+        # Genuine exit: 4 frames outside (> grace_frames=3), first outside at frame 6 (t=1.5)
+        for fid, ts in [(6, 1.5), (7, 1.6), (8, 1.7), (9, 1.8)]:
+            emitted.extend(sm.step(fid, ts, is_inside=False))
+
+        self.assertEqual(
+            [e.event_type for e in emitted],
+            ["zone_entry", "dwell_time_event", "zone_exit"],
+        )
+        dwell = emitted[1]
+        self.assertAlmostEqual(dwell.start_time, 0.0)
+        self.assertAlmostEqual(dwell.end_time, 1.2)
+        self.assertAlmostEqual(dwell.duration_seconds, 1.2)
+        self.assertEqual(sm.completed_traces[0].flicker_absorbed_count, 1)
+
+    def test_sub_entry_spike_discarded_as_candidate_without_events(self):
+        cfg = EventConfig(
+            min_dwell_seconds=1.0,
+            min_entry_frames=3,
+            grace_frames=1,
+        )
+        sm = ZoneDwellStateMachine(track_id=4, zone_id="lobby", config=cfg)
+        self.assertEqual(sm.step(0, 0.0, is_inside=True), [])
+        self.assertEqual(sm.state, "candidate")
+        self.assertEqual(sm.step(1, 0.1, is_inside=False), [])
+        self.assertEqual(sm.step(2, 0.2, is_inside=False), [])
+        self.assertEqual(sm.state, "outside")
+        self.assertEqual(len(sm.completed_traces), 1)
+        self.assertEqual(
+            sm.completed_traces[0].resolution_reason,
+            "discarded_candidate",
+        )
+
+
 if __name__ == "__main__":
     unittest.main()
