@@ -698,7 +698,7 @@ uv run --locked python cv_projects/05_zone_line_reasoning/scripts/reason_zones_l
 
 ---
 
-## Current Phase: 6 — Dwell-Time Events (2026-10-31)
+## Completed Phase: 6 — Dwell-Time Events (2026-10-31)
 
 ### Objective
 
@@ -721,7 +721,7 @@ comprehensive pure-logic unit test suite (`tests/test_event_state_machine.py`).
    - Pure-logic `ZoneDwellStateMachine` per `(track_id, zone_id)` implementing:
      - `candidate -> active -> triggered -> resolved` transitions.
      - Hysteresis / grace period (`grace_frames`) absorbing brief boundary flickers (`<= grace_frames` outside frames) without resetting dwell duration or firing duplicate `zone_exit` / `zone_entry` events.
-     - Track-loss-in-zone handling (`resolve_at_track_end`), resolving open stays at `last_inside_time` and setting `track_lost_in_zone = True` in the stay debug trace.
+     - Track-loss-in-zone handling (`finish_track`), resolving open stays at `last_inside_time` and setting `track_lost_in_zone = True` in the stay debug trace.
      - Exactly one `zone_entry` per confirmed entry, at most one `dwell_time_event` per continuous stay (`duration_seconds >= min_dwell_seconds`), and one `zone_exit` when the track genuinely exits the zone (`outside_streak > grace_frames`).
    - Multi-track / multi-zone evaluator (`evaluate_dwell_events`) combining `ZoneDwellStateMachine` across all zones with deduplicated `line_crossing` events (`line_cooldown_frames`) from Phase 5 `LineSpec`s.
    - Debug trace exporter (`write_event_debug_logs`) writing `event_debug_log/stay_traces.json` and per-stay transition logs.
@@ -734,13 +734,13 @@ comprehensive pure-logic unit test suite (`tests/test_event_state_machine.py`).
 
 | # | Criterion | Status | Evidence |
 |---|-----------|--------|----------|
-| 1 | Event lifecycle state machine (`candidate -> active -> triggered -> resolved`) implemented per `(track_id, zone_id)` with configurable thresholds in `configs/events.yaml` | ☐ | — |
-| 2 | `events.csv` matches canonical schema (`event_id, event_type, track_id, zone_id, start_time, end_time, duration_seconds`) and event count is orders of magnitude below frame count | ☐ | — |
-| 3 | Hysteresis / grace period (`<= grace_frames` outside) absorbs boundary flicker without resetting dwell state (verified on synthetic tests and Phase 5 real flicker cases) | ☐ | — |
-| 4 | Track-loss-in-zone handled (resolved at last seen inside time) and flagged in `event_debug_log/` | ☐ | — |
-| 5 | Per-event debug trace (`event_debug_log/`) and visual dwell examples (`dwell_examples/` + `annotated_events_video.mp4`) generated | ☐ | — |
-| 6 | One track manually traced frame-by-frame — event timeline matches the video and is documented in `notes.md` | ☐ | — |
-| 7 | Comprehensive unit test suite `tests/test_event_state_machine.py` passes and all local CI-parity checks (`ruff check`, `ruff format --check`, `pytest`) + remote GitHub Actions CI pass 100% | ☐ | — |
+| 1 | Event lifecycle state machine (`candidate -> active -> triggered -> resolved`) implemented per `(track_id, zone_id)` with configurable thresholds in `configs/events.yaml` | ✅ | `ZoneDwellStateMachine` (`c1b5112`) and `configs/events.yaml` (`fa3a256`) |
+| 2 | `events.csv` matches canonical schema (`event_id, event_type, track_id, zone_id, start_time, end_time, duration_seconds`) and event count is orders of magnitude below frame count | ✅ | Verified by `EventsCsvRoundTripTests` (`8d77d5a`); `10` dwell events (`48` total events) across `596` frames (`59.6×` compression on dwell events, `0.0805` total events/frame) |
+| 3 | Hysteresis / grace period (`<= grace_frames` outside) absorbs boundary flicker without resetting dwell state (verified on synthetic tests and Phase 5 real flicker cases) | ✅ | Verified by `HysteresisAndFlickerTests` (`a7c2d6f`) and real Phase 5 raw `w=1` `Track 3` flicker at frame `194` (`flickers_absorbed: 1`, preserving Track 3's `1.9167s` dwell event vs losing it at `grace_frames=0`) |
+| 4 | Track-loss-in-zone handled (resolved at last seen inside time) and flagged in `event_debug_log/` | ✅ | Verified by `TrackLossInZoneTests` (`b8764e7`) and 3 real stays (`stay_t1_right_aisle_001`, `stay_t7_right_aisle_001`, `stay_t6_right_aisle_001`) flagged with `track_lost_in_zone: true` |
+| 5 | Per-event debug trace (`event_debug_log/`) and visual dwell examples (`dwell_examples/` + `annotated_events_video.mp4`) generated | ✅ | `stay_traces.json` + 16 per-stay trace files, 6 PNGs in `dwell_examples/`, and `annotated_events_video.mp4` (`596` frames in `5.31 s`) |
+| 6 | One track manually traced frame-by-frame — event timeline matches the video and is documented in `notes.md` | ✅ | `Track 1` (`frames 19–75`, `evt_0001..evt_0010`) manually traced across `entrance_area`, `doorway_line`, `aisle_split_line`, `center_concourse`, and `right_aisle` in `notes.md` (`4a696df`) |
+| 7 | Comprehensive unit test suite `tests/test_event_state_machine.py` passes and all local CI-parity checks (`ruff check`, `ruff format --check`, `pytest`) + remote GitHub Actions CI pass 100% | ✅ | `129 passed, 56 subtests passed` in `pytest` (`13` test cases in `test_event_state_machine.py`); `ruff check` and `ruff format --check` (`49` files) 100% clean; Draft PR #6 green |
 
 ### Validation & CI Plan
 
@@ -765,31 +765,50 @@ uv run --locked python cv_projects/06_dwell_time_events/scripts/generate_dwell_e
 
 ### Micro-Task Breakdown
 
-- [x] 1. `docs(roadmap): define Phase 6 dwell-time events scope and micro-task checklist`
-- [ ] 2. `docs(events): scaffold cv_projects/06_dwell_time_events README and notes`
-- [ ] 3. `feat(events): add default configs/events.yaml with dwell thresholds and grace period`
-- [ ] 4. `test(helpers): expose Phase 6 dwell events scripts directory to test suite`
-- [ ] 5. `types(events): define EventConfig, EventRecord, and StayDebugTrace dataclasses`
-- [ ] 6. `test(events): add unit tests for EventConfig and EventRecord validation`
-- [ ] 7. `feat(events): implement load_events_config and save_events_config YAML helpers`
-- [ ] 8. `test(events): add unit tests for events.yaml configuration loading and per-zone overrides`
-- [ ] 9. `feat(events): implement write_events_csv and read_events_csv for events.csv schema`
-- [ ] 10. `test(events): add unit tests for events.csv round-trip serialization`
-- [ ] 11. `feat(events): implement ZoneDwellStateMachine lifecycle candidate->active->triggered->resolved`
-- [ ] 12. `test(events): add unit tests for ZoneDwellStateMachine normal entry, dwell trigger, and exit`
-- [ ] 13. `test(events): add unit tests for hysteresis grace-period flicker absorption and sub-entry spikes`
-- [ ] 14. `test(events): add unit tests for track-loss-in-zone resolution and flagging`
-- [ ] 15. `feat(events): implement evaluate_dwell_events across all tracks, zones, and tripwire lines`
-- [ ] 16. `test(events): add unit tests for evaluate_dwell_events and line-crossing cooldown deduplication`
-- [ ] 17. `feat(events): implement write_event_debug_logs for per-stay debug trace inspection`
-- [ ] 18. `test(events): add unit tests for event_debug_log export`
-- [ ] 19. `feat(events): implement draw_dwell_events_overlay and save_dwell_examples visual proof helpers`
-- [ ] 20. `test(events): add unit tests for draw_dwell_events_overlay and save_dwell_examples`
-- [ ] 21. `feat(events): implement run_dwell_time_events pipeline and CLI entrypoint`
-- [ ] 22. `test(events): add end-to-end pipeline and CLI tests in test_event_state_machine.py`
-- [ ] 23. `feat(events): add exploratory notebook 01_explore_dwell_events.ipynb`
-- [ ] 24. `docs(events): document manual track timeline trace, flicker absorption, and track-loss cases in notes`
-- [ ] 25. `docs(events): document CLI, state machine lifecycle, and events.csv schema in subproject README`
-- [ ] 26. `docs(readme): add Phase 6 dwell-time events CLI instructions to root README`
-- [ ] 27. `docs(progress): complete Phase 6 acceptance criteria, decision log, and CI log`
+- [x] 1. `docs(roadmap): define Phase 6 dwell-time events scope and micro-task checklist` (`57751b1`)
+- [x] 2. `docs(events): scaffold cv_projects/06_dwell_time_events README and notes` (`fe90e69`)
+- [x] 3. `feat(events): add default configs/events.yaml with dwell thresholds and grace period` (`fa3a256`)
+- [x] 4. `test(helpers): expose Phase 6 dwell events scripts directory to test suite` (`4fbe312`)
+- [x] 5. `types(events): define EventConfig, EventRecord, and StayDebugTrace dataclasses` (`52cb0a0`)
+- [x] 6. `test(events): add unit tests for EventConfig and EventRecord validation` (`5d6da90`)
+- [x] 7. `feat(events): implement load_events_config and save_events_config YAML helpers` (`3433e75`)
+- [x] 8. `test(events): add unit tests for events.yaml configuration loading and per-zone overrides` (`e6d1b8b`)
+- [x] 9. `feat(events): implement write_events_csv and read_events_csv for events.csv schema` (`7ae0732`)
+- [x] 10. `test(events): add unit tests for events.csv round-trip serialization` (`8d77d5a`)
+- [x] 11. `feat(events): implement ZoneDwellStateMachine lifecycle candidate->active->triggered->resolved` (`c1b5112`)
+- [x] 12. `test(events): add unit tests for ZoneDwellStateMachine normal entry, dwell trigger, and exit` (`ee8c061`)
+- [x] 13. `test(events): add unit tests for hysteresis grace-period flicker absorption and sub-entry spikes` (`a7c2d6f`)
+- [x] 14. `test(events): add unit tests for track-loss-in-zone resolution and flagging` (`b8764e7`)
+- [x] 15. `feat(events): implement evaluate_dwell_events across all tracks, zones, and tripwire lines` (`fa76d0f`, `e7b1b3a`)
+- [x] 16. `test(events): add unit tests for evaluate_dwell_events and line-crossing cooldown deduplication` (`39cf205`)
+- [x] 17. `feat(events): implement write_event_debug_logs for per-stay debug trace inspection` (`68d78bd`)
+- [x] 18. `test(events): add unit tests for event_debug_log export` (`ab71cc2`)
+- [x] 19. `feat(events): implement draw_dwell_events_overlay and save_dwell_examples visual proof helpers` (`ee453a7`)
+- [x] 20. `test(events): add unit tests for draw_dwell_events_overlay and save_dwell_examples` (`5f1c53e`)
+- [x] 21. `feat(events): implement run_dwell_time_events pipeline and CLI entrypoint` (`8d76661`)
+- [x] 22. `test(events): add end-to-end pipeline and CLI tests in test_event_state_machine.py` (`232b26c`)
+- [x] 23. `feat(events): add exploratory notebook 01_explore_dwell_events.ipynb` (`067e368`)
+- [x] 24. `docs(events): document manual track timeline trace, flicker absorption, and track-loss cases in notes` (`4a696df`)
+- [x] 25. `docs(events): document CLI, state machine lifecycle, and events.csv schema in subproject README` (`a2d23fa`)
+- [x] 26. `docs(readme): add Phase 6 dwell-time events CLI instructions to root README` (`06d2cfd`)
+- [x] 27. `docs(progress): complete Phase 6 acceptance criteria, decision log, and CI log`
+
+### Decision Log
+
+| Decision | Options considered | Choice + evidence |
+|----------|--------------------|-------------------|
+| Dwell event emission timing | Emit repeated frame-by-frame alerts once threshold is crossed / Emit a single `dwell_time_event` with full `(start_time, end_time, duration_seconds)` when stay resolves | **Emit single resolved `dwell_time_event` per continuous stay** — enforces the core event principle (`one meaningful behavior -> one clean event`) in `README.md` and `docs/project_phases.md` while recording the exact frame when `active -> triggered` occurred in `event_debug_log/`. |
+| Default hysteresis `grace_frames` | `0` frames / `5` frames (`0.42s @ 12 fps`) / `15` frames | **`grace_frames = 5`** — tuned directly from Phase 5's boundary-flicker analysis (`1–5` frame oscillations); verified on raw `w=1` trajectories to absorb `Track 3`'s 1-frame oscillation at frame `194` and preserve its `1.9167s` dwell event without over-merging distinct visits. |
+| Track-loss-in-zone handling | Emit synthetic `zone_exit` at track end / Resolve stay at `last_inside_time` without `zone_exit` and flag `track_lost_in_zone=True` | **Resolve at `last_inside_time` + flag `track_lost_in_zone=True`** — a track disappearing inside a zone (e.g. `Tracks 1, 6, 7` in `right_aisle`) did not cross out of the polygon; resolving at `last_inside_time` preserves accurate dwell duration (`2.33s`, `2.42s`, `3.25s`) and flags the termination reason in `stay_traces.json`. |
+
+### CI & Validation Log
+
+| Command | Result | Notes |
+|---------|--------|-------|
+| `uv sync --locked` | ✅ exit 0 | clean default locked environment |
+| `uv run --locked ruff check .` | ✅ `All checks passed!` | repo-wide lint gate (49 files including notebooks) |
+| `uv run --locked ruff format --check .` | ✅ `49 files already formatted` | repo-wide format gate |
+| `uv run --locked pytest -v` | ✅ `129 passed, 56 subtests passed` | full unit + integration test suite (`test_event_state_machine.py` + prior suites) |
+| `generate_dwell_events.py data/fallback_clips/people-detection.mp4 ...` | ✅ 596 frames in 5.31 s | 48 events (`16 zone_entry`, `13 zone_exit`, `10 dwell_time_event`, `9 line_crossing`), 16 stay traces, 6 PNG examples |
+
 
