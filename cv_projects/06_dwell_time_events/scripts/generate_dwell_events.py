@@ -7,6 +7,7 @@ visual proof renderers, and CLI entrypoint.
 from __future__ import annotations
 
 import csv
+import json
 import sys
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
@@ -636,3 +637,25 @@ def evaluate_dwell_events(
         key=lambda item: (item.enter_time, item.track_id, item.zone_id),
     )
     return numbered_events, ordered_traces
+
+
+def write_event_debug_logs(
+    debug_dir: Path | str,
+    traces: Sequence[StayDebugTrace],
+) -> Path:
+    """Write per-stay debug trace files into event_debug_log/ and return stay_traces.json path."""
+    out_dir = Path(debug_dir)
+    out_dir.mkdir(parents=True, exist_ok=True)
+    ordered = sorted(
+        traces,
+        key=lambda item: (item.enter_time, item.track_id, item.zone_id, item.stay_id),
+    )
+    all_payload = [tr.to_dict() for tr in ordered]
+    combined_path = out_dir / "stay_traces.json"
+    combined_path.write_text(json.dumps(all_payload, indent=2), encoding="utf-8")
+
+    for tr in ordered:
+        single_path = out_dir / f"{tr.stay_id}.json"
+        single_path.write_text(json.dumps(tr.to_dict(), indent=2), encoding="utf-8")
+
+    return combined_path
