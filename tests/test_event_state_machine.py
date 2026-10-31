@@ -15,20 +15,23 @@ import tempfile
 import unittest
 from pathlib import Path
 
+import numpy as np
 from generate_dwell_events import (
     EVENTS_CSV_HEADER,
     EventConfig,
     EventRecord,
     StayDebugTrace,
     ZoneDwellStateMachine,
+    draw_dwell_events_overlay,
     evaluate_dwell_events,
     load_events_config,
     read_events_csv,
+    save_dwell_examples,
     save_events_config,
     write_event_debug_logs,
     write_events_csv,
 )
-from helpers import PROJECT_ROOT
+from helpers import PROJECT_ROOT, make_video
 from reason_zones_lines import LineSpec, SceneConfig, TrajectoryPoint, ZoneSpec
 
 
@@ -408,6 +411,59 @@ class EventDebugLogTests(unittest.TestCase):
             loaded_all = json.loads(combined_path.read_text(encoding="utf-8"))
             self.assertEqual(len(loaded_all), 1)
             self.assertEqual(loaded_all[0]["stay_id"], "stay_t1_zone_a_001")
+
+
+class DwellVisualOverlayTests(unittest.TestCase):
+    def test_draw_dwell_events_overlay_and_save_dwell_examples(self):
+        frame = np.zeros((100, 120, 3), dtype=np.uint8)
+        scene = SceneConfig(
+            zones=(
+                ZoneSpec(
+                    id="z1",
+                    polygon=((10.0, 10.0), (50.0, 10.0), (50.0, 45.0), (10.0, 45.0)),
+                ),
+            ),
+            lines=(LineSpec(id="l1", points=((50.0, 5.0), (50.0, 45.0))),),
+        )
+        trajs = {
+            1: [
+                TrajectoryPoint(1, 0, 0.0, 20.0, 25.0),
+                TrajectoryPoint(1, 1, 0.5, 30.0, 25.0),
+                TrajectoryPoint(1, 2, 1.2, 40.0, 25.0),
+                TrajectoryPoint(1, 3, 1.5, 58.0, 25.0),
+            ]
+        }
+        events, traces = evaluate_dwell_events(
+            trajs,
+            scene,
+            EventConfig(min_dwell_seconds=1.0, min_entry_frames=1, grace_frames=0),
+        )
+        rendered = draw_dwell_events_overlay(
+            frame,
+            scene,
+            trajs,
+            current_frame_id=2,
+            current_timestamp=1.2,
+            traces=traces,
+            events=events,
+        )
+        self.assertEqual(rendered.shape, frame.shape)
+        self.assertGreater(int(rendered.sum()), 0)
+
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            video_path = make_video(root, count=4)
+            ex_dir = root / "dwell_examples"
+            saved = save_dwell_examples(
+                video_path,
+                ex_dir,
+                scene,
+                trajs,
+                traces,
+                events,
+            )
+            self.assertEqual(len(saved), 1)
+            self.assertTrue(saved[0].exists())
 
 
 if __name__ == "__main__":
