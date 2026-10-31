@@ -16,6 +16,7 @@ import unittest
 from pathlib import Path
 
 import numpy as np
+from extract_trajectories import write_trajectories_csv
 from generate_dwell_events import (
     EVENTS_CSV_HEADER,
     EventConfig,
@@ -25,14 +26,22 @@ from generate_dwell_events import (
     draw_dwell_events_overlay,
     evaluate_dwell_events,
     load_events_config,
+    main,
     read_events_csv,
+    run_dwell_time_events,
     save_dwell_examples,
     save_events_config,
     write_event_debug_logs,
     write_events_csv,
 )
 from helpers import PROJECT_ROOT, make_video
-from reason_zones_lines import LineSpec, SceneConfig, TrajectoryPoint, ZoneSpec
+from reason_zones_lines import (
+    LineSpec,
+    SceneConfig,
+    TrajectoryPoint,
+    ZoneSpec,
+    save_scene_config,
+)
 
 
 class EventDataStructuresTests(unittest.TestCase):
@@ -464,6 +473,77 @@ class DwellVisualOverlayTests(unittest.TestCase):
             )
             self.assertEqual(len(saved), 1)
             self.assertTrue(saved[0].exists())
+
+
+class RunDwellTimeEventsPipelineTests(unittest.TestCase):
+    def test_run_dwell_time_events_and_cli_export_all_artifacts(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            video_path = make_video(root, count=5)
+            trajs = {
+                1: [
+                    TrajectoryPoint(1, 0, 0.0, 20.0, 24.0),
+                    TrajectoryPoint(1, 1, 0.5, 25.0, 24.0),
+                    TrajectoryPoint(1, 2, 1.2, 30.0, 24.0),
+                    TrajectoryPoint(1, 3, 1.5, 50.0, 24.0),
+                    TrajectoryPoint(1, 4, 2.0, 55.0, 24.0),
+                ]
+            }
+            traj_csv = write_trajectories_csv(root / "trajectories.csv", trajs)
+            scene = SceneConfig(
+                zones=(
+                    ZoneSpec(
+                        id="mid_zone",
+                        polygon=(
+                            (10.0, 10.0),
+                            (40.0, 10.0),
+                            (40.0, 40.0),
+                            (10.0, 40.0),
+                        ),
+                    ),
+                ),
+                lines=(LineSpec(id="gate", points=((40.0, 5.0), (40.0, 45.0))),),
+            )
+            scene_yaml = save_scene_config(root / "scene_config.yaml", scene)
+            ev_yaml = save_events_config(
+                root / "events.yaml",
+                EventConfig(min_dwell_seconds=1.0, min_entry_frames=1, grace_frames=0),
+            )
+
+            out_dir = root / "outputs"
+            report = run_dwell_time_events(
+                video_path,
+                out_dir,
+                trajectories_csv=traj_csv,
+                scene_config_path=scene_yaml,
+                events_config_path=ev_yaml,
+                save_video=True,
+            )
+            self.assertEqual(report["processed_frames"], 5)
+            self.assertEqual(report["total_events"], 4)
+            self.assertTrue((out_dir / "events.csv").exists())
+            self.assertTrue((out_dir / "events.yaml").exists())
+            self.assertTrue((out_dir / "event_debug_log" / "stay_traces.json").exists())
+            self.assertTrue((out_dir / "annotated_events_video.mp4").exists())
+            self.assertTrue((out_dir / "dwell_events_summary.json").exists())
+
+            cli_dir = root / "cli_out"
+            rc = main(
+                [
+                    str(video_path),
+                    "--trajectories-csv",
+                    str(traj_csv),
+                    "--scene-config",
+                    str(scene_yaml),
+                    "--config",
+                    str(ev_yaml),
+                    "-o",
+                    str(cli_dir),
+                    "--no-video",
+                ]
+            )
+            self.assertEqual(rc, 0)
+            self.assertTrue((cli_dir / "events.csv").exists())
 
 
 if __name__ == "__main__":
