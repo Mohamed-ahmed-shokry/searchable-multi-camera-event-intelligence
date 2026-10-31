@@ -14,13 +14,18 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
+import cv2
+import numpy as np
 import yaml
 
 try:
     from reason_zones_lines import (
         SceneConfig,
         TrajectoryPoint,
+        VideoSource,
         detect_line_signals,
+        draw_trajectory_trails,
+        draw_zones_and_lines,
         point_in_zone,
     )
 except ImportError:
@@ -32,7 +37,10 @@ except ImportError:
     from reason_zones_lines import (
         SceneConfig,
         TrajectoryPoint,
+        VideoSource,
         detect_line_signals,
+        draw_trajectory_trails,
+        draw_zones_and_lines,
         point_in_zone,
     )
 
@@ -659,3 +667,130 @@ def write_event_debug_logs(
         single_path.write_text(json.dumps(tr.to_dict(), indent=2), encoding="utf-8")
 
     return combined_path
+
+
+def draw_dwell_events_overlay(
+    frame: np.ndarray,
+    scene_config: SceneConfig,
+    trajectories: Mapping[int, Sequence[TrajectoryPoint]],
+    current_frame_id: int,
+    current_timestamp: float,
+    traces: Sequence[StayDebugTrace],
+    events: Sequence[EventRecord],
+    *,
+    max_trail_length: int = 60,
+) -> np.ndarray:
+    """Render zones, lines, trajectories, live dwell timers, and recent event banners."""
+    with_geom = draw_zones_and_lines(frame, scene_config, alpha=0.22)
+    out = draw_trajectory_trails(
+        with_geom,
+        trajectories,
+        current_frame_id=current_frame_id,
+        max_trail_length=max_trail_length,
+    )
+
+    active_stays = [
+        tr
+        for tr in traces
+        if tr.enter_frame <= current_frame_id <= tr.last_inside_frame
+        and tr.peak_state in {"active", "triggered"}
+    ]
+    row_y = 26
+    for tr in active_stays:
+        elapsed = max(0.0, current_timestamp - tr.enter_time)
+        tag = "DWELL" if tr.peak_state == "triggered" else "ACTIVE"
+        color = (0, 255, 128) if tr.peak_state == "triggered" else (255, 220, 80)
+        label = f"[{tag}] T{tr.track_id} @ {tr.zone_id}: {elapsed:.2f}s"
+        cv2.putText(
+            out,
+            label,
+            (12, row_y),
+            cv2.FONT_HERSHEY_SIMPLEX,
+            0.52,
+            color,
+            2,
+            cv2.LINE_AA,
+        )
+        row_y += 22
+
+    recent_events = [
+        ev
+        for ev in events
+        if (
+            ev.event_type == "dwell_time_event"
+            and 0 <= current_frame_id - ev.end_frame <= 10
+        )
+        or (
+            ev.event_type != "dwell_time_event"
+            and 0 <= current_frame_id - ev.start_frame <= 6
+        )
+    ]
+    for ev in recent_events[:4]:
+        summary = (
+            f"{ev.event_id} {ev.event_type} T{ev.track_id} {ev.zone_id} "
+            f"({ev.duration_seconds:.2f}s)"
+        )
+        cv2.putText(
+            out,
+            summary,
+            (12, row_y),
+            cv2.FONT_HERSHEY_SIMPLEX,
+            0.46,
+            (0, 215, 255),
+            1,
+            cv2.LINE_AA,
+        )
+        row_y += 18
+
+    return out
+
+
+def save_dwell_examples(
+    video_path: Path | str,
+    examples_dir: Path | str,
+    scene_config: SceneConfig,
+    trajectories: Mapping[int, Sequence[TrajectoryPoint]],
+    traces: Sequence[StayDebugTrace],
+    events: Sequence[EventRecord],
+    *,
+    max_examples: int = 6,
+) -> list[Path]:
+    """Save annotated visual proof PNGs for triggered dwell stays into dwell_examples/."""
+    out_dir = Path(examples_dir)
+    out_dir.mkdir(parents=True, exist_ok=True)
+
+    candidates = [tr for tr in traces if tr.peak_state == "triggered"]
+    if not candidates:
+        candidates = [tr for tr in traces if tr.peak_state == "active"]
+    selected = candidates[:max_examples]
+    if not selected:
+        return []
+
+    target_by_frame: dict[int, list[StayDebugTrace]] = {}
+    for tr in selected:
+        target_by_frame.setdefault(tr.last_inside_frame, []).append(tr)
+
+    max_target_frame = max(target_by_frame)
+    saved_paths: list[Path] = []
+
+    with VideoSource(video_path) as src:
+        fps = src.metadata.fps if src.metadata.fps > 0 else 30.0
+        for frame_id, frame in src.iter_frames(stop=max_target_frame + 1):
+            if frame_id not in target_by_frame:
+                continue
+            ts = frame_id / fps
+            rendered = draw_dwell_events_overlay(
+                frame,
+                scene_config,
+                trajectories,
+                current_frame_id=frame_id,
+                current_timestamp=ts,
+                traces=traces,
+                events=events,
+            )
+            for tr in target_by_frame[frame_id]:
+                img_path = out_dir / f"{tr.stay_id}_frame_{frame_id:04d}.png"
+                cv2.imwrite(str(img_path), rendered)
+                saved_paths.append(img_path)
+
+    return saved_paths
