@@ -16,11 +16,13 @@ TRAJECTORY_SCRIPTS = (
     PROJECT_ROOT / "cv_projects" / "04_trajectory_extraction" / "scripts"
 )
 SPATIAL_SCRIPTS = PROJECT_ROOT / "cv_projects" / "05_zone_line_reasoning" / "scripts"
+EVENTS_SCRIPTS = PROJECT_ROOT / "cv_projects" / "06_dwell_time_events" / "scripts"
 sys.path.insert(0, str(INSPECTION_SCRIPTS))
 sys.path.insert(0, str(DETECTION_SCRIPTS))
 sys.path.insert(0, str(TRACKING_SCRIPTS))
 sys.path.insert(0, str(TRAJECTORY_SCRIPTS))
 sys.path.insert(0, str(SPATIAL_SCRIPTS))
+sys.path.insert(0, str(EVENTS_SCRIPTS))
 
 
 def make_sequence(root: Path, *, name: str = "sequence", count: int = 5) -> Path:

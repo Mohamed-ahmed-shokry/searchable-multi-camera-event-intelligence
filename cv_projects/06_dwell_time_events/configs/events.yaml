@@ -1,0 +1,13 @@
+# Phase 6: Dwell-Time Events Configuration
+# Lifecycle per (track_id, zone_id): candidate -> active -> triggered -> resolved
+
+min_dwell_seconds: 1.2
+min_entry_frames: 1
+grace_frames: 5
+line_cooldown_frames: 5
+include_line_crossings: true
+
+per_zone_min_dwell_seconds:
+  entrance_area: 1.2
+  center_concourse: 1.2
+  right_aisle: 1.5
