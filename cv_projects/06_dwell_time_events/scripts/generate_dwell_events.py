@@ -7,12 +7,33 @@ visual proof renderers, and CLI entrypoint.
 from __future__ import annotations
 
 import csv
+import sys
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
 import yaml
+
+try:
+    from reason_zones_lines import (
+        SceneConfig,
+        TrajectoryPoint,
+        detect_line_signals,
+        point_in_zone,
+    )
+except ImportError:
+    _subproject_5_scripts = (
+        Path(__file__).resolve().parents[2] / "05_zone_line_reasoning" / "scripts"
+    )
+    if str(_subproject_5_scripts) not in sys.path:
+        sys.path.insert(0, str(_subproject_5_scripts))
+    from reason_zones_lines import (  # noqa: F401
+        SceneConfig,
+        TrajectoryPoint,
+        detect_line_signals,
+        point_in_zone,
+    )
 
 EVENTS_CSV_HEADER: list[str] = [
     "event_id",
@@ -534,3 +555,84 @@ class ZoneDwellStateMachine:
         self.outside_streak = 0
         self.inside_frames = 0
         return emitted
+
+
+def evaluate_dwell_events(
+    trajectories: Mapping[int, Sequence[TrajectoryPoint]],
+    scene_config: SceneConfig,
+    config: EventConfig | None = None,
+) -> tuple[list[EventRecord], list[StayDebugTrace]]:
+    """Evaluate stateful dwell/zone events and deduplicated line crossings across all tracks."""
+    cfg = config or EventConfig()
+    raw_events: list[EventRecord] = []
+    traces: list[StayDebugTrace] = []
+    zone_polys = [(z.id, z.shapely_polygon) for z in scene_config.zones]
+
+    for tid in sorted(trajectories):
+        pts = sorted(trajectories[tid], key=lambda item: item.frame_id)
+        if not pts:
+            continue
+        for zid, poly in zone_polys:
+            sm = ZoneDwellStateMachine(track_id=tid, zone_id=zid, config=cfg)
+            for pt in pts:
+                inside = point_in_zone(pt.x, pt.y, poly)
+                raw_events.extend(sm.step(pt.frame_id, pt.timestamp, is_inside=inside))
+            raw_events.extend(sm.finish_track())
+            traces.extend(sm.completed_traces)
+
+    if cfg.include_line_crossings and scene_config.lines:
+        raw_line_sigs = detect_line_signals(trajectories, scene_config.lines)
+        last_cross_frame: dict[tuple[int, str], int] = {}
+        line_seq = 0
+        for sig in raw_line_sigs:
+            key = (sig.track_id, sig.line_id)
+            if (
+                key in last_cross_frame
+                and (sig.frame_id - last_cross_frame[key]) <= cfg.line_cooldown_frames
+            ):
+                continue
+            last_cross_frame[key] = sig.frame_id
+            line_seq += 1
+            raw_events.append(
+                EventRecord(
+                    event_id=f"line_{line_seq:04d}",
+                    event_type="line_crossing",
+                    track_id=sig.track_id,
+                    zone_id=f"{sig.line_id}:{sig.direction}",
+                    start_time=sig.timestamp,
+                    end_time=sig.timestamp,
+                    duration_seconds=0.0,
+                    start_frame=sig.frame_id,
+                    end_frame=sig.frame_id,
+                )
+            )
+
+    ordered_raw = sorted(
+        raw_events,
+        key=lambda item: (
+            item.start_time,
+            item.end_time,
+            item.track_id,
+            item.event_type,
+            item.zone_id,
+        ),
+    )
+    numbered_events = [
+        EventRecord(
+            event_id=f"evt_{idx:04d}",
+            event_type=ev.event_type,
+            track_id=ev.track_id,
+            zone_id=ev.zone_id,
+            start_time=ev.start_time,
+            end_time=ev.end_time,
+            duration_seconds=ev.duration_seconds,
+            start_frame=ev.start_frame,
+            end_frame=ev.end_frame,
+        )
+        for idx, ev in enumerate(ordered_raw, start=1)
+    ]
+    ordered_traces = sorted(
+        traces,
+        key=lambda item: (item.enter_time, item.track_id, item.zone_id),
+    )
+    return numbered_events, ordered_traces
