@@ -275,3 +275,262 @@ def read_events_csv(path: Path | str) -> list[EventRecord]:
             item.event_id,
         ),
     )
+
+
+class ZoneDwellStateMachine:
+    """Per-(track_id, zone_id) lifecycle state machine:
+    outside -> candidate -> active -> triggered -> resolved.
+    """
+
+    def __init__(
+        self,
+        track_id: int,
+        zone_id: str,
+        config: EventConfig | None = None,
+    ) -> None:
+        self.track_id = track_id
+        self.zone_id = zone_id
+        self.config = config or EventConfig()
+        self.dwell_threshold = self.config.zone_threshold(zone_id)
+
+        self.state: str = "outside"
+        self.peak_state: str = "outside"
+        self.enter_frame: int = 0
+        self.enter_time: float = 0.0
+        self.last_inside_frame: int = 0
+        self.last_inside_time: float = 0.0
+        self.inside_frames: int = 0
+        self.outside_streak: int = 0
+        self.first_outside_frame: int = 0
+        self.first_outside_time: float = 0.0
+        self.flicker_absorbed_count: int = 0
+        self.transitions: list[dict[str, Any]] = []
+
+        self._stay_index: int = 0
+        self._event_seq: int = 0
+        self.completed_traces: list[StayDebugTrace] = []
+
+    def _next_event_id(self, prefix: str) -> str:
+        self._event_seq += 1
+        return f"{prefix}_t{self.track_id}_{self.zone_id}_{self._event_seq:03d}"
+
+    def current_dwell_seconds(self) -> float:
+        """Return accumulated dwell seconds for the current active/triggered stay."""
+        if self.state == "outside":
+            return 0.0
+        return max(0.0, self.last_inside_time - self.enter_time)
+
+    def step(
+        self,
+        frame_id: int,
+        timestamp: float,
+        is_inside: bool,
+    ) -> list[EventRecord]:
+        """Advance state machine by one frame observation and return any emitted events."""
+        emitted: list[EventRecord] = []
+
+        if self.state == "outside":
+            if not is_inside:
+                return emitted
+            self._stay_index += 1
+            self.state = "candidate"
+            self.peak_state = "candidate"
+            self.enter_frame = frame_id
+            self.enter_time = timestamp
+            self.last_inside_frame = frame_id
+            self.last_inside_time = timestamp
+            self.inside_frames = 1
+            self.outside_streak = 0
+            self.first_outside_frame = frame_id
+            self.first_outside_time = timestamp
+            self.flicker_absorbed_count = 0
+            self.transitions = [
+                {
+                    "frame_id": frame_id,
+                    "timestamp": round(timestamp, 4),
+                    "from": "outside",
+                    "to": "candidate",
+                    "reason": "entered_zone",
+                }
+            ]
+            emitted.extend(self._promote_if_eligible(frame_id, timestamp))
+            return emitted
+
+        # Currently in candidate, active, or triggered
+        if is_inside:
+            if self.outside_streak > 0:
+                self.flicker_absorbed_count += 1
+                self.transitions.append(
+                    {
+                        "frame_id": frame_id,
+                        "timestamp": round(timestamp, 4),
+                        "from": self.state,
+                        "to": self.state,
+                        "reason": f"flicker_absorbed_after_{self.outside_streak}_frames",
+                    }
+                )
+                self.outside_streak = 0
+            self.last_inside_frame = frame_id
+            self.last_inside_time = timestamp
+            self.inside_frames += 1
+            emitted.extend(self._promote_if_eligible(frame_id, timestamp))
+            return emitted
+
+        # Observation is outside while stay is open
+        if self.outside_streak == 0:
+            self.first_outside_frame = frame_id
+            self.first_outside_time = timestamp
+        self.outside_streak += 1
+
+        if self.outside_streak > self.config.grace_frames:
+            emitted.extend(
+                self._resolve_current_stay(
+                    resolved_frame=self.first_outside_frame,
+                    resolved_time=self.first_outside_time,
+                    reason="exited",
+                    track_lost=False,
+                )
+            )
+        return emitted
+
+    def finish_track(self) -> list[EventRecord]:
+        """Resolve any open stay when the track terminates (track loss inside zone)."""
+        if self.state == "outside":
+            return []
+        return self._resolve_current_stay(
+            resolved_frame=self.last_inside_frame,
+            resolved_time=self.last_inside_time,
+            reason="track_lost_in_zone",
+            track_lost=True,
+        )
+
+    def _promote_if_eligible(
+        self,
+        frame_id: int,
+        timestamp: float,
+    ) -> list[EventRecord]:
+        emitted: list[EventRecord] = []
+        if (
+            self.state == "candidate"
+            and self.inside_frames >= self.config.min_entry_frames
+        ):
+            self.state = "active"
+            self.peak_state = "active"
+            self.transitions.append(
+                {
+                    "frame_id": frame_id,
+                    "timestamp": round(timestamp, 4),
+                    "from": "candidate",
+                    "to": "active",
+                    "reason": "min_entry_frames_met",
+                }
+            )
+            emitted.append(
+                EventRecord(
+                    event_id=self._next_event_id("entry"),
+                    event_type="zone_entry",
+                    track_id=self.track_id,
+                    zone_id=self.zone_id,
+                    start_time=self.enter_time,
+                    end_time=self.enter_time,
+                    duration_seconds=0.0,
+                    start_frame=self.enter_frame,
+                    end_frame=self.enter_frame,
+                )
+            )
+
+        if (
+            self.state == "active"
+            and self.current_dwell_seconds() >= self.dwell_threshold - 1e-9
+        ):
+            self.state = "triggered"
+            self.peak_state = "triggered"
+            self.transitions.append(
+                {
+                    "frame_id": frame_id,
+                    "timestamp": round(timestamp, 4),
+                    "from": "active",
+                    "to": "triggered",
+                    "reason": "dwell_threshold_reached",
+                }
+            )
+        return emitted
+
+    def _resolve_current_stay(
+        self,
+        *,
+        resolved_frame: int,
+        resolved_time: float,
+        reason: str,
+        track_lost: bool,
+    ) -> list[EventRecord]:
+        emitted: list[EventRecord] = []
+        duration = self.current_dwell_seconds()
+        prior_state = self.state
+        resolution_label = (
+            "discarded_candidate" if prior_state == "candidate" else reason
+        )
+
+        self.transitions.append(
+            {
+                "frame_id": resolved_frame,
+                "timestamp": round(resolved_time, 4),
+                "from": prior_state,
+                "to": "resolved",
+                "reason": resolution_label,
+            }
+        )
+
+        if prior_state == "triggered":
+            emitted.append(
+                EventRecord(
+                    event_id=self._next_event_id("dwell"),
+                    event_type="dwell_time_event",
+                    track_id=self.track_id,
+                    zone_id=self.zone_id,
+                    start_time=self.enter_time,
+                    end_time=self.last_inside_time,
+                    duration_seconds=duration,
+                    start_frame=self.enter_frame,
+                    end_frame=self.last_inside_frame,
+                )
+            )
+
+        if prior_state in {"active", "triggered"} and not track_lost:
+            emitted.append(
+                EventRecord(
+                    event_id=self._next_event_id("exit"),
+                    event_type="zone_exit",
+                    track_id=self.track_id,
+                    zone_id=self.zone_id,
+                    start_time=resolved_time,
+                    end_time=resolved_time,
+                    duration_seconds=0.0,
+                    start_frame=resolved_frame,
+                    end_frame=resolved_frame,
+                )
+            )
+
+        self.completed_traces.append(
+            StayDebugTrace(
+                stay_id=f"stay_t{self.track_id}_{self.zone_id}_{self._stay_index:03d}",
+                track_id=self.track_id,
+                zone_id=self.zone_id,
+                enter_frame=self.enter_frame,
+                enter_time=self.enter_time,
+                last_inside_frame=self.last_inside_frame,
+                last_inside_time=self.last_inside_time,
+                resolved_frame=resolved_frame,
+                resolved_time=resolved_time,
+                duration_seconds=duration,
+                peak_state=self.peak_state,
+                resolution_reason=resolution_label,
+                track_lost_in_zone=track_lost,
+                flicker_absorbed_count=self.flicker_absorbed_count,
+                transitions=tuple(self.transitions),
+            )
+        )
+        self.state = "outside"
+        self.outside_streak = 0
+        self.inside_frames = 0
+        return emitted
