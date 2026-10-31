@@ -6,7 +6,8 @@ visual proof renderers, and CLI entrypoint.
 
 from __future__ import annotations
 
-from collections.abc import Mapping
+import csv
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
@@ -212,3 +213,65 @@ def save_events_config(path: Path | str, config: EventConfig) -> Path:
         encoding="utf-8",
     )
     return out_path
+
+
+def write_events_csv(
+    path: Path | str,
+    events: Sequence[EventRecord],
+) -> Path:
+    """Write structured events to CSV matching EVENTS_CSV_HEADER."""
+    out_path = Path(path)
+    out_path.parent.mkdir(parents=True, exist_ok=True)
+    ordered = sorted(
+        events,
+        key=lambda item: (
+            item.start_time,
+            item.end_time,
+            item.track_id,
+            item.event_type,
+            item.zone_id,
+            item.event_id,
+        ),
+    )
+    with out_path.open("w", newline="", encoding="utf-8") as handle:
+        writer = csv.writer(handle)
+        writer.writerow(EVENTS_CSV_HEADER)
+        for ev in ordered:
+            writer.writerow(ev.to_row())
+    return out_path
+
+
+def read_events_csv(path: Path | str) -> list[EventRecord]:
+    """Read an events.csv file into ordered EventRecord instances."""
+    in_path = Path(path)
+    events: list[EventRecord] = []
+    with in_path.open("r", newline="", encoding="utf-8") as handle:
+        reader = csv.reader(handle)
+        header = next(reader, None)
+        if header != EVENTS_CSV_HEADER:
+            raise ValueError(f"Expected CSV header {EVENTS_CSV_HEADER}, got {header!r}")
+        for row in reader:
+            if not row:
+                continue
+            events.append(
+                EventRecord(
+                    event_id=row[0],
+                    event_type=row[1],
+                    track_id=int(row[2]),
+                    zone_id=row[3],
+                    start_time=float(row[4]),
+                    end_time=float(row[5]),
+                    duration_seconds=float(row[6]),
+                )
+            )
+    return sorted(
+        events,
+        key=lambda item: (
+            item.start_time,
+            item.end_time,
+            item.track_id,
+            item.event_type,
+            item.zone_id,
+            item.event_id,
+        ),
+    )
