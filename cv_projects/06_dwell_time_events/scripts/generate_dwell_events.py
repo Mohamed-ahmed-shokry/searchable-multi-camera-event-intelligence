@@ -8,7 +8,10 @@ from __future__ import annotations
 
 from collections.abc import Mapping
 from dataclasses import dataclass, field
+from pathlib import Path
 from typing import Any
+
+import yaml
 
 EVENTS_CSV_HEADER: list[str] = [
     "event_id",
@@ -161,3 +164,51 @@ class StayDebugTrace:
             "flicker_absorbed_count": self.flicker_absorbed_count,
             "transitions": list(self.transitions),
         }
+
+
+def load_events_config(path: Path | str | None = None) -> EventConfig:
+    """Load and validate a Phase 6 events.yaml configuration file."""
+    if path is None:
+        return EventConfig()
+    cfg_path = Path(path)
+    if not cfg_path.exists():
+        return EventConfig()
+
+    raw: Any = yaml.safe_load(cfg_path.read_text(encoding="utf-8")) or {}
+    if not isinstance(raw, dict):
+        raise TypeError(f"Expected mapping in {cfg_path}, got {type(raw).__name__}")
+
+    per_zone_raw = raw.get("per_zone_min_dwell_seconds") or {}
+    if not isinstance(per_zone_raw, dict):
+        raise TypeError("per_zone_min_dwell_seconds must be a mapping")
+
+    return EventConfig(
+        min_dwell_seconds=float(raw.get("min_dwell_seconds", 1.2)),
+        min_entry_frames=int(raw.get("min_entry_frames", 1)),
+        grace_frames=int(raw.get("grace_frames", 5)),
+        line_cooldown_frames=int(raw.get("line_cooldown_frames", 5)),
+        include_line_crossings=bool(raw.get("include_line_crossings", True)),
+        per_zone_min_dwell_seconds={str(k): float(v) for k, v in per_zone_raw.items()},
+    )
+
+
+def save_events_config(path: Path | str, config: EventConfig) -> Path:
+    """Serialize an EventConfig to YAML matching configs/events.yaml."""
+    out_path = Path(path)
+    out_path.parent.mkdir(parents=True, exist_ok=True)
+    payload: dict[str, Any] = {
+        "min_dwell_seconds": round(float(config.min_dwell_seconds), 4),
+        "min_entry_frames": int(config.min_entry_frames),
+        "grace_frames": int(config.grace_frames),
+        "line_cooldown_frames": int(config.line_cooldown_frames),
+        "include_line_crossings": bool(config.include_line_crossings),
+        "per_zone_min_dwell_seconds": {
+            str(k): round(float(v), 4)
+            for k, v in config.per_zone_min_dwell_seconds.items()
+        },
+    }
+    out_path.write_text(
+        yaml.safe_dump(payload, sort_keys=False),
+        encoding="utf-8",
+    )
+    return out_path
