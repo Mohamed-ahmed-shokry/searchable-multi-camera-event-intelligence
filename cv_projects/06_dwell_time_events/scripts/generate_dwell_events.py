@@ -28,7 +28,7 @@ except ImportError:
     )
     if str(_subproject_5_scripts) not in sys.path:
         sys.path.insert(0, str(_subproject_5_scripts))
-    from reason_zones_lines import (  # noqa: F401
+    from reason_zones_lines import (
         SceneConfig,
         TrajectoryPoint,
         detect_line_signals,
