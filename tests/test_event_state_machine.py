@@ -286,5 +286,41 @@ class HysteresisAndFlickerTests(unittest.TestCase):
         )
 
 
+class TrackLossInZoneTests(unittest.TestCase):
+    def test_finish_track_resolves_open_stay_at_last_inside_time_and_flags_loss(self):
+        cfg = EventConfig(
+            min_dwell_seconds=1.5,
+            min_entry_frames=1,
+            grace_frames=5,
+        )
+        sm = ZoneDwellStateMachine(track_id=7, zone_id="right_aisle", config=cfg)
+
+        emitted: list[EventRecord] = []
+        emitted.extend(sm.step(10, 1.0, is_inside=True))
+        emitted.extend(sm.step(20, 2.0, is_inside=True))
+        emitted.extend(sm.step(30, 3.0, is_inside=True))  # duration 2.0s >= 1.5s
+        self.assertEqual(sm.state, "triggered")
+
+        # Track disappears after 1 outside frame (within grace_frames=5)
+        emitted.extend(sm.step(31, 3.1, is_inside=False))
+        emitted.extend(sm.finish_track())
+
+        self.assertEqual(sm.state, "outside")
+        self.assertEqual(
+            [e.event_type for e in emitted],
+            ["zone_entry", "dwell_time_event"],
+        )
+        dwell = emitted[1]
+        self.assertAlmostEqual(dwell.start_time, 1.0)
+        self.assertAlmostEqual(dwell.end_time, 3.0)
+        self.assertAlmostEqual(dwell.duration_seconds, 2.0)
+
+        trace = sm.completed_traces[0]
+        self.assertTrue(trace.track_lost_in_zone)
+        self.assertEqual(trace.resolution_reason, "track_lost_in_zone")
+        self.assertEqual(trace.resolved_frame, 30)
+        self.assertAlmostEqual(trace.resolved_time, 3.0)
+
+
 if __name__ == "__main__":
     unittest.main()
