@@ -9,14 +9,19 @@
 
 from __future__ import annotations
 
+import tempfile
 import unittest
+from pathlib import Path
 
 from generate_dwell_events import (
     EVENTS_CSV_HEADER,
     EventConfig,
     EventRecord,
     StayDebugTrace,
+    load_events_config,
+    save_events_config,
 )
+from helpers import PROJECT_ROOT
 
 
 class EventDataStructuresTests(unittest.TestCase):
@@ -109,6 +114,31 @@ class EventDataStructuresTests(unittest.TestCase):
         d = trace.to_dict()
         self.assertEqual(d["stay_id"], "stay_t1_z1_1")
         self.assertEqual(d["flicker_absorbed_count"], 1)
+
+    def test_load_and_save_events_config_round_trip(self):
+        default_yaml = (
+            PROJECT_ROOT
+            / "cv_projects"
+            / "06_dwell_time_events"
+            / "configs"
+            / "events.yaml"
+        )
+        cfg = load_events_config(default_yaml)
+        self.assertAlmostEqual(cfg.min_dwell_seconds, 1.2)
+        self.assertEqual(cfg.grace_frames, 5)
+        self.assertAlmostEqual(cfg.zone_threshold("right_aisle"), 1.5)
+        self.assertEqual(load_events_config(None), EventConfig())
+
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            out_path = save_events_config(root / "events.yaml", cfg)
+            reloaded = load_events_config(out_path)
+            self.assertEqual(reloaded, cfg)
+
+            bad_yaml = root / "bad.yaml"
+            bad_yaml.write_text("- not-a-mapping\n", encoding="utf-8")
+            with self.assertRaises(TypeError):
+                load_events_config(bad_yaml)
 
 
 if __name__ == "__main__":
