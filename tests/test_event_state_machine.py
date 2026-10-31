@@ -9,6 +9,7 @@
 
 from __future__ import annotations
 
+import csv
 import tempfile
 import unittest
 from pathlib import Path
@@ -19,7 +20,9 @@ from generate_dwell_events import (
     EventRecord,
     StayDebugTrace,
     load_events_config,
+    read_events_csv,
     save_events_config,
+    write_events_csv,
 )
 from helpers import PROJECT_ROOT
 
@@ -139,6 +142,27 @@ class EventDataStructuresTests(unittest.TestCase):
             bad_yaml.write_text("- not-a-mapping\n", encoding="utf-8")
             with self.assertRaises(TypeError):
                 load_events_config(bad_yaml)
+
+
+class EventsCsvRoundTripTests(unittest.TestCase):
+    def test_write_and_read_events_csv_orders_and_validates_header(self):
+        e_exit = EventRecord("e2", "zone_exit", 1, "z1", 3.0, 3.0, 0.0)
+        e_enter = EventRecord("e1", "zone_entry", 1, "z1", 1.0, 1.0, 0.0)
+        e_dwell = EventRecord("e3", "dwell_time_event", 1, "z1", 1.0, 3.0, 2.0)
+
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            csv_path = write_events_csv(root / "events.csv", [e_exit, e_dwell, e_enter])
+            with csv_path.open("r", encoding="utf-8") as handle:
+                rows = list(csv.reader(handle))
+            self.assertEqual(rows[0], EVENTS_CSV_HEADER)
+            loaded = read_events_csv(csv_path)
+            self.assertEqual(loaded, [e_enter, e_dwell, e_exit])
+
+            bad_csv = root / "bad.csv"
+            bad_csv.write_text("wrong,header\n1,2\n", encoding="utf-8")
+            with self.assertRaises(ValueError):
+                read_events_csv(bad_csv)
 
 
 if __name__ == "__main__":
