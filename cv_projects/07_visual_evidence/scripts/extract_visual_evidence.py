@@ -582,3 +582,38 @@ def render_evidence_contact_sheet(
         sheet[y0 : y0 + cell_h, x0 : x0 + tw] = cell
 
     return sheet
+
+
+def verify_evidence_records(
+    records: Sequence[EvidenceEventRecord],
+    *,
+    base_dir: Path | str,
+) -> dict[str, Any]:
+    """Verify that all ``snapshot_path`` and ``crop_path`` entries resolve to non-empty files."""
+    root = Path(base_dir)
+    missing_snapshots: list[str] = []
+    missing_crops: list[str] = []
+    resolved_snapshots = 0
+    resolved_crops = 0
+
+    for rec in records:
+        snap_file = root / rec.snapshot_path
+        if snap_file.is_file() and snap_file.stat().st_size > 0:
+            resolved_snapshots += 1
+        else:
+            missing_snapshots.append(rec.snapshot_path)
+
+        crop_file = root / rec.crop_path
+        if crop_file.is_file() and crop_file.stat().st_size > 0:
+            resolved_crops += 1
+        else:
+            missing_crops.append(rec.crop_path)
+
+    return {
+        "total_records": len(records),
+        "resolved_snapshots": resolved_snapshots,
+        "resolved_crops": resolved_crops,
+        "missing_or_empty_snapshots": missing_snapshots,
+        "missing_or_empty_crops": missing_crops,
+        "all_paths_valid": not missing_snapshots and not missing_crops,
+    }
