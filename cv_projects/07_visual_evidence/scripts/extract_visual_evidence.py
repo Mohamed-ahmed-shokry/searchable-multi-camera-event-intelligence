@@ -7,12 +7,22 @@ from __future__ import annotations
 
 import csv
 import sys
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import Any
 
 import yaml
+
+try:
+    from track_people import FrameTracks, TrackDetection
+except ImportError:
+    _subproject_3_scripts = (
+        Path(__file__).resolve().parents[2] / "03_person_tracking" / "scripts"
+    )
+    if str(_subproject_3_scripts) not in sys.path:
+        sys.path.insert(0, str(_subproject_3_scripts))
+    from track_people import FrameTracks, TrackDetection
 
 try:
     from generate_dwell_events import VALID_EVENT_TYPES, EventRecord
@@ -282,3 +292,118 @@ def read_evidence_events_csv(csv_path: Path | str) -> list[EvidenceEventRecord]:
                 )
             )
     return records
+
+
+def index_track_detections(
+    frame_tracks: Sequence[FrameTracks],
+) -> dict[int, dict[int, TrackDetection]]:
+    """Index person detections by track_id -> {frame_id: TrackDetection}."""
+    by_track: dict[int, dict[int, TrackDetection]] = {}
+    for ft in frame_tracks:
+        for det in ft.tracks:
+            track_map = by_track.setdefault(det.track_id, {})
+            existing = track_map.get(det.frame_id)
+            if existing is None or det.confidence > existing.confidence:
+                track_map[det.frame_id] = det
+    return by_track
+
+
+def select_best_frame_for_event(
+    event: EventRecord,
+    track_detections: Mapping[int, Mapping[int, TrackDetection]],
+    *,
+    fps: float,
+    strategy: str = "highest_confidence",
+) -> BestFrameSelection:
+    """Select the representative best frame and bounding box for an EventRecord.
+
+    Rule:
+    1. Convert the event time window ``[start_time, end_time]`` into a frame window
+       ``[min_frame, max_frame]`` via ``round(time * fps)``.
+    2. Collect all tracked observations of ``event.track_id`` in ``[min_frame, max_frame]``.
+    3. If non-empty, rank candidates according to ``strategy``:
+       - ``"highest_confidence"``: highest detector confidence, tie-breaking by
+         largest bounding-box area ``(x2 - x1) * (y2 - y1)``, then earliest ``frame_id``.
+       - ``"largest_area"``: largest bounding-box area, tie-breaking by highest
+         confidence, then earliest ``frame_id``.
+       - ``"midpoint"``: frame closest to ``(min_frame + max_frame) / 2.0``,
+         tie-breaking by highest confidence, then earliest ``frame_id``.
+       - ``"start_frame"``: earliest ``frame_id`` in the event window.
+    4. If ``[min_frame, max_frame]`` contains no observation for ``event.track_id``
+       (e.g. an interpolated gap), fall back to the temporally closest tracked
+       frame of ``event.track_id`` and mark ``used_nearest_fallback=True``.
+    """
+    if fps <= 0.0:
+        raise ValueError(f"fps must be > 0.0, got {fps}")
+    if strategy not in VALID_BEST_FRAME_STRATEGIES:
+        raise ValueError(
+            f"strategy must be one of {VALID_BEST_FRAME_STRATEGIES}, got {strategy!r}"
+        )
+
+    per_frame = track_detections.get(event.track_id)
+    if not per_frame:
+        raise KeyError(
+            f"No tracked detections found for track_id={event.track_id} "
+            f"(event_id={event.event_id!r})"
+        )
+
+    min_frame = max(0, round(event.start_time * fps))
+    max_frame = max(min_frame, round(event.end_time * fps))
+
+    candidates: list[tuple[int, TrackDetection]] = [
+        (fid, det)
+        for fid, det in sorted(per_frame.items())
+        if min_frame <= fid <= max_frame
+    ]
+
+    used_fallback = False
+    if not candidates:
+        used_fallback = True
+        mid_frame = (min_frame + max_frame) / 2.0
+        chosen_fid, chosen_det = min(
+            per_frame.items(),
+            key=lambda item: (abs(item[0] - mid_frame), -item[1].confidence, item[0]),
+        )
+    elif strategy == "highest_confidence":
+        chosen_fid, chosen_det = max(
+            candidates,
+            key=lambda item: (
+                item[1].confidence,
+                (item[1].x2 - item[1].x1) * (item[1].y2 - item[1].y1),
+                -item[0],
+            ),
+        )
+    elif strategy == "largest_area":
+        chosen_fid, chosen_det = max(
+            candidates,
+            key=lambda item: (
+                (item[1].x2 - item[1].x1) * (item[1].y2 - item[1].y1),
+                item[1].confidence,
+                -item[0],
+            ),
+        )
+    elif strategy == "midpoint":
+        mid_frame = (min_frame + max_frame) / 2.0
+        chosen_fid, chosen_det = min(
+            candidates,
+            key=lambda item: (
+                abs(item[0] - mid_frame),
+                -item[1].confidence,
+                item[0],
+            ),
+        )
+    else:  # "start_frame"
+        chosen_fid, chosen_det = min(candidates, key=lambda item: item[0])
+
+    return BestFrameSelection(
+        event_id=event.event_id,
+        track_id=event.track_id,
+        frame_id=chosen_fid,
+        x1=chosen_det.x1,
+        y1=chosen_det.y1,
+        x2=chosen_det.x2,
+        y2=chosen_det.y2,
+        confidence=chosen_det.confidence,
+        strategy_used=strategy,
+        used_nearest_fallback=used_fallback,
+    )
