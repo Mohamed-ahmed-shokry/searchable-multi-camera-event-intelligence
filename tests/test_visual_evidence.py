@@ -452,7 +452,7 @@ def test_run_visual_evidence_pipeline_and_cli_end_to_end(tmp_path: Path) -> None
         )
         for i in range(6)
     ]
-    write_tracks_csv(frame_tracks, tracks_csv)
+    write_tracks_csv(tracks_csv, frame_tracks)
 
     events = [
         EventRecord(
