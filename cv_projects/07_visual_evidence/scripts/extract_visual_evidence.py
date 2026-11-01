@@ -12,6 +12,7 @@ from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import Any
 
+import numpy as np
 import yaml
 
 try:
@@ -407,3 +408,41 @@ def select_best_frame_for_event(
         strategy_used=strategy,
         used_nearest_fallback=used_fallback,
     )
+
+
+def extract_person_crop(
+    frame: np.ndarray,
+    selection: BestFrameSelection,
+    *,
+    padding_ratio: float = 0.10,
+    min_padding_px: int = 8,
+) -> tuple[np.ndarray, bool]:
+    """Extract a padded person crop from ``frame`` clamped to frame boundaries.
+
+    Returns ``(crop_bgr, clipped_at_frame_edge)``.
+    """
+    if frame.ndim < 2 or frame.shape[0] == 0 or frame.shape[1] == 0:
+        raise ValueError(f"Invalid frame shape for cropping: {frame.shape}")
+
+    height, width = int(frame.shape[0]), int(frame.shape[1])
+    box_w = max(1.0, selection.x2 - selection.x1)
+    box_h = max(1.0, selection.y2 - selection.y1)
+
+    pad_x = max(min_padding_px, round(box_w * padding_ratio))
+    pad_y = max(min_padding_px, round(box_h * padding_ratio))
+
+    raw_x1 = round(selection.x1) - pad_x
+    raw_y1 = round(selection.y1) - pad_y
+    raw_x2 = round(selection.x2) + pad_x
+    raw_y2 = round(selection.y2) + pad_y
+
+    clipped_at_frame_edge = (
+        raw_x1 < 0 or raw_y1 < 0 or raw_x2 > width or raw_y2 > height
+    )
+
+    crop_x1 = max(0, min(width - 1, raw_x1))
+    crop_y1 = max(0, min(height - 1, raw_y1))
+    crop_x2 = max(crop_x1 + 1, min(width, raw_x2))
+    crop_y2 = max(crop_y1 + 1, min(height, raw_y2))
+
+    return frame[crop_y1:crop_y2, crop_x1:crop_x2].copy(), clipped_at_frame_edge
