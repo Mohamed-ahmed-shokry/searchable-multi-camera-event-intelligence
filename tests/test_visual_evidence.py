@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from pathlib import Path
+
 import pytest
 from extract_visual_evidence import (
     EVIDENCE_EVENTS_CSV_HEADER,
@@ -7,6 +9,8 @@ from extract_visual_evidence import (
     EventRecord,
     EvidenceConfig,
     EvidenceEventRecord,
+    load_evidence_config,
+    save_evidence_config,
 )
 
 
@@ -98,3 +102,40 @@ def test_evidence_event_record_validation_and_to_row() -> None:
             snapshot_path="snapshots/evt_0001_3.jpg",
             crop_path="   ",
         )
+
+
+def test_evidence_config_yaml_round_trip(tmp_path: Path) -> None:
+    cfg = EvidenceConfig(
+        best_frame_strategy="midpoint",
+        crop_padding_ratio=0.15,
+        min_padding_px=12,
+        jpeg_quality=95,
+        overlay_scene_geometry=False,
+        contact_sheet_columns=3,
+        contact_sheet_max_items=9,
+    )
+    yaml_path = tmp_path / "evidence.yaml"
+    save_evidence_config(cfg, yaml_path)
+    loaded = load_evidence_config(yaml_path)
+    assert loaded == cfg
+
+    default_yaml = (
+        Path(__file__).resolve().parents[1]
+        / "cv_projects"
+        / "07_visual_evidence"
+        / "configs"
+        / "evidence.yaml"
+    )
+    assert load_evidence_config(default_yaml) == EvidenceConfig()
+
+    empty_yaml = tmp_path / "empty.yaml"
+    empty_yaml.write_text("", encoding="utf-8")
+    assert load_evidence_config(empty_yaml) == EvidenceConfig()
+
+    bad_yaml = tmp_path / "bad.yaml"
+    bad_yaml.write_text("- item1\n- item2\n", encoding="utf-8")
+    with pytest.raises(TypeError, match="Expected YAML mapping"):
+        load_evidence_config(bad_yaml)
+
+    with pytest.raises(FileNotFoundError):
+        load_evidence_config(tmp_path / "missing.yaml")
