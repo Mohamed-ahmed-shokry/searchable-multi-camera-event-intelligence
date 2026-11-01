@@ -111,6 +111,9 @@ uv run --locked python cv_projects/05_zone_line_reasoning/scripts/reason_zones_l
 
 # Run Phase 6 stateful dwell-time event generation (runs in the default locked environment)
 uv run --locked python cv_projects/06_dwell_time_events/scripts/generate_dwell_events.py <source_path> --trajectories-csv <trajectories.csv>
+
+# Run Phase 7 visual evidence extraction (runs in the default locked environment)
+uv run --locked python cv_projects/07_visual_evidence/scripts/extract_visual_evidence.py --source <source_path> --events <events.csv> --tracks <tracks.csv>
 ```
 
 The two detection extras conflict intentionally; do not use `--all-extras`.
@@ -337,7 +340,7 @@ These can be valuable later, but the first priority is a working CV intelligence
 
 ## Repository Status
 
-The repository has completed **Phase 0 (Foundation)**, **Phase 1 (Video Inspection & Dataset Validation)**, **Phase 2 (Person Detection)**, **Phase 3 (Person Tracking & Early Quantitative MOT17 Checkpoint)**, **Phase 4 (Trajectory Extraction)**, **Phase 5 (Zone and Line Reasoning)**, and **Phase 6 (Dwell-Time Events)**.
+The repository has completed **Phase 0 (Foundation)**, **Phase 1 (Video Inspection & Dataset Validation)**, **Phase 2 (Person Detection)**, **Phase 3 (Person Tracking & Early Quantitative MOT17 Checkpoint)**, **Phase 4 (Trajectory Extraction)**, **Phase 5 (Zone and Line Reasoning)**, **Phase 6 (Dwell-Time Events)**, and **Phase 7 (Visual Evidence)**.
 
 Completed capabilities:
 
@@ -347,11 +350,12 @@ Completed capabilities:
 - `cv_projects/04_trajectory_extraction/` — ordered ground-plane trajectories (`trajectories.csv`), per-track path-length summaries (`track_summary.csv`), causal rolling-mean smoothing, static `trajectory_map.png`, and `trajectory_overlay_video.mp4`
 - `cv_projects/05_zone_line_reasoning/` — named polygon zones and directed tripwire lines (`scene_config.yaml`), visual scene authoring (`define_scene_geometry.py`), `zone_enter`/`zone_exit`/`line_cross` signals (`zone_line_events.csv`), boundary flicker analysis, and `annotated_spatial_video.mp4`
 - `cv_projects/06_dwell_time_events/` — stateful `ZoneDwellStateMachine` (`candidate -> active -> triggered -> resolved`), hysteresis grace-period flicker absorption, track-loss-in-zone handling, `events.csv`, `event_debug_log/`, `dwell_examples/`, and `annotated_events_video.mp4`
+- `cv_projects/07_visual_evidence/` — configurable best-frame selection (`highest_confidence`, `largest_area`, `midpoint`, `start_frame`), annotated full-frame snapshots (`snapshots/<event_id>_<track_id>.jpg`), padded person crops (`crops/<event_id>_<track_id>.jpg`), enriched 9-column `events.csv`, contact sheet (`evidence_contact_sheet.jpg`), and automated path verification
 
 Next recommended step:
 
 ```text
-Start Phase 7 — Visual Evidence (cv_projects/07_visual_evidence/)
+Start Phase 8 — Heatmaps and Analytics (cv_projects/08_heatmaps_analytics/)
 ```
 
 ## License
