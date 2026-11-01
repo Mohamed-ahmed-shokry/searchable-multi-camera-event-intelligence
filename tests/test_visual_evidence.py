@@ -10,7 +10,9 @@ from extract_visual_evidence import (
     EvidenceConfig,
     EvidenceEventRecord,
     load_evidence_config,
+    read_evidence_events_csv,
     save_evidence_config,
+    write_evidence_events_csv,
 )
 
 
@@ -139,3 +141,42 @@ def test_evidence_config_yaml_round_trip(tmp_path: Path) -> None:
 
     with pytest.raises(FileNotFoundError):
         load_evidence_config(tmp_path / "missing.yaml")
+
+
+def test_evidence_events_csv_round_trip(tmp_path: Path) -> None:
+    records = [
+        EvidenceEventRecord(
+            event_id="evt_0001",
+            event_type="zone_entry",
+            track_id=1,
+            zone_id="zone_center",
+            start_time=0.5,
+            end_time=0.5,
+            duration_seconds=0.0,
+            snapshot_path="snapshots/evt_0001_1.jpg",
+            crop_path="crops/evt_0001_1.jpg",
+        ),
+        EvidenceEventRecord(
+            event_id="evt_0002",
+            event_type="dwell_time_event",
+            track_id=1,
+            zone_id="zone_center",
+            start_time=0.5,
+            end_time=4.25,
+            duration_seconds=3.75,
+            snapshot_path="snapshots/evt_0002_1.jpg",
+            crop_path="crops/evt_0002_1.jpg",
+        ),
+    ]
+    csv_path = tmp_path / "events.csv"
+    write_evidence_events_csv(records, csv_path)
+    loaded = read_evidence_events_csv(csv_path)
+    assert loaded == records
+
+    bad_header = tmp_path / "bad_header.csv"
+    bad_header.write_text("event_id,event_type\n1,zone_entry\n", encoding="utf-8")
+    with pytest.raises(ValueError, match="Unexpected events.csv header"):
+        read_evidence_events_csv(bad_header)
+
+    with pytest.raises(FileNotFoundError):
+        read_evidence_events_csv(tmp_path / "missing_events.csv")
