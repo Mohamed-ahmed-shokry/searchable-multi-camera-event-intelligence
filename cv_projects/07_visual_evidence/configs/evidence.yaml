@@ -1,0 +1,10 @@
+# Phase 7: Visual Evidence Configuration
+# Best-frame selection strategies: highest_confidence | midpoint | start_frame | largest_area
+
+best_frame_strategy: highest_confidence
+crop_padding_ratio: 0.10
+min_padding_px: 8
+jpeg_quality: 92
+overlay_scene_geometry: true
+contact_sheet_columns: 4
+contact_sheet_max_items: 12
