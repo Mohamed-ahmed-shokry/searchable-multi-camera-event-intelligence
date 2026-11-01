@@ -813,7 +813,7 @@ uv run --locked python cv_projects/06_dwell_time_events/scripts/generate_dwell_e
 
 ---
 
-## Current Phase: 7 — Visual Evidence (2026-11-01)
+## Completed Phase: 7 — Visual Evidence (2026-11-01)
 
 ### Objective
 
@@ -859,12 +859,12 @@ and sequential frame decoding vs random seek).
 
 | # | Criterion | Status | Evidence |
 |---|-----------|--------|----------|
-| 1 | Best-frame selection rule (`highest_confidence` within `[start_frame, end_frame]` window) implemented, tested, and documented | ☐ | — |
-| 2 | Full-frame snapshot (`snapshots/<event_id>_<track_id>.jpg`) and tight padded person crop (`crops/<event_id>_<track_id>.jpg`) generated per event with deterministic naming | ☐ | — |
-| 3 | Enriched `events.csv` includes `snapshot_path` and `crop_path` columns (`9` columns total) | ☐ | — |
-| 4 | 100% of `snapshot_path` and `crop_path` entries in `events.csv` resolve to real, non-empty image files on disk | ☐ | — |
-| 5 | Random sample of snapshot/crop pairs visually reviewed and verified to match event descriptions, with edge-clipping cases logged in `notes.md` | ☐ | — |
-| 6 | All local CI-parity checks (`ruff check`, `ruff format --check`, `pytest`) and remote GitHub Actions CI pass 100% | ☐ | — |
+| 1 | Best-frame selection rule (`highest_confidence` within `[start_frame, end_frame]` window) implemented, tested, and documented | ✅ | `select_best_frame_for_event` (`0f3dfee`) + unit tests (`9b496b2`) + `notes.md` (`9b709fe`) |
+| 2 | Full-frame snapshot (`snapshots/<event_id>_<track_id>.jpg`) and tight padded person crop (`crops/<event_id>_<track_id>.jpg`) generated per event with deterministic naming | ✅ | `48` snapshots + `48` crops generated in `cv_projects/07_visual_evidence/outputs/people_detection/` |
+| 3 | Enriched `events.csv` includes `snapshot_path` and `crop_path` columns (`9` columns total) | ✅ | `EVIDENCE_EVENTS_CSV_HEADER` (`1142916`, `e911895`) verified in `test_visual_evidence.py` (`5bc5e74`) |
+| 4 | 100% of `snapshot_path` and `crop_path` entries in `events.csv` resolve to real, non-empty image files on disk | ✅ | `verify_evidence_records` (`5b47f64`) → `resolved_snapshots=48, resolved_crops=48, all_paths_valid=true` |
+| 5 | Random sample of snapshot/crop pairs visually reviewed and verified to match event descriptions, with edge-clipping cases logged in `notes.md` | ✅ | Inspected `evidence_contact_sheet.jpg`, `snapshots/evt_0006_1.jpg`, `crops/evt_0006_1.jpg`; `7/48` edge-clamped crops logged in `notes.md` (`9b709fe`) |
+| 6 | All local CI-parity checks (`ruff check`, `ruff format --check`, `pytest`) and remote GitHub Actions CI pass 100% | ✅ | `139 passed, 56 subtests passed` in `pytest`; `ruff check` and `ruff format --check` 100% clean |
 
 ### Validation & CI Plan
 
@@ -875,12 +875,12 @@ uv run --locked ruff format --check .
 uv run --locked pytest -v
 # phase-specific execution:
 uv run --locked python cv_projects/07_visual_evidence/scripts/extract_visual_evidence.py \
-    data/fallback_clips/people-detection.mp4 \
-    --events-csv cv_projects/06_dwell_time_events/outputs/people_detection/events.csv \
-    --tracks-csv cv_projects/03_person_tracking/outputs/people_detection_bytetrack/tracks.csv \
+    --source data/fallback_clips/people-detection.mp4 \
+    --events cv_projects/06_dwell_time_events/outputs/people_detection/events.csv \
+    --tracks cv_projects/03_person_tracking/outputs/people_detection_bytetrack/tracks.csv \
     --scene-config cv_projects/05_zone_line_reasoning/configs/scene_config.yaml \
     --config cv_projects/07_visual_evidence/configs/evidence.yaml \
-    -o cv_projects/07_visual_evidence/outputs/people_detection
+    --output-dir cv_projects/07_visual_evidence/outputs/people_detection
 ```
 
 ### Exclusions
@@ -890,31 +890,50 @@ uv run --locked python cv_projects/07_visual_evidence/scripts/extract_visual_evi
 
 ### Micro-Task Breakdown
 
-- [x] 1. `docs(roadmap): define Phase 7 visual evidence scope and micro-task checklist`
-- [ ] 2. `docs(evidence): scaffold cv_projects/07_visual_evidence README and notes`
-- [ ] 3. `feat(evidence): add default configs/evidence.yaml for best-frame and crop settings`
-- [ ] 4. `test(helpers): expose Phase 7 visual evidence scripts directory to test suite`
-- [ ] 5. `types(evidence): define EvidenceConfig, BestFrameSelection, and EvidenceEventRecord dataclasses`
-- [ ] 6. `test(evidence): add unit tests for EvidenceConfig and EvidenceEventRecord validation`
-- [ ] 7. `feat(evidence): implement load_evidence_config and save_evidence_config YAML helpers`
-- [ ] 8. `test(evidence): add unit tests for evidence.yaml round-trip serialization`
-- [ ] 9. `feat(evidence): implement write_evidence_events_csv and read_evidence_events_csv`
-- [ ] 10. `test(evidence): add unit tests for enriched events.csv round-trip serialization`
-- [ ] 11. `feat(evidence): implement index_track_detections and select_best_frame_for_event`
-- [ ] 12. `test(evidence): add unit tests for best-frame selection strategies and fallback handling`
-- [ ] 13. `feat(evidence): implement extract_person_crop with padding and frame-edge clamping`
-- [ ] 14. `test(evidence): add unit tests for extract_person_crop interior and boundary clipping`
-- [ ] 15. `feat(evidence): implement render_event_snapshot and render_evidence_contact_sheet`
-- [ ] 16. `test(evidence): add unit tests for snapshot and contact sheet rendering`
-- [ ] 17. `feat(evidence): implement verify_evidence_records path resolution checker`
-- [ ] 18. `test(evidence): add unit tests for verify_evidence_records`
-- [ ] 19. `feat(evidence): implement run_visual_evidence single-pass pipeline and CLI entrypoint`
-- [ ] 20. `test(evidence): add end-to-end pipeline and CLI tests in test_visual_evidence.py`
-- [ ] 21. `feat(evidence): add exploratory notebook 01_explore_visual_evidence.ipynb`
-- [ ] 22. `docs(evidence): document best-frame rule, snapshot/crop audit, and edge-clipping cases in notes`
-- [ ] 23. `docs(evidence): document CLI, evidence.yaml, and enriched events.csv schema in subproject README`
-- [ ] 24. `docs(readme): add Phase 7 visual evidence CLI instructions to root README`
-- [ ] 25. `docs(progress): complete Phase 7 acceptance criteria, decision log, and CI log`
+- [x] 1. `docs(roadmap): define Phase 7 visual evidence scope and micro-task checklist` (`4895894`)
+- [x] 2. `docs(evidence): scaffold cv_projects/07_visual_evidence README and notes` (`c6b07d1`)
+- [x] 3. `feat(evidence): add default configs/evidence.yaml for best-frame and crop settings` (`a4fb1dc`)
+- [x] 4. `test(helpers): expose Phase 7 visual evidence scripts directory to test suite` (`a24554a`)
+- [x] 5. `types(evidence): define EvidenceConfig, BestFrameSelection, and EvidenceEventRecord dataclasses` (`1142916`)
+- [x] 6. `test(evidence): add unit tests for EvidenceConfig and EvidenceEventRecord validation` (`7de26dd`)
+- [x] 7. `feat(evidence): implement load_evidence_config and save_evidence_config YAML helpers` (`e0179b7`)
+- [x] 8. `test(evidence): add unit tests for evidence.yaml round-trip serialization` (`81fa26d`)
+- [x] 9. `feat(evidence): implement write_evidence_events_csv and read_evidence_events_csv` (`e911895`)
+- [x] 10. `test(evidence): add unit tests for enriched events.csv round-trip serialization` (`5bc5e74`)
+- [x] 11. `feat(evidence): implement index_track_detections and select_best_frame_for_event` (`0f3dfee`)
+- [x] 12. `test(evidence): add unit tests for best-frame selection strategies and fallback handling` (`9b496b2`)
+- [x] 13. `feat(evidence): implement extract_person_crop with padding and frame-edge clamping` (`818104b`)
+- [x] 14. `test(evidence): add unit tests for extract_person_crop interior and boundary clipping` (`bd88ee2`)
+- [x] 15. `feat(evidence): implement render_event_snapshot and render_evidence_contact_sheet` (`366b767`)
+- [x] 16. `test(evidence): add unit tests for snapshot and contact sheet rendering` (`e301260`)
+- [x] 17. `feat(evidence): implement verify_evidence_records path resolution checker` (`5b47f64`)
+- [x] 18. `test(evidence): add unit tests for verify_evidence_records` (`bb01285`)
+- [x] 19. `feat(evidence): implement run_visual_evidence single-pass pipeline and CLI entrypoint` (`dce8bc6`)
+- [x] 20. `test(evidence): add end-to-end pipeline and CLI tests in test_visual_evidence.py` (`6964f3f`, `075486e`, `b1cc716`, `b0ee4e7`)
+- [x] 21. `feat(evidence): add exploratory notebook 01_explore_visual_evidence.ipynb` (`bd153b7`)
+- [x] 22. `docs(evidence): record real people-detection.mp4 visual evidence audit in notes.md` (`9b709fe`)
+- [x] 23. `docs(evidence): document best-frame rule, CLI flags, and verification results in README.md` (`4c90cbd`)
+- [x] 24. `docs(readme): add Phase 7 visual evidence milestone to root README.md` (`31d175f`)
+- [x] 25. `docs(roadmap): mark Phase 7 visual evidence completed in docs/ROADMAP.md`
+
+### Decision Log
+
+| Decision | Options considered | Choice + evidence |
+|----------|--------------------|-------------------|
+| Default `best_frame_strategy` | `highest_confidence` / `midpoint` / `start_frame` / `largest_area` | **`highest_confidence`** — selects the sharpest, least-truncated person bounding box within `[min_frame, max_frame]` (`mean_best_confidence = 0.8912` across `48` events on `people-detection.mp4`), tie-breaking by largest bbox area and earliest frame. |
+| Video frame extraction strategy | Random `cv2.VideoCapture.set(CAP_PROP_POS_FRAMES)` seeks per event / Single-pass sequential `VideoSource.iter_frames()` | **Single-pass sequential `VideoSource.iter_frames()`** — avoids H.264 GOP keyframe seek drift and decodes `34` unique best frames for `48` events in `1.11s`. |
+| Evidence path format in `events.csv` | Absolute OS paths / Portable POSIX-style relative paths (`snapshots/<event_id>_<track_id>.jpg`, `crops/<event_id>_<track_id>.jpg`) | **Portable POSIX-style relative paths** — matches `docs/project_phases.md` (`snapshots/<event_id>_<track_id>.jpg` and `crops/<event_id>_<track_id>.jpg`) and resolves identically on Windows and Linux via `verify_evidence_records`. |
+
+### CI & Validation Log
+
+| Command | Result | Notes |
+|---------|--------|-------|
+| `uv sync --locked` | ✅ exit 0 | clean default locked environment |
+| `uv run --locked ruff check .` | ✅ `All checks passed!` | repo-wide lint gate (52 files including notebooks) |
+| `uv run --locked ruff format --check .` | ✅ `52 files already formatted` | repo-wide format gate |
+| `uv run --locked pytest -v` | ✅ `139 passed, 56 subtests passed` | full unit + integration test suite (`test_visual_evidence.py` + prior suites) |
+| `extract_visual_evidence.py --source data/fallback_clips/people-detection.mp4 ...` | ✅ 48 events in 1.11 s | 48 snapshots, 48 crops, `all_paths_valid=true`, `mean_best_confidence=0.8912` |
+
 
 
 
