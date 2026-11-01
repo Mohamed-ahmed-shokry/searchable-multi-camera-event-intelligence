@@ -6,8 +6,11 @@ and single-pass sequential video CLI entrypoint.
 from __future__ import annotations
 
 import sys
-from dataclasses import dataclass
+from dataclasses import asdict, dataclass
 from pathlib import Path
+from typing import Any
+
+import yaml
 
 try:
     from generate_dwell_events import VALID_EVENT_TYPES, EventRecord
@@ -178,3 +181,48 @@ class EvidenceEventRecord:
             self.snapshot_path,
             self.crop_path,
         ]
+
+
+def load_evidence_config(config_path: Path | str) -> EvidenceConfig:
+    """Load an EvidenceConfig from a YAML file."""
+    path = Path(config_path)
+    if not path.is_file():
+        raise FileNotFoundError(f"Evidence config file not found: {path}")
+
+    with path.open("r", encoding="utf-8") as handle:
+        raw: Any = yaml.safe_load(handle)
+
+    if raw is None:
+        return EvidenceConfig()
+    if not isinstance(raw, dict):
+        raise TypeError(f"Expected YAML mapping in {path}, got {type(raw).__name__}")
+
+    defaults = EvidenceConfig()
+    return EvidenceConfig(
+        best_frame_strategy=str(
+            raw.get("best_frame_strategy", defaults.best_frame_strategy)
+        ),
+        crop_padding_ratio=float(
+            raw.get("crop_padding_ratio", defaults.crop_padding_ratio)
+        ),
+        min_padding_px=int(raw.get("min_padding_px", defaults.min_padding_px)),
+        jpeg_quality=int(raw.get("jpeg_quality", defaults.jpeg_quality)),
+        overlay_scene_geometry=bool(
+            raw.get("overlay_scene_geometry", defaults.overlay_scene_geometry)
+        ),
+        contact_sheet_columns=int(
+            raw.get("contact_sheet_columns", defaults.contact_sheet_columns)
+        ),
+        contact_sheet_max_items=int(
+            raw.get("contact_sheet_max_items", defaults.contact_sheet_max_items)
+        ),
+    )
+
+
+def save_evidence_config(config: EvidenceConfig, config_path: Path | str) -> Path:
+    """Save an EvidenceConfig to a YAML file."""
+    path = Path(config_path)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with path.open("w", encoding="utf-8") as handle:
+        yaml.safe_dump(asdict(config), handle, sort_keys=False)
+    return path
