@@ -5,7 +5,9 @@ and single-pass sequential video CLI entrypoint.
 
 from __future__ import annotations
 
+import csv
 import sys
+from collections.abc import Sequence
 from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import Any
@@ -226,3 +228,57 @@ def save_evidence_config(config: EvidenceConfig, config_path: Path | str) -> Pat
     with path.open("w", encoding="utf-8") as handle:
         yaml.safe_dump(asdict(config), handle, sort_keys=False)
     return path
+
+
+def write_evidence_events_csv(
+    records: Sequence[EvidenceEventRecord], csv_path: Path | str
+) -> Path:
+    """Write enriched EvidenceEventRecord rows to the 9-column Phase 7 events.csv."""
+    path = Path(csv_path)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with path.open("w", encoding="utf-8", newline="") as handle:
+        writer = csv.writer(handle)
+        writer.writerow(EVIDENCE_EVENTS_CSV_HEADER)
+        for rec in records:
+            writer.writerow(rec.to_row())
+    return path
+
+
+def read_evidence_events_csv(csv_path: Path | str) -> list[EvidenceEventRecord]:
+    """Read enriched EvidenceEventRecord rows from the 9-column Phase 7 events.csv."""
+    path = Path(csv_path)
+    if not path.is_file():
+        raise FileNotFoundError(f"Enriched events.csv not found: {path}")
+
+    with path.open("r", encoding="utf-8", newline="") as handle:
+        reader = csv.reader(handle)
+        header = next(reader, None)
+        if header != EVIDENCE_EVENTS_CSV_HEADER:
+            raise ValueError(
+                f"Unexpected events.csv header in {path}: got {header}, "
+                f"expected {EVIDENCE_EVENTS_CSV_HEADER}"
+            )
+
+        records: list[EvidenceEventRecord] = []
+        for row in reader:
+            if not row or all(not cell.strip() for cell in row):
+                continue
+            if len(row) != len(EVIDENCE_EVENTS_CSV_HEADER):
+                raise ValueError(
+                    f"Malformed row in {path}: expected {len(EVIDENCE_EVENTS_CSV_HEADER)} "
+                    f"columns, got {len(row)}: {row}"
+                )
+            records.append(
+                EvidenceEventRecord(
+                    event_id=row[0].strip(),
+                    event_type=row[1].strip(),
+                    track_id=int(row[2].strip()),
+                    zone_id=row[3].strip(),
+                    start_time=float(row[4].strip()),
+                    end_time=float(row[5].strip()),
+                    duration_seconds=float(row[6].strip()),
+                    snapshot_path=row[7].strip(),
+                    crop_path=row[8].strip(),
+                )
+            )
+    return records
