@@ -18,11 +18,19 @@ from extract_visual_evidence import (
     read_evidence_events_csv,
     render_event_snapshot,
     render_evidence_contact_sheet,
+    run_visual_evidence,
     save_evidence_config,
     select_best_frame_for_event,
     verify_evidence_records,
     write_evidence_events_csv,
 )
+from extract_visual_evidence import (
+    main as extract_visual_evidence_main,
+)
+from generate_dwell_events import write_events_csv
+from track_people import write_tracks_csv
+
+from tests.helpers import make_video
 
 
 def test_evidence_config_defaults_and_validation() -> None:
@@ -420,3 +428,96 @@ def test_verify_evidence_records_valid_and_missing(tmp_path: Path) -> None:
     assert report_bad["all_paths_valid"] is False
     assert report_bad["missing_or_empty_snapshots"] == ["snapshots/evt_0002_1.jpg"]
     assert report_bad["missing_or_empty_crops"] == ["crops/evt_0002_1.jpg"]
+
+
+def test_run_visual_evidence_pipeline_and_cli_end_to_end(tmp_path: Path) -> None:
+    video_path = make_video(tmp_path, name="evidence_clip.avi", count=6)
+    tracks_csv = tmp_path / "tracks.csv"
+    events_csv = tmp_path / "input_events.csv"
+    out_dir = tmp_path / "evidence_out"
+
+    frame_tracks = [
+        FrameTracks(
+            frame_id=i,
+            tracks=[
+                TrackDetection(
+                    frame_id=i,
+                    track_id=1,
+                    x1=10.0,
+                    y1=8.0,
+                    x2=34.0,
+                    y2=40.0,
+                    confidence=0.70 + 0.04 * i,
+                )
+            ],
+        )
+        for i in range(6)
+    ]
+    write_tracks_csv(frame_tracks, tracks_csv)
+
+    events = [
+        EventRecord(
+            event_id="evt_0001",
+            event_type="zone_entry",
+            track_id=1,
+            zone_id="zone_center",
+            start_time=0.1,
+            end_time=0.1,
+            duration_seconds=0.0,
+        ),
+        EventRecord(
+            event_id="evt_0002",
+            event_type="dwell_time_event",
+            track_id=1,
+            zone_id="zone_center",
+            start_time=0.1,
+            end_time=0.4,
+            duration_seconds=0.3,
+        ),
+    ]
+    write_events_csv(events, events_csv)
+
+    summary = run_visual_evidence(
+        source_path=video_path,
+        events_csv_path=events_csv,
+        tracks_csv_path=tracks_csv,
+        output_dir=out_dir,
+        scene_config_path=None,
+    )
+    assert summary["total_events"] == 2
+    assert summary["verification"]["all_paths_valid"] is True
+    assert (out_dir / "snapshots" / "evt_0001_1.jpg").is_file()
+    assert (out_dir / "crops" / "evt_0001_1.jpg").is_file()
+    assert (out_dir / "snapshots" / "evt_0002_1.jpg").is_file()
+    assert (out_dir / "crops" / "evt_0002_1.jpg").is_file()
+    assert (out_dir / "evidence_contact_sheet.jpg").is_file()
+    assert (out_dir / "visual_evidence_summary.json").is_file()
+
+    enriched = read_evidence_events_csv(out_dir / "events.csv")
+    assert len(enriched) == 2
+    assert enriched[0].snapshot_path == "snapshots/evt_0001_1.jpg"
+    assert enriched[1].crop_path == "crops/evt_0002_1.jpg"
+
+    cli_out = tmp_path / "cli_out"
+    rc = extract_visual_evidence_main(
+        [
+            "--source",
+            str(video_path),
+            "--events",
+            str(events_csv),
+            "--tracks",
+            str(tracks_csv),
+            "--output-dir",
+            str(cli_out),
+            "--strategy",
+            "midpoint",
+            "--padding-ratio",
+            "0.12",
+            "--min-padding-px",
+            "6",
+            "--jpeg-quality",
+            "90",
+        ]
+    )
+    assert rc == 0
+    assert (cli_out / "events.csv").is_file()
