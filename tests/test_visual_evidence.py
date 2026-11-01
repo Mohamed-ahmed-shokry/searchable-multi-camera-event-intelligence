@@ -9,9 +9,13 @@ from extract_visual_evidence import (
     EventRecord,
     EvidenceConfig,
     EvidenceEventRecord,
+    FrameTracks,
+    TrackDetection,
+    index_track_detections,
     load_evidence_config,
     read_evidence_events_csv,
     save_evidence_config,
+    select_best_frame_for_event,
     write_evidence_events_csv,
 )
 
@@ -180,3 +184,113 @@ def test_evidence_events_csv_round_trip(tmp_path: Path) -> None:
 
     with pytest.raises(FileNotFoundError):
         read_evidence_events_csv(tmp_path / "missing_events.csv")
+
+
+def test_select_best_frame_for_event_all_strategies_and_fallback() -> None:
+    frame_tracks = [
+        FrameTracks(
+            frame_id=10,
+            tracks=[
+                TrackDetection(
+                    frame_id=10,
+                    track_id=1,
+                    x1=100.0,
+                    y1=100.0,
+                    x2=150.0,
+                    y2=200.0,
+                    confidence=0.75,
+                )
+            ],
+        ),
+        FrameTracks(
+            frame_id=15,
+            tracks=[
+                TrackDetection(
+                    frame_id=15,
+                    track_id=1,
+                    x1=105.0,
+                    y1=100.0,
+                    x2=165.0,
+                    y2=210.0,
+                    confidence=0.82,
+                )
+            ],
+        ),
+        FrameTracks(
+            frame_id=20,
+            tracks=[
+                TrackDetection(
+                    frame_id=20,
+                    track_id=1,
+                    x1=110.0,
+                    y1=100.0,
+                    x2=155.0,
+                    y2=195.0,
+                    confidence=0.91,
+                )
+            ],
+        ),
+    ]
+    indexed = index_track_detections(frame_tracks)
+    assert set(indexed[1].keys()) == {10, 15, 20}
+
+    event = EventRecord(
+        event_id="evt_0001",
+        event_type="dwell_time_event",
+        track_id=1,
+        zone_id="zone_center",
+        start_time=1.0,  # frame 10 @ 10 fps
+        end_time=2.0,  # frame 20 @ 10 fps
+        duration_seconds=1.0,
+    )
+
+    sel_conf = select_best_frame_for_event(
+        event, indexed, fps=10.0, strategy="highest_confidence"
+    )
+    assert sel_conf.frame_id == 20
+    assert sel_conf.confidence == pytest.approx(0.91)
+    assert sel_conf.used_nearest_fallback is False
+
+    sel_area = select_best_frame_for_event(
+        event, indexed, fps=10.0, strategy="largest_area"
+    )
+    assert sel_area.frame_id == 15  # 60 * 110 = 6600 vs 5000 vs 4275
+
+    sel_mid = select_best_frame_for_event(event, indexed, fps=10.0, strategy="midpoint")
+    assert sel_mid.frame_id == 15
+
+    sel_start = select_best_frame_for_event(
+        event, indexed, fps=10.0, strategy="start_frame"
+    )
+    assert sel_start.frame_id == 10
+
+    # Fallback when event window has no exact frame for track 1 (e.g. frame 17)
+    gap_event = EventRecord(
+        event_id="evt_0002",
+        event_type="line_crossing",
+        track_id=1,
+        zone_id="line_center",
+        start_time=1.7,
+        end_time=1.7,
+        duration_seconds=0.0,
+    )
+    sel_fallback = select_best_frame_for_event(
+        gap_event, indexed, fps=10.0, strategy="highest_confidence"
+    )
+    assert sel_fallback.frame_id == 15
+    assert sel_fallback.used_nearest_fallback is True
+
+    with pytest.raises(KeyError, match="No tracked detections found for track_id=99"):
+        select_best_frame_for_event(
+            EventRecord(
+                event_id="evt_0003",
+                event_type="zone_entry",
+                track_id=99,
+                zone_id="zone_center",
+                start_time=1.0,
+                end_time=1.0,
+                duration_seconds=0.0,
+            ),
+            indexed,
+            fps=10.0,
+        )
