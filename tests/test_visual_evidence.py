@@ -28,9 +28,8 @@ from extract_visual_evidence import (
     main as extract_visual_evidence_main,
 )
 from generate_dwell_events import write_events_csv
+from helpers import make_video
 from track_people import write_tracks_csv
-
-from tests.helpers import make_video
 
 
 def test_evidence_config_defaults_and_validation() -> None:
