@@ -16,6 +16,8 @@ from extract_visual_evidence import (
     index_track_detections,
     load_evidence_config,
     read_evidence_events_csv,
+    render_event_snapshot,
+    render_evidence_contact_sheet,
     save_evidence_config,
     select_best_frame_for_event,
     write_evidence_events_csv,
@@ -337,3 +339,41 @@ def test_extract_person_crop_interior_and_boundary_clipping() -> None:
     assert clipped_edge is True
     assert crop_edge.shape[0] == 200
     assert crop_edge.shape[1] == 68
+
+
+def test_render_event_snapshot_and_contact_sheet() -> None:
+    frame = np.zeros((240, 320, 3), dtype=np.uint8)
+    event = EventRecord(
+        event_id="evt_0001",
+        event_type="dwell_time_event",
+        track_id=1,
+        zone_id="zone_center",
+        start_time=1.0,
+        end_time=4.5,
+        duration_seconds=3.5,
+    )
+    sel = BestFrameSelection(
+        event_id="evt_0001",
+        track_id=1,
+        frame_id=18,
+        x1=60.0,
+        y1=50.0,
+        x2=130.0,
+        y2=190.0,
+        confidence=0.92,
+        strategy_used="highest_confidence",
+    )
+    snapshot = render_event_snapshot(frame, event, sel, scene_config=None)
+    assert snapshot.shape == frame.shape
+    assert int(snapshot.sum()) > 0
+
+    crop, _ = extract_person_crop(frame, sel)
+    sheet = render_evidence_contact_sheet(
+        [(crop, "evt_0001 | dwell | T1"), (crop, "evt_0002 | entry | T1")],
+        columns=2,
+        thumb_size=(160, 200),
+    )
+    assert sheet.shape == (200 + 36, 160 * 2, 3)
+
+    empty_sheet = render_evidence_contact_sheet([], columns=3, thumb_size=(160, 200))
+    assert empty_sheet.shape == (200 + 36, 160 * 3, 3)
