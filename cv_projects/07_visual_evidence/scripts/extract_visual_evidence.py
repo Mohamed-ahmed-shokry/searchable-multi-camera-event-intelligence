@@ -12,6 +12,7 @@ from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import Any
 
+import cv2
 import numpy as np
 import yaml
 
@@ -24,6 +25,16 @@ except ImportError:
     if str(_subproject_3_scripts) not in sys.path:
         sys.path.insert(0, str(_subproject_3_scripts))
     from track_people import FrameTracks, TrackDetection
+
+try:
+    from reason_zones_lines import SceneConfig, draw_zones_and_lines
+except ImportError:
+    _subproject_5_scripts = (
+        Path(__file__).resolve().parents[2] / "05_zone_line_reasoning" / "scripts"
+    )
+    if str(_subproject_5_scripts) not in sys.path:
+        sys.path.insert(0, str(_subproject_5_scripts))
+    from reason_zones_lines import SceneConfig, draw_zones_and_lines
 
 try:
     from generate_dwell_events import VALID_EVENT_TYPES, EventRecord
@@ -446,3 +457,128 @@ def extract_person_crop(
     crop_y2 = max(crop_y1 + 1, min(height, raw_y2))
 
     return frame[crop_y1:crop_y2, crop_x1:crop_x2].copy(), clipped_at_frame_edge
+
+
+def _event_type_color(event_type: str) -> tuple[int, int, int]:
+    """Return a distinct BGR highlight color per event_type."""
+    palette: dict[str, tuple[int, int, int]] = {
+        "dwell_time_event": (0, 215, 255),  # gold
+        "zone_entry": (80, 220, 80),  # green
+        "zone_exit": (60, 120, 255),  # orange-red
+        "line_crossing": (255, 200, 50),  # cyan-blue
+    }
+    return palette.get(event_type, (0, 255, 255))
+
+
+def render_event_snapshot(
+    frame: np.ndarray,
+    event: EventRecord,
+    selection: BestFrameSelection,
+    *,
+    scene_config: SceneConfig | None = None,
+) -> np.ndarray:
+    """Render an annotated full-frame snapshot proving ``event`` at ``selection.frame_id``."""
+    canvas = (
+        draw_zones_and_lines(frame, scene_config)
+        if scene_config is not None
+        else frame.copy()
+    )
+
+    color = _event_type_color(event.event_type)
+    pt1 = (round(selection.x1), round(selection.y1))
+    pt2 = (round(selection.x2), round(selection.y2))
+    cv2.rectangle(canvas, pt1, pt2, color, 2, cv2.LINE_AA)
+
+    anchor = (round((selection.x1 + selection.x2) / 2.0), round(selection.y2))
+    cv2.circle(canvas, anchor, 5, color, -1, cv2.LINE_AA)
+
+    label = (
+        f"{event.event_id} | {event.event_type} | T{event.track_id} "
+        f"| {event.zone_id} | f={selection.frame_id} ({selection.confidence:.2f})"
+    )
+    font = cv2.FONT_HERSHEY_SIMPLEX
+    scale = 0.50
+    thickness = 1
+    (tw, th), baseline = cv2.getTextSize(label, font, scale, thickness)
+
+    bx1 = max(4, min(canvas.shape[1] - tw - 12, pt1[0]))
+    by2 = max(th + baseline + 10, pt1[1] - 4)
+    by1 = max(2, by2 - th - baseline - 8)
+    bx2 = min(canvas.shape[1] - 2, bx1 + tw + 10)
+
+    cv2.rectangle(canvas, (bx1, by1), (bx2, by2), (20, 20, 20), -1)
+    cv2.rectangle(canvas, (bx1, by1), (bx2, by2), color, 1, cv2.LINE_AA)
+    cv2.putText(
+        canvas,
+        label,
+        (bx1 + 5, by2 - baseline - 4),
+        font,
+        scale,
+        (255, 255, 255),
+        thickness,
+        cv2.LINE_AA,
+    )
+    return canvas
+
+
+def render_evidence_contact_sheet(
+    items: Sequence[tuple[np.ndarray, str]],
+    *,
+    columns: int = 4,
+    thumb_size: tuple[int, int] = (200, 240),
+) -> np.ndarray:
+    """Render a grid contact sheet of person crops and event captions."""
+    cols = max(1, columns)
+    tw, th = thumb_size
+    header_h = 36
+
+    if not items:
+        blank = np.full((th + header_h, tw * cols, 3), 28, dtype=np.uint8)
+        cv2.putText(
+            blank,
+            "No visual evidence items",
+            (16, (th + header_h) // 2),
+            cv2.FONT_HERSHEY_SIMPLEX,
+            0.6,
+            (200, 200, 200),
+            1,
+            cv2.LINE_AA,
+        )
+        return blank
+
+    rows = (len(items) + cols - 1) // cols
+    cell_h = th + header_h
+    sheet = np.full((rows * cell_h, cols * tw, 3), 24, dtype=np.uint8)
+
+    for idx, (crop, caption) in enumerate(items):
+        r = idx // cols
+        c = idx % cols
+        x0 = c * tw
+        y0 = r * cell_h
+
+        cell = np.full((cell_h, tw, 3), 32, dtype=np.uint8)
+        if crop.size > 0:
+            ch, cw = crop.shape[:2]
+            scale = min((tw - 12) / max(1, cw), (th - 12) / max(1, ch))
+            nw = max(1, round(cw * scale))
+            nh = max(1, round(ch * scale))
+            resized = cv2.resize(crop, (nw, nh), interpolation=cv2.INTER_AREA)
+            ox = (tw - nw) // 2
+            oy = header_h + (th - nh) // 2
+            cell[oy : oy + nh, ox : ox + nw] = resized
+
+        cv2.rectangle(cell, (0, 0), (tw - 1, header_h), (48, 48, 48), -1)
+        cv2.rectangle(cell, (0, 0), (tw - 1, cell_h - 1), (80, 80, 80), 1)
+        cv2.putText(
+            cell,
+            caption[:28],
+            (6, 23),
+            cv2.FONT_HERSHEY_SIMPLEX,
+            0.42,
+            (240, 240, 240),
+            1,
+            cv2.LINE_AA,
+        )
+        sheet[y0 : y0 + cell_h, x0 : x0 + tw] = cell
+
+    return sheet
