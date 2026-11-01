@@ -811,4 +811,110 @@ uv run --locked python cv_projects/06_dwell_time_events/scripts/generate_dwell_e
 | `uv run --locked pytest -v` | ✅ `129 passed, 56 subtests passed` | full unit + integration test suite (`test_event_state_machine.py` + prior suites) |
 | `generate_dwell_events.py data/fallback_clips/people-detection.mp4 ...` | ✅ 596 frames in 5.31 s | 48 events (`16 zone_entry`, `13 zone_exit`, `10 dwell_time_event`, `9 line_crossing`), 16 stay traces, 6 PNG examples |
 
+---
+
+## Current Phase: 7 — Visual Evidence (2026-11-01)
+
+### Objective
+
+Attach auditable visual proof (`snapshots/<event_id>_<track_id>.jpg` and
+`crops/<event_id>_<track_id>.jpg`) to every structured event in `events.csv` using a
+documented, deterministic best-frame selection rule (`highest_confidence` within the
+event window `[start_frame, end_frame]`), enrich `events.csv` with `snapshot_path` and
+`crop_path` columns, verify that 100% of evidence paths resolve to real non-empty files
+on disk, and inspect edge cases (crop boundary clipping at frame edges, partial occlusion,
+and sequential frame decoding vs random seek).
+
+### Scope
+
+1. Scaffold `cv_projects/07_visual_evidence/` (`README.md`, `notes.md`,
+   `configs/evidence.yaml`, `scripts/`, `notebooks/`, `outputs/`).
+2. Implement `cv_projects/07_visual_evidence/scripts/extract_visual_evidence.py`:
+   - `EvidenceConfig`, `BestFrameSelection`, and `EvidenceEventRecord` dataclasses.
+   - YAML configuration loader and writer (`load_evidence_config`, `save_evidence_config`).
+   - Enriched `events.csv` writer and reader (`write_evidence_events_csv`,
+     `read_evidence_events_csv`) matching the 9-column schema:
+     `event_id, event_type, track_id, zone_id, start_time, end_time, duration_seconds, snapshot_path, crop_path`.
+   - Best-frame selector (`select_best_frame_for_event`) supporting `highest_confidence`
+     (tie-broken by bbox area and frame index), `midpoint`, `start_frame`, and
+     `largest_area`, with nearest-frame fallback if a track has a 1-frame gap at an
+     instantaneous transition.
+   - Clamped padded person cropper (`extract_person_crop`) returning `(crop_img, clipped_at_edge)`.
+   - Annotated full-frame snapshot renderer (`render_event_snapshot`) overlaying optional
+     scene geometry, subject bounding box + confidence, and event metadata banner.
+   - Single-pass sequential video evidence extractor (`run_visual_evidence`) avoiding
+     compressed-video random-seek inaccuracy, writing `snapshots/<event_id>_<track_id>.jpg`,
+     `crops/<event_id>_<track_id>.jpg`, enriched `events.csv`, `evidence_contact_sheet.jpg`,
+     and `visual_evidence_summary.json`.
+   - Evidence path verifier (`verify_evidence_records`) confirming every `snapshot_path`
+     and `crop_path` in `events.csv` exists on disk and is non-empty.
+3. Create exploratory notebook `cv_projects/07_visual_evidence/notebooks/01_explore_visual_evidence.ipynb`.
+4. Add unit and integration tests in `tests/test_visual_evidence.py`.
+5. Run Phase 7 visual evidence extraction on real surveillance footage
+   (`people-detection.mp4` + Phase 3 `tracks.csv` + Phase 6 `events.csv`), inspect a
+   sample of snapshot/crop pairs, and document the best-frame rule and edge-clipping
+   observations in `notes.md`.
+
+### Acceptance Criteria
+
+| # | Criterion | Status | Evidence |
+|---|-----------|--------|----------|
+| 1 | Best-frame selection rule (`highest_confidence` within `[start_frame, end_frame]` window) implemented, tested, and documented | ☐ | — |
+| 2 | Full-frame snapshot (`snapshots/<event_id>_<track_id>.jpg`) and tight padded person crop (`crops/<event_id>_<track_id>.jpg`) generated per event with deterministic naming | ☐ | — |
+| 3 | Enriched `events.csv` includes `snapshot_path` and `crop_path` columns (`9` columns total) | ☐ | — |
+| 4 | 100% of `snapshot_path` and `crop_path` entries in `events.csv` resolve to real, non-empty image files on disk | ☐ | — |
+| 5 | Random sample of snapshot/crop pairs visually reviewed and verified to match event descriptions, with edge-clipping cases logged in `notes.md` | ☐ | — |
+| 6 | All local CI-parity checks (`ruff check`, `ruff format --check`, `pytest`) and remote GitHub Actions CI pass 100% | ☐ | — |
+
+### Validation & CI Plan
+
+```bash
+uv sync --locked
+uv run --locked ruff check .
+uv run --locked ruff format --check .
+uv run --locked pytest -v
+# phase-specific execution:
+uv run --locked python cv_projects/07_visual_evidence/scripts/extract_visual_evidence.py \
+    data/fallback_clips/people-detection.mp4 \
+    --events-csv cv_projects/06_dwell_time_events/outputs/people_detection/events.csv \
+    --tracks-csv cv_projects/03_person_tracking/outputs/people_detection_bytetrack/tracks.csv \
+    --scene-config cv_projects/05_zone_line_reasoning/configs/scene_config.yaml \
+    --config cv_projects/07_visual_evidence/configs/evidence.yaml \
+    -o cv_projects/07_visual_evidence/outputs/people_detection
+```
+
+### Exclusions
+
+- **Spatial heatmaps, zone occupancy aggregations, and `analytics_summary.json`:**
+  Explicitly deferred to Phase 8 (`08_heatmaps_analytics`) per `docs/project_phases.md`.
+
+### Micro-Task Breakdown
+
+- [x] 1. `docs(roadmap): define Phase 7 visual evidence scope and micro-task checklist`
+- [ ] 2. `docs(evidence): scaffold cv_projects/07_visual_evidence README and notes`
+- [ ] 3. `feat(evidence): add default configs/evidence.yaml for best-frame and crop settings`
+- [ ] 4. `test(helpers): expose Phase 7 visual evidence scripts directory to test suite`
+- [ ] 5. `types(evidence): define EvidenceConfig, BestFrameSelection, and EvidenceEventRecord dataclasses`
+- [ ] 6. `test(evidence): add unit tests for EvidenceConfig and EvidenceEventRecord validation`
+- [ ] 7. `feat(evidence): implement load_evidence_config and save_evidence_config YAML helpers`
+- [ ] 8. `test(evidence): add unit tests for evidence.yaml round-trip serialization`
+- [ ] 9. `feat(evidence): implement write_evidence_events_csv and read_evidence_events_csv`
+- [ ] 10. `test(evidence): add unit tests for enriched events.csv round-trip serialization`
+- [ ] 11. `feat(evidence): implement index_track_detections and select_best_frame_for_event`
+- [ ] 12. `test(evidence): add unit tests for best-frame selection strategies and fallback handling`
+- [ ] 13. `feat(evidence): implement extract_person_crop with padding and frame-edge clamping`
+- [ ] 14. `test(evidence): add unit tests for extract_person_crop interior and boundary clipping`
+- [ ] 15. `feat(evidence): implement render_event_snapshot and render_evidence_contact_sheet`
+- [ ] 16. `test(evidence): add unit tests for snapshot and contact sheet rendering`
+- [ ] 17. `feat(evidence): implement verify_evidence_records path resolution checker`
+- [ ] 18. `test(evidence): add unit tests for verify_evidence_records`
+- [ ] 19. `feat(evidence): implement run_visual_evidence single-pass pipeline and CLI entrypoint`
+- [ ] 20. `test(evidence): add end-to-end pipeline and CLI tests in test_visual_evidence.py`
+- [ ] 21. `feat(evidence): add exploratory notebook 01_explore_visual_evidence.ipynb`
+- [ ] 22. `docs(evidence): document best-frame rule, snapshot/crop audit, and edge-clipping cases in notes`
+- [ ] 23. `docs(evidence): document CLI, evidence.yaml, and enriched events.csv schema in subproject README`
+- [ ] 24. `docs(readme): add Phase 7 visual evidence CLI instructions to root README`
+- [ ] 25. `docs(progress): complete Phase 7 acceptance criteria, decision log, and CI log`
+
+
 
