@@ -20,6 +20,7 @@ from extract_visual_evidence import (
     render_evidence_contact_sheet,
     save_evidence_config,
     select_best_frame_for_event,
+    verify_evidence_records,
     write_evidence_events_csv,
 )
 
@@ -377,3 +378,45 @@ def test_render_event_snapshot_and_contact_sheet() -> None:
 
     empty_sheet = render_evidence_contact_sheet([], columns=3, thumb_size=(160, 200))
     assert empty_sheet.shape == (200 + 36, 160 * 3, 3)
+
+
+def test_verify_evidence_records_valid_and_missing(tmp_path: Path) -> None:
+    snap_dir = tmp_path / "snapshots"
+    crop_dir = tmp_path / "crops"
+    snap_dir.mkdir(parents=True)
+    crop_dir.mkdir(parents=True)
+
+    (snap_dir / "evt_0001_1.jpg").write_bytes(b"fake_jpeg_bytes")
+    (crop_dir / "evt_0001_1.jpg").write_bytes(b"fake_crop_bytes")
+
+    rec1 = EvidenceEventRecord(
+        event_id="evt_0001",
+        event_type="zone_entry",
+        track_id=1,
+        zone_id="zone_center",
+        start_time=0.5,
+        end_time=0.5,
+        duration_seconds=0.0,
+        snapshot_path="snapshots/evt_0001_1.jpg",
+        crop_path="crops/evt_0001_1.jpg",
+    )
+    report_ok = verify_evidence_records([rec1], base_dir=tmp_path)
+    assert report_ok["all_paths_valid"] is True
+    assert report_ok["resolved_snapshots"] == 1
+    assert report_ok["resolved_crops"] == 1
+
+    rec_missing = EvidenceEventRecord(
+        event_id="evt_0002",
+        event_type="zone_exit",
+        track_id=1,
+        zone_id="zone_center",
+        start_time=1.5,
+        end_time=1.5,
+        duration_seconds=0.0,
+        snapshot_path="snapshots/evt_0002_1.jpg",
+        crop_path="crops/evt_0002_1.jpg",
+    )
+    report_bad = verify_evidence_records([rec1, rec_missing], base_dir=tmp_path)
+    assert report_bad["all_paths_valid"] is False
+    assert report_bad["missing_or_empty_snapshots"] == ["snapshots/evt_0002_1.jpg"]
+    assert report_bad["missing_or_empty_crops"] == ["crops/evt_0002_1.jpg"]
