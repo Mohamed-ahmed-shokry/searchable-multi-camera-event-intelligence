@@ -474,7 +474,7 @@ def test_run_visual_evidence_pipeline_and_cli_end_to_end(tmp_path: Path) -> None
             duration_seconds=0.3,
         ),
     ]
-    write_events_csv(events, events_csv)
+    write_events_csv(events_csv, events)
 
     summary = run_visual_evidence(
         source_path=video_path,
