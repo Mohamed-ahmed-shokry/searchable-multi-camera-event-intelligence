@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
+import numpy as np
 import pytest
 from extract_visual_evidence import (
     EVIDENCE_EVENTS_CSV_HEADER,
@@ -11,6 +12,7 @@ from extract_visual_evidence import (
     EvidenceEventRecord,
     FrameTracks,
     TrackDetection,
+    extract_person_crop,
     index_track_detections,
     load_evidence_config,
     read_evidence_events_csv,
@@ -294,3 +296,44 @@ def test_select_best_frame_for_event_all_strategies_and_fallback() -> None:
             indexed,
             fps=10.0,
         )
+
+
+def test_extract_person_crop_interior_and_boundary_clipping() -> None:
+    frame = np.zeros((200, 300, 3), dtype=np.uint8)
+    frame[50:150, 100:180] = 255
+
+    interior_sel = BestFrameSelection(
+        event_id="evt_0001",
+        track_id=1,
+        frame_id=5,
+        x1=100.0,
+        y1=50.0,
+        x2=180.0,
+        y2=150.0,
+        confidence=0.90,
+        strategy_used="highest_confidence",
+    )
+    crop_int, clipped_int = extract_person_crop(
+        frame, interior_sel, padding_ratio=0.10, min_padding_px=8
+    )
+    assert clipped_int is False
+    # box is 80x100 -> pad_x=max(8, 8)=8, pad_y=max(8, 10)=10 -> 96x120
+    assert crop_int.shape == (120, 96, 3)
+
+    edge_sel = BestFrameSelection(
+        event_id="evt_0002",
+        track_id=1,
+        frame_id=5,
+        x1=2.0,
+        y1=3.0,
+        x2=60.0,
+        y2=198.0,
+        confidence=0.88,
+        strategy_used="highest_confidence",
+    )
+    crop_edge, clipped_edge = extract_person_crop(
+        frame, edge_sel, padding_ratio=0.10, min_padding_px=8
+    )
+    assert clipped_edge is True
+    assert crop_edge.shape[0] == 200
+    assert crop_edge.shape[1] == 68
