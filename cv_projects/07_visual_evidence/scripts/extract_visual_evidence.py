@@ -5,8 +5,11 @@ and single-pass sequential video CLI entrypoint.
 
 from __future__ import annotations
 
+import argparse
 import csv
+import json
 import sys
+import time
 from collections.abc import Mapping, Sequence
 from dataclasses import asdict, dataclass
 from pathlib import Path
@@ -17,34 +20,52 @@ import numpy as np
 import yaml
 
 try:
-    from track_people import FrameTracks, TrackDetection
+    from track_people import FrameTracks, TrackDetection, read_tracks_csv
 except ImportError:
     _subproject_3_scripts = (
         Path(__file__).resolve().parents[2] / "03_person_tracking" / "scripts"
     )
     if str(_subproject_3_scripts) not in sys.path:
         sys.path.insert(0, str(_subproject_3_scripts))
-    from track_people import FrameTracks, TrackDetection
+    from track_people import FrameTracks, TrackDetection, read_tracks_csv
 
 try:
-    from reason_zones_lines import SceneConfig, draw_zones_and_lines
+    from reason_zones_lines import (
+        SceneConfig,
+        VideoSource,
+        draw_zones_and_lines,
+        load_scene_config,
+    )
 except ImportError:
     _subproject_5_scripts = (
         Path(__file__).resolve().parents[2] / "05_zone_line_reasoning" / "scripts"
     )
     if str(_subproject_5_scripts) not in sys.path:
         sys.path.insert(0, str(_subproject_5_scripts))
-    from reason_zones_lines import SceneConfig, draw_zones_and_lines
+    from reason_zones_lines import (
+        SceneConfig,
+        VideoSource,
+        draw_zones_and_lines,
+        load_scene_config,
+    )
 
 try:
-    from generate_dwell_events import VALID_EVENT_TYPES, EventRecord
+    from generate_dwell_events import (
+        VALID_EVENT_TYPES,
+        EventRecord,
+        read_events_csv,
+    )
 except ImportError:
     _subproject_6_scripts = (
         Path(__file__).resolve().parents[2] / "06_dwell_time_events" / "scripts"
     )
     if str(_subproject_6_scripts) not in sys.path:
         sys.path.insert(0, str(_subproject_6_scripts))
-    from generate_dwell_events import VALID_EVENT_TYPES, EventRecord
+    from generate_dwell_events import (
+        VALID_EVENT_TYPES,
+        EventRecord,
+        read_events_csv,
+    )
 
 EVIDENCE_EVENTS_CSV_HEADER: list[str] = [
     "event_id",
@@ -617,3 +638,300 @@ def verify_evidence_records(
         "missing_or_empty_crops": missing_crops,
         "all_paths_valid": not missing_snapshots and not missing_crops,
     }
+
+
+def run_visual_evidence(
+    *,
+    source_path: Path,
+    events_csv_path: Path,
+    tracks_csv_path: Path,
+    output_dir: Path,
+    config_path: Path | None = None,
+    scene_config_path: Path | None = None,
+    best_frame_strategy_override: str | None = None,
+    crop_padding_ratio_override: float | None = None,
+    min_padding_px_override: int | None = None,
+    jpeg_quality_override: int | None = None,
+) -> dict[str, Any]:
+    """Execute the complete Phase 7 visual evidence extraction pipeline."""
+    t0 = time.perf_counter()
+    output_dir.mkdir(parents=True, exist_ok=True)
+    snapshots_dir = output_dir / "snapshots"
+    crops_dir = output_dir / "crops"
+    snapshots_dir.mkdir(parents=True, exist_ok=True)
+    crops_dir.mkdir(parents=True, exist_ok=True)
+
+    base_cfg = (
+        load_evidence_config(config_path)
+        if config_path is not None and config_path.is_file()
+        else EvidenceConfig()
+    )
+    cfg = EvidenceConfig(
+        best_frame_strategy=(
+            best_frame_strategy_override
+            if best_frame_strategy_override is not None
+            else base_cfg.best_frame_strategy
+        ),
+        crop_padding_ratio=(
+            crop_padding_ratio_override
+            if crop_padding_ratio_override is not None
+            else base_cfg.crop_padding_ratio
+        ),
+        min_padding_px=(
+            min_padding_px_override
+            if min_padding_px_override is not None
+            else base_cfg.min_padding_px
+        ),
+        jpeg_quality=(
+            jpeg_quality_override
+            if jpeg_quality_override is not None
+            else base_cfg.jpeg_quality
+        ),
+        overlay_scene_geometry=base_cfg.overlay_scene_geometry,
+        contact_sheet_columns=base_cfg.contact_sheet_columns,
+        contact_sheet_max_items=base_cfg.contact_sheet_max_items,
+    )
+
+    scene_cfg: SceneConfig | None = None
+    if (
+        cfg.overlay_scene_geometry
+        and scene_config_path is not None
+        and scene_config_path.is_file()
+    ):
+        scene_cfg = load_scene_config(scene_config_path)
+
+    events = read_events_csv(events_csv_path)
+    frame_tracks = read_tracks_csv(tracks_csv_path)
+    indexed_tracks = index_track_detections(frame_tracks)
+
+    with VideoSource(source_path) as vs:
+        meta = vs.metadata
+        fps = float(meta.fps) if meta.fps > 0 else 12.0
+
+        selections: list[BestFrameSelection] = [
+            select_best_frame_for_event(
+                ev,
+                indexed_tracks,
+                fps=fps,
+                strategy=cfg.best_frame_strategy,
+            )
+            for ev in events
+        ]
+
+        by_frame: dict[int, list[tuple[int, EventRecord, BestFrameSelection]]] = {}
+        for idx, (ev, sel) in enumerate(zip(events, selections, strict=True)):
+            by_frame.setdefault(sel.frame_id, []).append((idx, ev, sel))
+
+        max_needed_frame = max(by_frame.keys()) if by_frame else -1
+        jpeg_params = [int(cv2.IMWRITE_JPEG_QUALITY), int(cfg.jpeg_quality)]
+
+        enriched_by_idx: dict[int, EvidenceEventRecord] = {}
+        contact_items_by_idx: dict[int, tuple[np.ndarray, str]] = {}
+
+        for frame_id, frame in vs.iter_frames():
+            if frame_id in by_frame:
+                for idx, ev, sel in by_frame[frame_id]:
+                    rel_snap = f"snapshots/{ev.event_id}_{ev.track_id}.jpg"
+                    rel_crop = f"crops/{ev.event_id}_{ev.track_id}.jpg"
+
+                    snapshot_bgr = render_event_snapshot(
+                        frame,
+                        ev,
+                        sel,
+                        scene_config=scene_cfg,
+                    )
+                    crop_bgr, clipped = extract_person_crop(
+                        frame,
+                        sel,
+                        padding_ratio=cfg.crop_padding_ratio,
+                        min_padding_px=cfg.min_padding_px,
+                    )
+
+                    cv2.imwrite(
+                        str(output_dir / rel_snap),
+                        snapshot_bgr,
+                        jpeg_params,
+                    )
+                    cv2.imwrite(
+                        str(output_dir / rel_crop),
+                        crop_bgr,
+                        jpeg_params,
+                    )
+
+                    enriched_by_idx[idx] = EvidenceEventRecord.from_event(
+                        ev,
+                        snapshot_path=rel_snap,
+                        crop_path=rel_crop,
+                        best_frame_id=sel.frame_id,
+                        best_confidence=sel.confidence,
+                        clipped_at_frame_edge=clipped,
+                    )
+                    caption = f"{ev.event_id} {ev.event_type[:10]} T{ev.track_id}"
+                    contact_items_by_idx[idx] = (crop_bgr, caption)
+
+            if frame_id >= max_needed_frame:
+                break
+
+    if len(enriched_by_idx) != len(events):
+        missing_events = [
+            events[i].event_id for i in range(len(events)) if i not in enriched_by_idx
+        ]
+        raise RuntimeError(
+            f"Video ended before extracting evidence for events: {missing_events}"
+        )
+
+    enriched_records = [enriched_by_idx[i] for i in range(len(events))]
+    verification = verify_evidence_records(enriched_records, base_dir=output_dir)
+    if not verification["all_paths_valid"]:
+        raise RuntimeError(f"Evidence path verification failed: {verification}")
+
+    events_out_path = write_evidence_events_csv(
+        enriched_records, output_dir / "events.csv"
+    )
+    config_out_path = save_evidence_config(cfg, output_dir / "evidence.yaml")
+
+    contact_items = [
+        contact_items_by_idx[i]
+        for i in range(min(len(events), cfg.contact_sheet_max_items))
+    ]
+    contact_sheet = render_evidence_contact_sheet(
+        contact_items,
+        columns=cfg.contact_sheet_columns,
+    )
+    contact_sheet_path = output_dir / "evidence_contact_sheet.jpg"
+    cv2.imwrite(str(contact_sheet_path), contact_sheet, jpeg_params)
+
+    elapsed_s = time.perf_counter() - t0
+    clipped_count = sum(1 for r in enriched_records if r.clipped_at_frame_edge)
+    fallback_count = sum(1 for s in selections if s.used_nearest_fallback)
+    mean_conf = (
+        float(np.mean([s.confidence for s in selections])) if selections else 0.0
+    )
+
+    event_counts_by_type: dict[str, int] = {}
+    for rec in enriched_records:
+        event_counts_by_type[rec.event_type] = (
+            event_counts_by_type.get(rec.event_type, 0) + 1
+        )
+
+    summary: dict[str, Any] = {
+        "source_path": str(source_path),
+        "events_csv_input": str(events_csv_path),
+        "tracks_csv_input": str(tracks_csv_path),
+        "events_csv_output": str(events_out_path),
+        "evidence_config_output": str(config_out_path),
+        "contact_sheet_output": str(contact_sheet_path),
+        "best_frame_strategy": cfg.best_frame_strategy,
+        "crop_padding_ratio": cfg.crop_padding_ratio,
+        "min_padding_px": cfg.min_padding_px,
+        "jpeg_quality": cfg.jpeg_quality,
+        "total_events": len(enriched_records),
+        "unique_frames_decoded": len(by_frame),
+        "event_counts_by_type": event_counts_by_type,
+        "mean_best_confidence": round(mean_conf, 4),
+        "clipped_crop_count": clipped_count,
+        "nearest_fallback_count": fallback_count,
+        "verification": verification,
+        "elapsed_seconds": round(elapsed_s, 4),
+    }
+    summary_path = output_dir / "visual_evidence_summary.json"
+    summary_path.write_text(json.dumps(summary, indent=2), encoding="utf-8")
+    return summary
+
+
+def build_parser() -> argparse.ArgumentParser:
+    """Build CLI argument parser for Phase 7 visual evidence extraction."""
+    parser = argparse.ArgumentParser(
+        description="Phase 7: Extract best-frame snapshots and padded person crops per event."
+    )
+    parser.add_argument(
+        "--source",
+        type=Path,
+        required=True,
+        help="Path to the source video file.",
+    )
+    parser.add_argument(
+        "--events",
+        type=Path,
+        required=True,
+        help="Path to the Phase 6 events.csv input file.",
+    )
+    parser.add_argument(
+        "--tracks",
+        type=Path,
+        required=True,
+        help="Path to the Phase 3 tracks.csv input file.",
+    )
+    parser.add_argument(
+        "--config",
+        type=Path,
+        default=Path(__file__).resolve().parents[1] / "configs" / "evidence.yaml",
+        help="Path to evidence.yaml configuration file.",
+    )
+    parser.add_argument(
+        "--scene-config",
+        type=Path,
+        default=(
+            Path(__file__).resolve().parents[2]
+            / "05_zone_line_reasoning"
+            / "configs"
+            / "scene_config.yaml"
+        ),
+        help="Optional path to Phase 5 scene_config.yaml for zone/line overlays.",
+    )
+    parser.add_argument(
+        "--output-dir",
+        type=Path,
+        default=Path(__file__).resolve().parents[1] / "outputs" / "default_run",
+        help="Directory to write snapshots/, crops/, enriched events.csv, and summary.",
+    )
+    parser.add_argument(
+        "--strategy",
+        type=str,
+        choices=list(VALID_BEST_FRAME_STRATEGIES),
+        default=None,
+        help="Optional override for best_frame_strategy.",
+    )
+    parser.add_argument(
+        "--padding-ratio",
+        type=float,
+        default=None,
+        help="Optional override for crop_padding_ratio.",
+    )
+    parser.add_argument(
+        "--min-padding-px",
+        type=int,
+        default=None,
+        help="Optional override for min_padding_px.",
+    )
+    parser.add_argument(
+        "--jpeg-quality",
+        type=int,
+        default=None,
+        help="Optional override for jpeg_quality (1-100).",
+    )
+    return parser
+
+
+def main(argv: Sequence[str] | None = None) -> int:
+    """CLI entrypoint for Phase 7 visual evidence extraction."""
+    parser = build_parser()
+    args = parser.parse_args(argv)
+    summary = run_visual_evidence(
+        source_path=args.source,
+        events_csv_path=args.events,
+        tracks_csv_path=args.tracks,
+        output_dir=args.output_dir,
+        config_path=args.config,
+        scene_config_path=args.scene_config,
+        best_frame_strategy_override=args.strategy,
+        crop_padding_ratio_override=args.padding_ratio,
+        min_padding_px_override=args.min_padding_px,
+        jpeg_quality_override=args.jpeg_quality,
+    )
+    print(json.dumps(summary, indent=2))
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())
