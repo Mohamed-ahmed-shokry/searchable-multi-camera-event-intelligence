@@ -5,8 +5,11 @@ track duration distribution calculator, and CLI entrypoint.
 
 from __future__ import annotations
 
-from dataclasses import dataclass, field
+from dataclasses import asdict, dataclass, field
+from pathlib import Path
 from typing import Any
+
+import yaml
 
 ZONE_COUNTS_CSV_HEADER: list[str] = [
     "zone_id",
@@ -171,3 +174,60 @@ class TrackDurationStats:
             "max_path_length_px": round(self.max_path_length_px, 2),
             "duration_buckets": dict(self.duration_buckets),
         }
+
+
+def load_analytics_config(config_path: Path | str) -> AnalyticsConfig:
+    """Load an AnalyticsConfig from a YAML file."""
+    path = Path(config_path)
+    if not path.is_file():
+        raise FileNotFoundError(f"Analytics config file not found: {path}")
+
+    with path.open("r", encoding="utf-8") as handle:
+        raw: Any = yaml.safe_load(handle)
+
+    if raw is None:
+        return AnalyticsConfig()
+    if not isinstance(raw, dict):
+        raise TypeError(f"Expected YAML mapping in {path}, got {type(raw).__name__}")
+
+    defaults = AnalyticsConfig()
+    raw_edges = raw.get(
+        "duration_bucket_edges_seconds", defaults.duration_bucket_edges_seconds
+    )
+    edges = tuple(float(v) for v in raw_edges)
+
+    return AnalyticsConfig(
+        grid_bin_size_px=int(raw.get("grid_bin_size_px", defaults.grid_bin_size_px)),
+        gaussian_sigma_px=float(
+            raw.get("gaussian_sigma_px", defaults.gaussian_sigma_px)
+        ),
+        normalization_mode=str(
+            raw.get("normalization_mode", defaults.normalization_mode)
+        ),
+        percentile_clip=float(raw.get("percentile_clip", defaults.percentile_clip)),
+        max_points_per_track_cell=int(
+            raw.get("max_points_per_track_cell", defaults.max_points_per_track_cell)
+        ),
+        heatmap_alpha=float(raw.get("heatmap_alpha", defaults.heatmap_alpha)),
+        colormap=str(raw.get("colormap", defaults.colormap)),
+        overlay_scene_geometry=bool(
+            raw.get("overlay_scene_geometry", defaults.overlay_scene_geometry)
+        ),
+        reference_frame_index=int(
+            raw.get("reference_frame_index", defaults.reference_frame_index)
+        ),
+        duration_bucket_edges_seconds=edges,
+    )
+
+
+def save_analytics_config(config: AnalyticsConfig, config_path: Path | str) -> Path:
+    """Save an AnalyticsConfig to a YAML file."""
+    path = Path(config_path)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    payload = asdict(config)
+    payload["duration_bucket_edges_seconds"] = list(
+        config.duration_bucket_edges_seconds
+    )
+    with path.open("w", encoding="utf-8") as handle:
+        yaml.safe_dump(payload, handle, sort_keys=False)
+    return path
