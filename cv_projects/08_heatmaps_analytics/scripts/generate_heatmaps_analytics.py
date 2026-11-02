@@ -6,12 +6,26 @@ track duration distribution calculator, and CLI entrypoint.
 from __future__ import annotations
 
 import csv
+import math
+import sys
 from collections.abc import Sequence
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
 from typing import Any
 
+import cv2
+import numpy as np
 import yaml
+
+try:
+    from extract_trajectories import TrajectoryPoint
+except ImportError:
+    _subproject_4_scripts = (
+        Path(__file__).resolve().parents[2] / "04_trajectory_extraction" / "scripts"
+    )
+    if str(_subproject_4_scripts) not in sys.path:
+        sys.path.insert(0, str(_subproject_4_scripts))
+    from extract_trajectories import TrajectoryPoint
 
 ZONE_COUNTS_CSV_HEADER: list[str] = [
     "zone_id",
@@ -332,3 +346,105 @@ def read_line_counts_csv(csv_path: Path | str) -> list[LineCountRecord]:
                 )
             )
     return records
+
+
+def accumulate_trajectory_grid(
+    points: Sequence[TrajectoryPoint],
+    *,
+    frame_width: int,
+    frame_height: int,
+    grid_bin_size_px: int = 16,
+    max_points_per_track_cell: int = 6,
+) -> tuple[np.ndarray, np.ndarray]:
+    """Accumulate trajectory coordinates into a 2D spatial grid and upsample to frame size.
+
+    Returns ``(raw_grid, full_res_density)`` where ``raw_grid`` has shape
+    ``(grid_rows, grid_cols)`` and ``full_res_density`` has exact shape
+    ``(frame_height, frame_width)``.
+    """
+    if frame_width < 1 or frame_height < 1:
+        raise ValueError(
+            f"frame_width ({frame_width}) and frame_height ({frame_height}) must be >= 1"
+        )
+    if grid_bin_size_px < 1:
+        raise ValueError(f"grid_bin_size_px must be >= 1, got {grid_bin_size_px}")
+    if max_points_per_track_cell < 0:
+        raise ValueError(
+            f"max_points_per_track_cell must be >= 0, got {max_points_per_track_cell}"
+        )
+
+    grid_cols = max(1, math.ceil(frame_width / grid_bin_size_px))
+    grid_rows = max(1, math.ceil(frame_height / grid_bin_size_px))
+    raw_grid = np.zeros((grid_rows, grid_cols), dtype=np.float32)
+
+    per_track_cell_counts: dict[tuple[int, int, int], int] = {}
+    for pt in points:
+        clamped_x = max(0.0, min(float(frame_width - 1), pt.x))
+        clamped_y = max(0.0, min(float(frame_height - 1), pt.y))
+        col_idx = min(grid_cols - 1, int(clamped_x // grid_bin_size_px))
+        row_idx = min(grid_rows - 1, int(clamped_y // grid_bin_size_px))
+
+        if max_points_per_track_cell > 0:
+            key = (pt.track_id, row_idx, col_idx)
+            seen = per_track_cell_counts.get(key, 0)
+            if seen >= max_points_per_track_cell:
+                continue
+            per_track_cell_counts[key] = seen + 1
+
+        raw_grid[row_idx, col_idx] += 1.0
+
+    full_res_density = cv2.resize(
+        raw_grid,
+        (frame_width, frame_height),
+        interpolation=cv2.INTER_NEAREST,
+    )
+    return raw_grid, full_res_density.astype(np.float32)
+
+
+def smooth_and_normalize_heatmap(
+    full_res_density: np.ndarray,
+    *,
+    gaussian_sigma_px: float = 24.0,
+    normalization_mode: str = "log",
+    percentile_clip: float = 99.0,
+) -> np.ndarray:
+    """Apply Gaussian smoothing and normalize a 2D density array into ``[0.0, 1.0]``."""
+    if normalization_mode not in VALID_NORMALIZATION_MODES:
+        raise ValueError(
+            f"normalization_mode must be one of {VALID_NORMALIZATION_MODES}, "
+            f"got {normalization_mode!r}"
+        )
+    if gaussian_sigma_px < 0.0:
+        raise ValueError(f"gaussian_sigma_px must be >= 0.0, got {gaussian_sigma_px}")
+
+    density = full_res_density.astype(np.float32)
+    if gaussian_sigma_px > 0.0:
+        smoothed = cv2.GaussianBlur(
+            density,
+            (0, 0),
+            sigmaX=gaussian_sigma_px,
+            sigmaY=gaussian_sigma_px,
+        )
+    else:
+        smoothed = density.copy()
+
+    smoothed = np.maximum(0.0, smoothed)
+    max_val = float(smoothed.max()) if smoothed.size > 0 else 0.0
+    if max_val <= 1e-9:
+        return np.zeros_like(smoothed, dtype=np.float32)
+
+    if normalization_mode == "log":
+        normalized = np.log1p(smoothed) / float(np.log1p(max_val))
+    elif normalization_mode == "percentile":
+        nonzero = smoothed[smoothed > 1e-9]
+        clip_val = (
+            float(np.percentile(nonzero, percentile_clip))
+            if nonzero.size > 0
+            else max_val
+        )
+        clip_val = max(clip_val, 1e-9)
+        normalized = np.clip(smoothed / clip_val, 0.0, 1.0)
+    else:  # "linear"
+        normalized = smoothed / max_val
+
+    return np.clip(normalized, 0.0, 1.0).astype(np.float32)
