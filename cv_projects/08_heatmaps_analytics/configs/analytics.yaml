@@ -1,0 +1,19 @@
+# Phase 8: Heatmaps and Analytics Configuration
+# Normalization modes: log | percentile | linear
+# Colormaps: jet | inferno | turbo | hot
+
+grid_bin_size_px: 16
+gaussian_sigma_px: 24.0
+normalization_mode: log
+percentile_clip: 99.0
+max_points_per_track_cell: 6
+heatmap_alpha: 0.55
+colormap: jet
+overlay_scene_geometry: true
+reference_frame_index: 35
+duration_bucket_edges_seconds:
+  - 0.0
+  - 2.0
+  - 4.0
+  - 6.0
+  - 10.0
