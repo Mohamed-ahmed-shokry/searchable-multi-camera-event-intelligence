@@ -25,7 +25,7 @@ from generate_heatmaps_analytics import (
     write_line_counts_csv,
     write_zone_counts_csv,
 )
-from reason_zones_lines import LineSegment, PolygonZone, SceneConfig
+from reason_zones_lines import LineSpec, SceneConfig, ZoneSpec
 
 
 def test_analytics_config_defaults_and_validation() -> None:
@@ -297,26 +297,22 @@ def test_render_heatmap_overlay_resolution_and_blending() -> None:
 
 def test_compute_zone_and_line_counts() -> None:
     scene = SceneConfig(
-        zones=[
-            PolygonZone(
-                zone_id="z_main",
-                name="Main",
-                vertices=[(10.0, 10.0), (90.0, 10.0), (90.0, 90.0), (10.0, 90.0)],
+        zones=(
+            ZoneSpec(
+                id="z_main",
+                polygon=((10.0, 10.0), (90.0, 10.0), (90.0, 90.0), (10.0, 90.0)),
             ),
-            PolygonZone(
-                zone_id="z_empty",
-                name="Empty",
-                vertices=[(100.0, 10.0), (150.0, 10.0), (150.0, 90.0), (100.0, 90.0)],
+            ZoneSpec(
+                id="z_empty",
+                polygon=((100.0, 10.0), (150.0, 10.0), (150.0, 90.0), (100.0, 90.0)),
             ),
-        ],
-        lines=[
-            LineSegment(
-                line_id="door_line",
-                name="Door",
-                start=(10.0, 50.0),
-                end=(90.0, 50.0),
-            )
-        ],
+        ),
+        lines=(
+            LineSpec(
+                id="door_line",
+                points=((10.0, 50.0), (90.0, 50.0)),
+            ),
+        ),
     )
     events = [
         EventRecord(

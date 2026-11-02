@@ -593,9 +593,9 @@ def compute_zone_counts(
     zone_map = {}
     if scene_config is not None:
         for z in scene_config.zones:
-            if z.zone_id not in zone_order:
-                zone_order.append(z.zone_id)
-                zone_map[z.zone_id] = z
+            if z.id not in zone_order:
+                zone_order.append(z.id)
+                zone_map[z.id] = z
 
     for ev in events:
         if (
@@ -615,7 +615,7 @@ def compute_zone_counts(
                 occupants = {
                     pt.track_id
                     for pt in frame_pts
-                    if point_in_zone((pt.x, pt.y), poly_zone)
+                    if point_in_zone(pt.x, pt.y, poly_zone)
                 }
                 frame_peak_by_zone[zid] = max(frame_peak_by_zone[zid], len(occupants))
 
@@ -662,8 +662,8 @@ def compute_line_counts(
     line_order: list[str] = []
     if scene_config is not None:
         for ln in scene_config.lines:
-            if ln.line_id not in line_order:
-                line_order.append(ln.line_id)
+            if ln.id not in line_order:
+                line_order.append(ln.id)
 
     ab_counts: dict[str, int] = {}
     ba_counts: dict[str, int] = {}
