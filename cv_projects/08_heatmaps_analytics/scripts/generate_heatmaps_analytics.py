@@ -283,3 +283,52 @@ def read_zone_counts_csv(csv_path: Path | str) -> list[ZoneCountRecord]:
                 )
             )
     return records
+
+
+def write_line_counts_csv(
+    records: Sequence[LineCountRecord], csv_path: Path | str
+) -> Path:
+    """Write LineCountRecord rows to line_counts.csv."""
+    path = Path(csv_path)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with path.open("w", encoding="utf-8", newline="") as handle:
+        writer = csv.writer(handle)
+        writer.writerow(LINE_COUNTS_CSV_HEADER)
+        for rec in records:
+            writer.writerow(rec.to_row())
+    return path
+
+
+def read_line_counts_csv(csv_path: Path | str) -> list[LineCountRecord]:
+    """Read LineCountRecord rows from line_counts.csv."""
+    path = Path(csv_path)
+    if not path.is_file():
+        raise FileNotFoundError(f"line_counts.csv not found: {path}")
+
+    with path.open("r", encoding="utf-8", newline="") as handle:
+        reader = csv.reader(handle)
+        header = next(reader, None)
+        if header != LINE_COUNTS_CSV_HEADER:
+            raise ValueError(
+                f"Unexpected line_counts.csv header in {path}: got {header}, "
+                f"expected {LINE_COUNTS_CSV_HEADER}"
+            )
+
+        records: list[LineCountRecord] = []
+        for row in reader:
+            if not row or all(not cell.strip() for cell in row):
+                continue
+            if len(row) != len(LINE_COUNTS_CSV_HEADER):
+                raise ValueError(
+                    f"Malformed row in {path}: expected {len(LINE_COUNTS_CSV_HEADER)} "
+                    f"columns, got {len(row)}: {row}"
+                )
+            records.append(
+                LineCountRecord(
+                    line_id=row[0].strip(),
+                    crossings_ab=int(row[1].strip()),
+                    crossings_ba=int(row[2].strip()),
+                    total=int(row[3].strip()),
+                )
+            )
+    return records
