@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
+import numpy as np
 import pytest
 from generate_heatmaps_analytics import (
     LINE_COUNTS_CSV_HEADER,
@@ -9,11 +10,14 @@ from generate_heatmaps_analytics import (
     AnalyticsConfig,
     LineCountRecord,
     TrackDurationStats,
+    TrajectoryPoint,
     ZoneCountRecord,
+    accumulate_trajectory_grid,
     load_analytics_config,
     read_line_counts_csv,
     read_zone_counts_csv,
     save_analytics_config,
+    smooth_and_normalize_heatmap,
     write_line_counts_csv,
     write_zone_counts_csv,
 )
@@ -224,3 +228,44 @@ def test_line_counts_csv_round_trip(tmp_path: Path) -> None:
 
     with pytest.raises(FileNotFoundError):
         read_line_counts_csv(tmp_path / "missing_line_counts.csv")
+
+
+def test_accumulate_trajectory_grid_and_smooth_normalize() -> None:
+    # 10 stationary points for track 1 in cell (1, 2) + 2 points for track 2
+    points = [
+        TrajectoryPoint(track_id=1, frame_id=i, timestamp=i * 0.1, x=35.0, y=20.0)
+        for i in range(10)
+    ] + [
+        TrajectoryPoint(track_id=2, frame_id=0, timestamp=0.0, x=35.0, y=20.0),
+        TrajectoryPoint(track_id=2, frame_id=1, timestamp=0.1, x=36.0, y=21.0),
+    ]
+
+    raw_grid, full_res = accumulate_trajectory_grid(
+        points,
+        frame_width=160,
+        frame_height=96,
+        grid_bin_size_px=16,
+        max_points_per_track_cell=4,
+    )
+    assert raw_grid.shape == (6, 10)
+    assert full_res.shape == (96, 160)
+    # Track 1 capped at 4 + Track 2 contributes 2 = 6.0 in cell (row=1, col=2)
+    assert raw_grid[1, 2] == pytest.approx(6.0)
+
+    for mode in ("log", "percentile", "linear"):
+        norm = smooth_and_normalize_heatmap(
+            full_res,
+            gaussian_sigma_px=8.0,
+            normalization_mode=mode,
+            percentile_clip=95.0,
+        )
+        assert norm.shape == (96, 160)
+        assert float(norm.min()) >= 0.0
+        assert float(norm.max()) == pytest.approx(1.0)
+
+    empty_norm = smooth_and_normalize_heatmap(
+        np.zeros((32, 32), dtype=np.float32),
+        gaussian_sigma_px=0.0,
+        normalization_mode="linear",
+    )
+    assert float(empty_norm.max()) == 0.0
