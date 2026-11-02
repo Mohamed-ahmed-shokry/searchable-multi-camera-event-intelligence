@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from pathlib import Path
+
 import pytest
 from generate_heatmaps_analytics import (
     LINE_COUNTS_CSV_HEADER,
@@ -8,6 +10,8 @@ from generate_heatmaps_analytics import (
     LineCountRecord,
     TrackDurationStats,
     ZoneCountRecord,
+    load_analytics_config,
+    save_analytics_config,
 )
 
 
@@ -116,3 +120,43 @@ def test_zone_and_line_count_record_validation() -> None:
     d = stats.to_dict()
     assert d["track_count"] == 3
     assert d["mean_path_length_px"] == pytest.approx(120.46)
+
+
+def test_analytics_config_yaml_round_trip(tmp_path: Path) -> None:
+    cfg = AnalyticsConfig(
+        grid_bin_size_px=8,
+        gaussian_sigma_px=18.0,
+        normalization_mode="percentile",
+        percentile_clip=95.0,
+        max_points_per_track_cell=4,
+        heatmap_alpha=0.60,
+        colormap="inferno",
+        overlay_scene_geometry=False,
+        reference_frame_index=10,
+        duration_bucket_edges_seconds=(0.0, 1.0, 3.0, 5.0),
+    )
+    yaml_path = tmp_path / "analytics.yaml"
+    save_analytics_config(cfg, yaml_path)
+    loaded = load_analytics_config(yaml_path)
+    assert loaded == cfg
+
+    default_yaml = (
+        Path(__file__).resolve().parents[1]
+        / "cv_projects"
+        / "08_heatmaps_analytics"
+        / "configs"
+        / "analytics.yaml"
+    )
+    assert load_analytics_config(default_yaml) == AnalyticsConfig()
+
+    empty_yaml = tmp_path / "empty.yaml"
+    empty_yaml.write_text("", encoding="utf-8")
+    assert load_analytics_config(empty_yaml) == AnalyticsConfig()
+
+    bad_yaml = tmp_path / "bad.yaml"
+    bad_yaml.write_text("- item1\n- item2\n", encoding="utf-8")
+    with pytest.raises(TypeError, match="Expected YAML mapping"):
+        load_analytics_config(bad_yaml)
+
+    with pytest.raises(FileNotFoundError):
+        load_analytics_config(tmp_path / "missing.yaml")
