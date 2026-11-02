@@ -6,6 +6,7 @@ track duration distribution calculator, and CLI entrypoint.
 from __future__ import annotations
 
 import csv
+import itertools
 import math
 import sys
 from collections.abc import Sequence
@@ -696,3 +697,73 @@ def compute_line_counts(
             )
         )
     return records
+
+
+def compute_track_duration_stats(
+    points: Sequence[TrajectoryPoint],
+    *,
+    bucket_edges_seconds: Sequence[float] = (0.0, 2.0, 4.0, 6.0, 10.0),
+) -> TrackDurationStats:
+    """Compute track duration and path-length distribution metrics across all tracks."""
+    edges = sorted(float(v) for v in bucket_edges_seconds)
+    if len(edges) < 2:
+        raise ValueError("bucket_edges_seconds must contain at least 2 values")
+
+    buckets: dict[str, int] = {}
+    for a, b in itertools.pairwise(edges):
+        buckets[f"{a:.1f}-{b:.1f}s"] = 0
+    buckets[f">={edges[-1]:.1f}s"] = 0
+
+    if not points:
+        return TrackDurationStats(
+            track_count=0,
+            min_duration_seconds=0.0,
+            max_duration_seconds=0.0,
+            mean_duration_seconds=0.0,
+            median_duration_seconds=0.0,
+            p90_duration_seconds=0.0,
+            mean_path_length_px=0.0,
+            max_path_length_px=0.0,
+            duration_buckets=buckets,
+        )
+
+    by_track: dict[int, list[TrajectoryPoint]] = {}
+    for pt in points:
+        by_track.setdefault(pt.track_id, []).append(pt)
+
+    durations: list[float] = []
+    path_lengths: list[float] = []
+
+    for track_pts in by_track.values():
+        ordered = sorted(track_pts, key=lambda p: p.frame_id)
+        dur = max(0.0, float(ordered[-1].timestamp - ordered[0].timestamp))
+        plen = sum(
+            math.hypot(p2.x - p1.x, p2.y - p1.y)
+            for p1, p2 in itertools.pairwise(ordered)
+        )
+        durations.append(dur)
+        path_lengths.append(plen)
+
+        placed = False
+        for a, b in itertools.pairwise(edges):
+            if a <= dur < b:
+                buckets[f"{a:.1f}-{b:.1f}s"] += 1
+                placed = True
+                break
+        if not placed:
+            buckets[f">={edges[-1]:.1f}s"] += 1
+
+    dur_arr = np.asarray(durations, dtype=np.float64)
+    len_arr = np.asarray(path_lengths, dtype=np.float64)
+
+    return TrackDurationStats(
+        track_count=len(durations),
+        min_duration_seconds=float(dur_arr.min()),
+        max_duration_seconds=float(dur_arr.max()),
+        mean_duration_seconds=float(dur_arr.mean()),
+        median_duration_seconds=float(np.median(dur_arr)),
+        p90_duration_seconds=float(np.percentile(dur_arr, 90.0)),
+        mean_path_length_px=float(len_arr.mean()),
+        max_path_length_px=float(len_arr.max()),
+        duration_buckets=buckets,
+    )
