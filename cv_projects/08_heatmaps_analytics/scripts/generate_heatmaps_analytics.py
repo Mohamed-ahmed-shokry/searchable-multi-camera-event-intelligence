@@ -27,6 +27,16 @@ except ImportError:
         sys.path.insert(0, str(_subproject_4_scripts))
     from extract_trajectories import TrajectoryPoint
 
+try:
+    from reason_zones_lines import SceneConfig, draw_zones_and_lines
+except ImportError:
+    _subproject_5_scripts = (
+        Path(__file__).resolve().parents[2] / "05_zone_line_reasoning" / "scripts"
+    )
+    if str(_subproject_5_scripts) not in sys.path:
+        sys.path.insert(0, str(_subproject_5_scripts))
+    from reason_zones_lines import SceneConfig, draw_zones_and_lines
+
 ZONE_COUNTS_CSV_HEADER: list[str] = [
     "zone_id",
     "entry_count",
@@ -448,3 +458,99 @@ def smooth_and_normalize_heatmap(
         normalized = smoothed / max_val
 
     return np.clip(normalized, 0.0, 1.0).astype(np.float32)
+
+
+def _resolve_cv2_colormap(colormap: str) -> int:
+    mapping: dict[str, int] = {
+        "jet": cv2.COLORMAP_JET,
+        "inferno": cv2.COLORMAP_INFERNO,
+        "turbo": cv2.COLORMAP_TURBO,
+        "hot": cv2.COLORMAP_HOT,
+    }
+    if colormap not in mapping:
+        raise ValueError(f"colormap must be one of {VALID_COLORMAPS}, got {colormap!r}")
+    return mapping[colormap]
+
+
+def render_heatmap_overlay(
+    reference_frame: np.ndarray,
+    normalized_heatmap: np.ndarray,
+    *,
+    heatmap_alpha: float = 0.55,
+    colormap: str = "jet",
+    scene_config: SceneConfig | None = None,
+    title: str = "Spatial Activity Heatmap",
+) -> np.ndarray:
+    """Render a Gaussian-smoothed normalized heatmap overlaid on a reference frame."""
+    if reference_frame.ndim != 3 or reference_frame.shape[2] != 3:
+        raise ValueError(
+            f"reference_frame must have shape (H, W, 3), got {reference_frame.shape}"
+        )
+    if not (0.0 < heatmap_alpha <= 1.0):
+        raise ValueError(f"heatmap_alpha must be in (0, 1], got {heatmap_alpha}")
+
+    height, width = int(reference_frame.shape[0]), int(reference_frame.shape[1])
+    norm = normalized_heatmap.astype(np.float32)
+    if norm.shape[:2] != (height, width):
+        norm = cv2.resize(norm, (width, height), interpolation=cv2.INTER_LINEAR)
+    norm = np.clip(norm, 0.0, 1.0)
+
+    cv_cmap = _resolve_cv2_colormap(colormap)
+    heat_u8 = np.round(norm * 255.0).astype(np.uint8)
+    colored_heat = cv2.applyColorMap(heat_u8, cv_cmap)
+
+    base = reference_frame.astype(np.float32)
+    heat_f = colored_heat.astype(np.float32)
+    weight = np.where(norm > 0.015, heatmap_alpha * (norm**0.65), 0.0)[..., np.newaxis]
+    blended = np.clip(base * (1.0 - weight) + heat_f * weight, 0.0, 255.0).astype(
+        np.uint8
+    )
+
+    if scene_config is not None:
+        blended = draw_zones_and_lines(blended, scene_config)
+
+    # Compact HUD banner + colorbar legend
+    bar_w = min(180, max(80, width - 32))
+    bar_h = 12
+    hud_w = min(width - 16, max(bar_w + 24, 260))
+    hud_h = 54
+    if width >= 120 and height >= 70:
+        cv2.rectangle(blended, (8, 8), (8 + hud_w, 8 + hud_h), (20, 20, 20), -1)
+        cv2.rectangle(
+            blended, (8, 8), (8 + hud_w, 8 + hud_h), (100, 100, 100), 1, cv2.LINE_AA
+        )
+        cv2.putText(
+            blended,
+            title[:34],
+            (16, 26),
+            cv2.FONT_HERSHEY_SIMPLEX,
+            0.46,
+            (245, 245, 245),
+            1,
+            cv2.LINE_AA,
+        )
+        grad = np.linspace(0, 255, bar_w, dtype=np.uint8)[np.newaxis, :]
+        grad_bar = cv2.applyColorMap(np.repeat(grad, bar_h, axis=0), cv_cmap)
+        blended[36 : 36 + bar_h, 16 : 16 + bar_w] = grad_bar
+        cv2.putText(
+            blended,
+            "Low",
+            (16, 58),
+            cv2.FONT_HERSHEY_SIMPLEX,
+            0.35,
+            (200, 200, 200),
+            1,
+            cv2.LINE_AA,
+        )
+        cv2.putText(
+            blended,
+            "High",
+            (16 + bar_w - 26, 58),
+            cv2.FONT_HERSHEY_SIMPLEX,
+            0.35,
+            (200, 200, 200),
+            1,
+            cv2.LINE_AA,
+        )
+
+    return blended
