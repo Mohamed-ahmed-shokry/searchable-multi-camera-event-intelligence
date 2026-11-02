@@ -12,7 +12,7 @@ import json
 import math
 import sys
 import time
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
 from typing import Any
@@ -400,8 +400,20 @@ def read_line_counts_csv(csv_path: Path | str) -> list[LineCountRecord]:
     return records
 
 
+def _flatten_trajectory_points(
+    points: Mapping[int, Sequence[TrajectoryPoint]] | Sequence[TrajectoryPoint],
+) -> list[TrajectoryPoint]:
+    """Normalize either a track_id->points mapping or a flat sequence into a list of TrajectoryPoint."""
+    if isinstance(points, Mapping):
+        flat: list[TrajectoryPoint] = []
+        for track_id in sorted(points):
+            flat.extend(points[track_id])
+        return flat
+    return list(points)
+
+
 def accumulate_trajectory_grid(
-    points: Sequence[TrajectoryPoint],
+    points: Mapping[int, Sequence[TrajectoryPoint]] | Sequence[TrajectoryPoint],
     *,
     frame_width: int,
     frame_height: int,
@@ -425,12 +437,13 @@ def accumulate_trajectory_grid(
             f"max_points_per_track_cell must be >= 0, got {max_points_per_track_cell}"
         )
 
+    flat_points = _flatten_trajectory_points(points)
     grid_cols = max(1, math.ceil(frame_width / grid_bin_size_px))
     grid_rows = max(1, math.ceil(frame_height / grid_bin_size_px))
     raw_grid = np.zeros((grid_rows, grid_cols), dtype=np.float32)
 
     per_track_cell_counts: dict[tuple[int, int, int], int] = {}
-    for pt in points:
+    for pt in flat_points:
         clamped_x = max(0.0, min(float(frame_width - 1), pt.x))
         clamped_y = max(0.0, min(float(frame_height - 1), pt.y))
         col_idx = min(grid_cols - 1, int(clamped_x // grid_bin_size_px))
@@ -627,10 +640,12 @@ def _interval_peak_occupancy(intervals: Sequence[tuple[int, float, float]]) -> i
 def compute_zone_counts(
     events: Sequence[Any],
     *,
-    trajectory_points: Sequence[TrajectoryPoint] = (),
+    trajectory_points: Mapping[int, Sequence[TrajectoryPoint]]
+    | Sequence[TrajectoryPoint] = (),
     scene_config: SceneConfig | None = None,
 ) -> list[ZoneCountRecord]:
     """Aggregate per-zone entry_count, exit_count, total_dwell_seconds, and peak_occupancy."""
+    flat_points = _flatten_trajectory_points(trajectory_points)
     zone_order: list[str] = []
     zone_map = {}
     if scene_config is not None:
@@ -648,9 +663,9 @@ def compute_zone_counts(
 
     # Pre-compute frame-by-frame polygon occupancy when scene_config + trajectories are available
     frame_peak_by_zone: dict[str, int] = {zid: 0 for zid in zone_order}
-    if zone_map and trajectory_points:
+    if zone_map and flat_points:
         by_frame: dict[int, list[TrajectoryPoint]] = {}
-        for pt in trajectory_points:
+        for pt in flat_points:
             by_frame.setdefault(pt.frame_id, []).append(pt)
         for frame_pts in by_frame.values():
             for zid, poly_zone in zone_map.items():
@@ -741,11 +756,12 @@ def compute_line_counts(
 
 
 def compute_track_duration_stats(
-    points: Sequence[TrajectoryPoint],
+    points: Mapping[int, Sequence[TrajectoryPoint]] | Sequence[TrajectoryPoint],
     *,
     bucket_edges_seconds: Sequence[float] = (0.0, 2.0, 4.0, 6.0, 10.0),
 ) -> TrackDurationStats:
     """Compute track duration and path-length distribution metrics across all tracks."""
+    flat_points = _flatten_trajectory_points(points)
     edges = sorted(float(v) for v in bucket_edges_seconds)
     if len(edges) < 2:
         raise ValueError("bucket_edges_seconds must contain at least 2 values")
@@ -755,7 +771,7 @@ def compute_track_duration_stats(
         buckets[f"{a:.1f}-{b:.1f}s"] = 0
     buckets[f">={edges[-1]:.1f}s"] = 0
 
-    if not points:
+    if not flat_points:
         return TrackDurationStats(
             track_count=0,
             min_duration_seconds=0.0,
@@ -769,7 +785,7 @@ def compute_track_duration_stats(
         )
 
     by_track: dict[int, list[TrajectoryPoint]] = {}
-    for pt in points:
+    for pt in flat_points:
         by_track.setdefault(pt.track_id, []).append(pt)
 
     durations: list[float] = []
@@ -882,7 +898,9 @@ def run_heatmaps_analytics(
     if scene_config_path is not None and scene_config_path.is_file():
         scene_cfg = load_scene_config(scene_config_path)
 
-    trajectory_points = read_trajectories_csv(trajectories_csv_path)
+    trajectory_points = _flatten_trajectory_points(
+        read_trajectories_csv(trajectories_csv_path)
+    )
     events = _load_any_events_csv(events_csv_path)
 
     with VideoSource(source_path) as vs:
