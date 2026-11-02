@@ -5,6 +5,8 @@ track duration distribution calculator, and CLI entrypoint.
 
 from __future__ import annotations
 
+import csv
+from collections.abc import Sequence
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
 from typing import Any
@@ -231,3 +233,53 @@ def save_analytics_config(config: AnalyticsConfig, config_path: Path | str) -> P
     with path.open("w", encoding="utf-8") as handle:
         yaml.safe_dump(payload, handle, sort_keys=False)
     return path
+
+
+def write_zone_counts_csv(
+    records: Sequence[ZoneCountRecord], csv_path: Path | str
+) -> Path:
+    """Write ZoneCountRecord rows to zone_counts.csv."""
+    path = Path(csv_path)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with path.open("w", encoding="utf-8", newline="") as handle:
+        writer = csv.writer(handle)
+        writer.writerow(ZONE_COUNTS_CSV_HEADER)
+        for rec in records:
+            writer.writerow(rec.to_row())
+    return path
+
+
+def read_zone_counts_csv(csv_path: Path | str) -> list[ZoneCountRecord]:
+    """Read ZoneCountRecord rows from zone_counts.csv."""
+    path = Path(csv_path)
+    if not path.is_file():
+        raise FileNotFoundError(f"zone_counts.csv not found: {path}")
+
+    with path.open("r", encoding="utf-8", newline="") as handle:
+        reader = csv.reader(handle)
+        header = next(reader, None)
+        if header != ZONE_COUNTS_CSV_HEADER:
+            raise ValueError(
+                f"Unexpected zone_counts.csv header in {path}: got {header}, "
+                f"expected {ZONE_COUNTS_CSV_HEADER}"
+            )
+
+        records: list[ZoneCountRecord] = []
+        for row in reader:
+            if not row or all(not cell.strip() for cell in row):
+                continue
+            if len(row) != len(ZONE_COUNTS_CSV_HEADER):
+                raise ValueError(
+                    f"Malformed row in {path}: expected {len(ZONE_COUNTS_CSV_HEADER)} "
+                    f"columns, got {len(row)}: {row}"
+                )
+            records.append(
+                ZoneCountRecord(
+                    zone_id=row[0].strip(),
+                    entry_count=int(row[1].strip()),
+                    exit_count=int(row[2].strip()),
+                    total_dwell_seconds=float(row[3].strip()),
+                    peak_occupancy=int(row[4].strip()),
+                )
+            )
+    return records
