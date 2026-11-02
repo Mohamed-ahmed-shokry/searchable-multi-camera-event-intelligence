@@ -6,13 +6,51 @@ visual proof renderers, and CLI entrypoint.
 
 from __future__ import annotations
 
+import argparse
 import csv
+import json
+import sys
+import time
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
+import cv2
+import numpy as np
 import yaml
+
+try:
+    from reason_zones_lines import (
+        SceneConfig,
+        TrajectoryPoint,
+        VideoSource,
+        create_video_writer,
+        detect_line_signals,
+        draw_trajectory_trails,
+        draw_zones_and_lines,
+        load_scene_config,
+        point_in_zone,
+        read_trajectories_csv,
+    )
+except ImportError:
+    _subproject_5_scripts = (
+        Path(__file__).resolve().parents[2] / "05_zone_line_reasoning" / "scripts"
+    )
+    if str(_subproject_5_scripts) not in sys.path:
+        sys.path.insert(0, str(_subproject_5_scripts))
+    from reason_zones_lines import (
+        SceneConfig,
+        TrajectoryPoint,
+        VideoSource,
+        create_video_writer,
+        detect_line_signals,
+        draw_trajectory_trails,
+        draw_zones_and_lines,
+        load_scene_config,
+        point_in_zone,
+        read_trajectories_csv,
+    )
 
 EVENTS_CSV_HEADER: list[str] = [
     "event_id",
@@ -534,3 +572,461 @@ class ZoneDwellStateMachine:
         self.outside_streak = 0
         self.inside_frames = 0
         return emitted
+
+
+def evaluate_dwell_events(
+    trajectories: Mapping[int, Sequence[TrajectoryPoint]],
+    scene_config: SceneConfig,
+    config: EventConfig | None = None,
+) -> tuple[list[EventRecord], list[StayDebugTrace]]:
+    """Evaluate stateful dwell/zone events and deduplicated line crossings across all tracks."""
+    cfg = config or EventConfig()
+    raw_events: list[EventRecord] = []
+    traces: list[StayDebugTrace] = []
+    zone_polys = [(z.id, z.shapely_polygon) for z in scene_config.zones]
+
+    for tid in sorted(trajectories):
+        pts = sorted(trajectories[tid], key=lambda item: item.frame_id)
+        if not pts:
+            continue
+        for zid, poly in zone_polys:
+            sm = ZoneDwellStateMachine(track_id=tid, zone_id=zid, config=cfg)
+            for pt in pts:
+                inside = point_in_zone(pt.x, pt.y, poly)
+                raw_events.extend(sm.step(pt.frame_id, pt.timestamp, is_inside=inside))
+            raw_events.extend(sm.finish_track())
+            traces.extend(sm.completed_traces)
+
+    if cfg.include_line_crossings and scene_config.lines:
+        raw_line_sigs = detect_line_signals(trajectories, scene_config.lines)
+        last_cross_frame: dict[tuple[int, str], int] = {}
+        line_seq = 0
+        for sig in raw_line_sigs:
+            key = (sig.track_id, sig.line_id)
+            if (
+                key in last_cross_frame
+                and (sig.frame_id - last_cross_frame[key]) <= cfg.line_cooldown_frames
+            ):
+                continue
+            last_cross_frame[key] = sig.frame_id
+            line_seq += 1
+            raw_events.append(
+                EventRecord(
+                    event_id=f"line_{line_seq:04d}",
+                    event_type="line_crossing",
+                    track_id=sig.track_id,
+                    zone_id=f"{sig.line_id}:{sig.direction}",
+                    start_time=sig.timestamp,
+                    end_time=sig.timestamp,
+                    duration_seconds=0.0,
+                    start_frame=sig.frame_id,
+                    end_frame=sig.frame_id,
+                )
+            )
+
+    ordered_raw = sorted(
+        raw_events,
+        key=lambda item: (
+            item.start_time,
+            item.end_time,
+            item.track_id,
+            item.event_type,
+            item.zone_id,
+        ),
+    )
+    numbered_events = [
+        EventRecord(
+            event_id=f"evt_{idx:04d}",
+            event_type=ev.event_type,
+            track_id=ev.track_id,
+            zone_id=ev.zone_id,
+            start_time=ev.start_time,
+            end_time=ev.end_time,
+            duration_seconds=ev.duration_seconds,
+            start_frame=ev.start_frame,
+            end_frame=ev.end_frame,
+        )
+        for idx, ev in enumerate(ordered_raw, start=1)
+    ]
+    ordered_traces = sorted(
+        traces,
+        key=lambda item: (item.enter_time, item.track_id, item.zone_id),
+    )
+    return numbered_events, ordered_traces
+
+
+def write_event_debug_logs(
+    debug_dir: Path | str,
+    traces: Sequence[StayDebugTrace],
+) -> Path:
+    """Write per-stay debug trace files into event_debug_log/ and return stay_traces.json path."""
+    out_dir = Path(debug_dir)
+    out_dir.mkdir(parents=True, exist_ok=True)
+    ordered = sorted(
+        traces,
+        key=lambda item: (item.enter_time, item.track_id, item.zone_id, item.stay_id),
+    )
+    all_payload = [tr.to_dict() for tr in ordered]
+    combined_path = out_dir / "stay_traces.json"
+    combined_path.write_text(json.dumps(all_payload, indent=2), encoding="utf-8")
+
+    for tr in ordered:
+        single_path = out_dir / f"{tr.stay_id}.json"
+        single_path.write_text(json.dumps(tr.to_dict(), indent=2), encoding="utf-8")
+
+    return combined_path
+
+
+def draw_dwell_events_overlay(
+    frame: np.ndarray,
+    scene_config: SceneConfig,
+    trajectories: Mapping[int, Sequence[TrajectoryPoint]],
+    current_frame_id: int,
+    current_timestamp: float,
+    traces: Sequence[StayDebugTrace],
+    events: Sequence[EventRecord],
+    *,
+    max_trail_length: int = 60,
+) -> np.ndarray:
+    """Render zones, lines, trajectories, live dwell timers, and recent event banners."""
+    with_geom = draw_zones_and_lines(frame, scene_config, alpha=0.22)
+    out = draw_trajectory_trails(
+        with_geom,
+        trajectories,
+        current_frame_id=current_frame_id,
+        max_trail_length=max_trail_length,
+    )
+
+    active_stays = [
+        tr
+        for tr in traces
+        if tr.enter_frame <= current_frame_id <= tr.last_inside_frame
+        and tr.peak_state in {"active", "triggered"}
+    ]
+    row_y = 26
+    for tr in active_stays:
+        elapsed = max(0.0, current_timestamp - tr.enter_time)
+        tag = "DWELL" if tr.peak_state == "triggered" else "ACTIVE"
+        color = (0, 255, 128) if tr.peak_state == "triggered" else (255, 220, 80)
+        label = f"[{tag}] T{tr.track_id} @ {tr.zone_id}: {elapsed:.2f}s"
+        cv2.putText(
+            out,
+            label,
+            (12, row_y),
+            cv2.FONT_HERSHEY_SIMPLEX,
+            0.52,
+            color,
+            2,
+            cv2.LINE_AA,
+        )
+        row_y += 22
+
+    recent_events = [
+        ev
+        for ev in events
+        if (
+            ev.event_type == "dwell_time_event"
+            and 0 <= current_frame_id - ev.end_frame <= 10
+        )
+        or (
+            ev.event_type != "dwell_time_event"
+            and 0 <= current_frame_id - ev.start_frame <= 6
+        )
+    ]
+    for ev in recent_events[:4]:
+        summary = (
+            f"{ev.event_id} {ev.event_type} T{ev.track_id} {ev.zone_id} "
+            f"({ev.duration_seconds:.2f}s)"
+        )
+        cv2.putText(
+            out,
+            summary,
+            (12, row_y),
+            cv2.FONT_HERSHEY_SIMPLEX,
+            0.46,
+            (0, 215, 255),
+            1,
+            cv2.LINE_AA,
+        )
+        row_y += 18
+
+    return out
+
+
+def save_dwell_examples(
+    video_path: Path | str,
+    examples_dir: Path | str,
+    scene_config: SceneConfig,
+    trajectories: Mapping[int, Sequence[TrajectoryPoint]],
+    traces: Sequence[StayDebugTrace],
+    events: Sequence[EventRecord],
+    *,
+    max_examples: int = 6,
+) -> list[Path]:
+    """Save annotated visual proof PNGs for triggered dwell stays into dwell_examples/."""
+    out_dir = Path(examples_dir)
+    out_dir.mkdir(parents=True, exist_ok=True)
+
+    candidates = [tr for tr in traces if tr.peak_state == "triggered"]
+    if not candidates:
+        candidates = [tr for tr in traces if tr.peak_state == "active"]
+    selected = candidates[:max_examples]
+    if not selected:
+        return []
+
+    target_by_frame: dict[int, list[StayDebugTrace]] = {}
+    for tr in selected:
+        target_by_frame.setdefault(tr.last_inside_frame, []).append(tr)
+
+    max_target_frame = max(target_by_frame)
+    saved_paths: list[Path] = []
+
+    with VideoSource(video_path) as src:
+        fps = src.metadata.fps if src.metadata.fps > 0 else 30.0
+        for frame_id, frame in src.iter_frames(stop=max_target_frame + 1):
+            if frame_id not in target_by_frame:
+                continue
+            ts = frame_id / fps
+            rendered = draw_dwell_events_overlay(
+                frame,
+                scene_config,
+                trajectories,
+                current_frame_id=frame_id,
+                current_timestamp=ts,
+                traces=traces,
+                events=events,
+            )
+            for tr in target_by_frame[frame_id]:
+                img_path = out_dir / f"{tr.stay_id}_frame_{frame_id:04d}.png"
+                cv2.imwrite(str(img_path), rendered)
+                saved_paths.append(img_path)
+
+    return saved_paths
+
+
+def run_dwell_time_events(
+    video_path: Path | str,
+    output_dir: Path | str,
+    *,
+    trajectories_csv: Path | str | None = None,
+    trajectories: Mapping[int, Sequence[TrajectoryPoint]] | None = None,
+    scene_config_path: Path | str | None = None,
+    scene_config: SceneConfig | None = None,
+    events_config_path: Path | str | None = None,
+    events_config: EventConfig | None = None,
+    max_trail_length: int = 60,
+    max_frames: int | None = None,
+    save_video: bool = True,
+) -> dict[str, Any]:
+    """Run the Phase 6 dwell-time state machine pipeline and export events, debug logs, and visuals."""
+    if trajectories is None and trajectories_csv is None:
+        raise ValueError("Either trajectories_csv or trajectories must be provided")
+    if scene_config is None and scene_config_path is None:
+        raise ValueError("Either scene_config_path or scene_config must be provided")
+
+    out_dir = Path(output_dir)
+    out_dir.mkdir(parents=True, exist_ok=True)
+    t0 = time.perf_counter()
+
+    cfg_scene = (
+        scene_config
+        if scene_config is not None
+        else load_scene_config(Path(scene_config_path))  # type: ignore[arg-type]
+    )
+    cfg_events = (
+        events_config
+        if events_config is not None
+        else load_events_config(events_config_path)
+    )
+    loaded_trajs: dict[int, list[TrajectoryPoint]] = (
+        {tid: list(pts) for tid, pts in trajectories.items()}
+        if trajectories is not None
+        else read_trajectories_csv(Path(trajectories_csv))  # type: ignore[arg-type]
+    )
+    if max_frames is not None:
+        loaded_trajs = {
+            tid: [pt for pt in pts if pt.frame_id < max_frames]
+            for tid, pts in loaded_trajs.items()
+        }
+        loaded_trajs = {tid: pts for tid, pts in loaded_trajs.items() if pts}
+
+    events, traces = evaluate_dwell_events(loaded_trajs, cfg_scene, cfg_events)
+    events_csv_path = write_events_csv(out_dir / "events.csv", events)
+    saved_events_cfg_path = save_events_config(out_dir / "events.yaml", cfg_events)
+    debug_log_path = write_event_debug_logs(out_dir / "event_debug_log", traces)
+    example_paths = save_dwell_examples(
+        video_path,
+        out_dir / "dwell_examples",
+        cfg_scene,
+        loaded_trajs,
+        traces,
+        events,
+    )
+
+    with VideoSource(video_path) as src:
+        meta = src.metadata
+        fps = meta.fps if meta.fps > 0 else 30.0
+        width, height = meta.width, meta.height
+        total_to_process = (
+            min(meta.frame_count, max_frames)
+            if max_frames is not None
+            else meta.frame_count
+        )
+
+        video_out_path = out_dir / "annotated_events_video.mp4"
+        writer: cv2.VideoWriter | None = None
+        if save_video and total_to_process > 0:
+            writer = create_video_writer(
+                video_out_path,
+                fps=fps,
+                width=width,
+                height=height,
+            )
+
+        processed_frames = 0
+        try:
+            for frame_id, frame in src.iter_frames(stop=total_to_process):
+                if writer is not None:
+                    ts = frame_id / fps
+                    rendered = draw_dwell_events_overlay(
+                        frame,
+                        cfg_scene,
+                        loaded_trajs,
+                        current_frame_id=frame_id,
+                        current_timestamp=ts,
+                        traces=traces,
+                        events=events,
+                        max_trail_length=max_trail_length,
+                    )
+                    writer.write(rendered)
+                processed_frames += 1
+        finally:
+            if writer is not None:
+                writer.release()
+
+    counts_by_type: dict[str, int] = {
+        etype: sum(1 for ev in events if ev.event_type == etype)
+        for etype in VALID_EVENT_TYPES
+    }
+    stays_by_peak_state: dict[str, int] = {
+        "candidate": sum(1 for tr in traces if tr.peak_state == "candidate"),
+        "active": sum(1 for tr in traces if tr.peak_state == "active"),
+        "triggered": sum(1 for tr in traces if tr.peak_state == "triggered"),
+    }
+    track_lost_stays = [tr.stay_id for tr in traces if tr.track_lost_in_zone]
+    total_flickers_absorbed = sum(tr.flicker_absorbed_count for tr in traces)
+    elapsed_sec = time.perf_counter() - t0
+
+    report: dict[str, Any] = {
+        "video_path": str(video_path),
+        "trajectories_csv": (
+            str(trajectories_csv) if trajectories_csv is not None else None
+        ),
+        "scene_config_path": (
+            str(scene_config_path) if scene_config_path is not None else None
+        ),
+        "events_config_path": (
+            str(events_config_path)
+            if events_config_path is not None
+            else str(saved_events_cfg_path)
+        ),
+        "fps": round(fps, 3),
+        "resolution": [width, height],
+        "processed_frames": processed_frames,
+        "num_tracks": len(loaded_trajs),
+        "total_events": len(events),
+        "events_per_frame_ratio": (
+            round(len(events) / processed_frames, 4) if processed_frames > 0 else 0.0
+        ),
+        "counts_by_type": counts_by_type,
+        "total_stays": len(traces),
+        "stays_by_peak_state": stays_by_peak_state,
+        "total_flickers_absorbed": total_flickers_absorbed,
+        "track_lost_in_zone_count": len(track_lost_stays),
+        "track_lost_stay_ids": track_lost_stays,
+        "elapsed_seconds": round(elapsed_sec, 3),
+        "outputs": {
+            "events_csv": str(events_csv_path),
+            "events_yaml": str(saved_events_cfg_path),
+            "stay_traces_json": str(debug_log_path),
+            "dwell_examples": [str(p) for p in example_paths],
+            "annotated_events_video": str(video_out_path) if save_video else None,
+        },
+    }
+    summary_path = out_dir / "dwell_events_summary.json"
+    summary_path.write_text(json.dumps(report, indent=2), encoding="utf-8")
+    return report
+
+
+def build_parser() -> argparse.ArgumentParser:
+    """Create the CLI argument parser for generate_dwell_events.py."""
+    parser = argparse.ArgumentParser(
+        description=(
+            "Phase 6: Stateful dwell-time event lifecycle state machine "
+            "(candidate -> active -> triggered -> resolved) with hysteresis."
+        )
+    )
+    parser.add_argument(
+        "video",
+        help="Path to the input video file or MOT image-sequence directory.",
+    )
+    parser.add_argument(
+        "--trajectories-csv",
+        required=True,
+        help="Path to Phase 4 trajectories.csv file.",
+    )
+    parser.add_argument(
+        "--scene-config",
+        default="cv_projects/05_zone_line_reasoning/configs/scene_config.yaml",
+        help="Path to Phase 5 scene_config.yaml file.",
+    )
+    parser.add_argument(
+        "--config",
+        default="cv_projects/06_dwell_time_events/configs/events.yaml",
+        help="Path to Phase 6 events.yaml configuration file.",
+    )
+    parser.add_argument(
+        "-o",
+        "--output-dir",
+        default="cv_projects/06_dwell_time_events/outputs",
+        help="Directory for generated events.csv, event_debug_log/, and dwell_examples/.",
+    )
+    parser.add_argument(
+        "--max-trail-length",
+        type=int,
+        default=60,
+        help="Maximum trail length rendered on annotated_events_video.mp4.",
+    )
+    parser.add_argument(
+        "--max-frames",
+        type=int,
+        default=None,
+        help="Optional cap on the number of frames to process.",
+    )
+    parser.add_argument(
+        "--no-video",
+        action="store_true",
+        help="Skip writing annotated_events_video.mp4.",
+    )
+    return parser
+
+
+def main(argv: Sequence[str] | None = None) -> int:
+    parser = build_parser()
+    args = parser.parse_args(argv)
+    report = run_dwell_time_events(
+        args.video,
+        args.output_dir,
+        trajectories_csv=args.trajectories_csv,
+        scene_config_path=args.scene_config,
+        events_config_path=args.config,
+        max_trail_length=args.max_trail_length,
+        max_frames=args.max_frames,
+        save_video=not args.no_video,
+    )
+    print(json.dumps(report, indent=2))
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

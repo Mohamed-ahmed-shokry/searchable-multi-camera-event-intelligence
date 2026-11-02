@@ -698,7 +698,7 @@ uv run --locked python cv_projects/05_zone_line_reasoning/scripts/reason_zones_l
 
 ---
 
-## Current Phase: 6 — Dwell-Time Events (2026-10-31)
+## Completed Phase: 6 — Dwell-Time Events (2026-10-31)
 
 ### Objective
 
@@ -721,7 +721,7 @@ comprehensive pure-logic unit test suite (`tests/test_event_state_machine.py`).
    - Pure-logic `ZoneDwellStateMachine` per `(track_id, zone_id)` implementing:
      - `candidate -> active -> triggered -> resolved` transitions.
      - Hysteresis / grace period (`grace_frames`) absorbing brief boundary flickers (`<= grace_frames` outside frames) without resetting dwell duration or firing duplicate `zone_exit` / `zone_entry` events.
-     - Track-loss-in-zone handling (`resolve_at_track_end`), resolving open stays at `last_inside_time` and setting `track_lost_in_zone = True` in the stay debug trace.
+     - Track-loss-in-zone handling (`finish_track`), resolving open stays at `last_inside_time` and setting `track_lost_in_zone = True` in the stay debug trace.
      - Exactly one `zone_entry` per confirmed entry, at most one `dwell_time_event` per continuous stay (`duration_seconds >= min_dwell_seconds`), and one `zone_exit` when the track genuinely exits the zone (`outside_streak > grace_frames`).
    - Multi-track / multi-zone evaluator (`evaluate_dwell_events`) combining `ZoneDwellStateMachine` across all zones with deduplicated `line_crossing` events (`line_cooldown_frames`) from Phase 5 `LineSpec`s.
    - Debug trace exporter (`write_event_debug_logs`) writing `event_debug_log/stay_traces.json` and per-stay transition logs.
@@ -734,13 +734,13 @@ comprehensive pure-logic unit test suite (`tests/test_event_state_machine.py`).
 
 | # | Criterion | Status | Evidence |
 |---|-----------|--------|----------|
-| 1 | Event lifecycle state machine (`candidate -> active -> triggered -> resolved`) implemented per `(track_id, zone_id)` with configurable thresholds in `configs/events.yaml` | ☐ | — |
-| 2 | `events.csv` matches canonical schema (`event_id, event_type, track_id, zone_id, start_time, end_time, duration_seconds`) and event count is orders of magnitude below frame count | ☐ | — |
-| 3 | Hysteresis / grace period (`<= grace_frames` outside) absorbs boundary flicker without resetting dwell state (verified on synthetic tests and Phase 5 real flicker cases) | ☐ | — |
-| 4 | Track-loss-in-zone handled (resolved at last seen inside time) and flagged in `event_debug_log/` | ☐ | — |
-| 5 | Per-event debug trace (`event_debug_log/`) and visual dwell examples (`dwell_examples/` + `annotated_events_video.mp4`) generated | ☐ | — |
-| 6 | One track manually traced frame-by-frame — event timeline matches the video and is documented in `notes.md` | ☐ | — |
-| 7 | Comprehensive unit test suite `tests/test_event_state_machine.py` passes and all local CI-parity checks (`ruff check`, `ruff format --check`, `pytest`) + remote GitHub Actions CI pass 100% | ☐ | — |
+| 1 | Event lifecycle state machine (`candidate -> active -> triggered -> resolved`) implemented per `(track_id, zone_id)` with configurable thresholds in `configs/events.yaml` | ✅ | `ZoneDwellStateMachine` (`c1b5112`) and `configs/events.yaml` (`fa3a256`) |
+| 2 | `events.csv` matches canonical schema (`event_id, event_type, track_id, zone_id, start_time, end_time, duration_seconds`) and event count is orders of magnitude below frame count | ✅ | Verified by `EventsCsvRoundTripTests` (`8d77d5a`); `10` dwell events (`48` total events) across `596` frames (`59.6×` compression on dwell events, `0.0805` total events/frame) |
+| 3 | Hysteresis / grace period (`<= grace_frames` outside) absorbs boundary flicker without resetting dwell state (verified on synthetic tests and Phase 5 real flicker cases) | ✅ | Verified by `HysteresisAndFlickerTests` (`a7c2d6f`) and real Phase 5 raw `w=1` `Track 3` flicker at frame `194` (`flickers_absorbed: 1`, preserving Track 3's `1.9167s` dwell event vs losing it at `grace_frames=0`) |
+| 4 | Track-loss-in-zone handled (resolved at last seen inside time) and flagged in `event_debug_log/` | ✅ | Verified by `TrackLossInZoneTests` (`b8764e7`) and 3 real stays (`stay_t1_right_aisle_001`, `stay_t7_right_aisle_001`, `stay_t6_right_aisle_001`) flagged with `track_lost_in_zone: true` |
+| 5 | Per-event debug trace (`event_debug_log/`) and visual dwell examples (`dwell_examples/` + `annotated_events_video.mp4`) generated | ✅ | `stay_traces.json` + 16 per-stay trace files, 6 PNGs in `dwell_examples/`, and `annotated_events_video.mp4` (`596` frames in `5.31 s`) |
+| 6 | One track manually traced frame-by-frame — event timeline matches the video and is documented in `notes.md` | ✅ | `Track 1` (`frames 19–75`, `evt_0001..evt_0010`) manually traced across `entrance_area`, `doorway_line`, `aisle_split_line`, `center_concourse`, and `right_aisle` in `notes.md` (`4a696df`) |
+| 7 | Comprehensive unit test suite `tests/test_event_state_machine.py` passes and all local CI-parity checks (`ruff check`, `ruff format --check`, `pytest`) + remote GitHub Actions CI pass 100% | ✅ | `129 passed, 56 subtests passed` in `pytest` (`13` test cases in `test_event_state_machine.py`); `ruff check` and `ruff format --check` (`49` files) 100% clean; Draft PR #6 green |
 
 ### Validation & CI Plan
 
@@ -765,31 +765,175 @@ uv run --locked python cv_projects/06_dwell_time_events/scripts/generate_dwell_e
 
 ### Micro-Task Breakdown
 
-- [x] 1. `docs(roadmap): define Phase 6 dwell-time events scope and micro-task checklist`
-- [ ] 2. `docs(events): scaffold cv_projects/06_dwell_time_events README and notes`
-- [ ] 3. `feat(events): add default configs/events.yaml with dwell thresholds and grace period`
-- [ ] 4. `test(helpers): expose Phase 6 dwell events scripts directory to test suite`
-- [ ] 5. `types(events): define EventConfig, EventRecord, and StayDebugTrace dataclasses`
-- [ ] 6. `test(events): add unit tests for EventConfig and EventRecord validation`
-- [ ] 7. `feat(events): implement load_events_config and save_events_config YAML helpers`
-- [ ] 8. `test(events): add unit tests for events.yaml configuration loading and per-zone overrides`
-- [ ] 9. `feat(events): implement write_events_csv and read_events_csv for events.csv schema`
-- [ ] 10. `test(events): add unit tests for events.csv round-trip serialization`
-- [ ] 11. `feat(events): implement ZoneDwellStateMachine lifecycle candidate->active->triggered->resolved`
-- [ ] 12. `test(events): add unit tests for ZoneDwellStateMachine normal entry, dwell trigger, and exit`
-- [ ] 13. `test(events): add unit tests for hysteresis grace-period flicker absorption and sub-entry spikes`
-- [ ] 14. `test(events): add unit tests for track-loss-in-zone resolution and flagging`
-- [ ] 15. `feat(events): implement evaluate_dwell_events across all tracks, zones, and tripwire lines`
-- [ ] 16. `test(events): add unit tests for evaluate_dwell_events and line-crossing cooldown deduplication`
-- [ ] 17. `feat(events): implement write_event_debug_logs for per-stay debug trace inspection`
-- [ ] 18. `test(events): add unit tests for event_debug_log export`
-- [ ] 19. `feat(events): implement draw_dwell_events_overlay and save_dwell_examples visual proof helpers`
-- [ ] 20. `test(events): add unit tests for draw_dwell_events_overlay and save_dwell_examples`
-- [ ] 21. `feat(events): implement run_dwell_time_events pipeline and CLI entrypoint`
-- [ ] 22. `test(events): add end-to-end pipeline and CLI tests in test_event_state_machine.py`
-- [ ] 23. `feat(events): add exploratory notebook 01_explore_dwell_events.ipynb`
-- [ ] 24. `docs(events): document manual track timeline trace, flicker absorption, and track-loss cases in notes`
-- [ ] 25. `docs(events): document CLI, state machine lifecycle, and events.csv schema in subproject README`
-- [ ] 26. `docs(readme): add Phase 6 dwell-time events CLI instructions to root README`
-- [ ] 27. `docs(progress): complete Phase 6 acceptance criteria, decision log, and CI log`
+- [x] 1. `docs(roadmap): define Phase 6 dwell-time events scope and micro-task checklist` (`57751b1`)
+- [x] 2. `docs(events): scaffold cv_projects/06_dwell_time_events README and notes` (`fe90e69`)
+- [x] 3. `feat(events): add default configs/events.yaml with dwell thresholds and grace period` (`fa3a256`)
+- [x] 4. `test(helpers): expose Phase 6 dwell events scripts directory to test suite` (`4fbe312`)
+- [x] 5. `types(events): define EventConfig, EventRecord, and StayDebugTrace dataclasses` (`52cb0a0`)
+- [x] 6. `test(events): add unit tests for EventConfig and EventRecord validation` (`5d6da90`)
+- [x] 7. `feat(events): implement load_events_config and save_events_config YAML helpers` (`3433e75`)
+- [x] 8. `test(events): add unit tests for events.yaml configuration loading and per-zone overrides` (`e6d1b8b`)
+- [x] 9. `feat(events): implement write_events_csv and read_events_csv for events.csv schema` (`7ae0732`)
+- [x] 10. `test(events): add unit tests for events.csv round-trip serialization` (`8d77d5a`)
+- [x] 11. `feat(events): implement ZoneDwellStateMachine lifecycle candidate->active->triggered->resolved` (`c1b5112`)
+- [x] 12. `test(events): add unit tests for ZoneDwellStateMachine normal entry, dwell trigger, and exit` (`ee8c061`)
+- [x] 13. `test(events): add unit tests for hysteresis grace-period flicker absorption and sub-entry spikes` (`a7c2d6f`)
+- [x] 14. `test(events): add unit tests for track-loss-in-zone resolution and flagging` (`b8764e7`)
+- [x] 15. `feat(events): implement evaluate_dwell_events across all tracks, zones, and tripwire lines` (`fa76d0f`, `e7b1b3a`)
+- [x] 16. `test(events): add unit tests for evaluate_dwell_events and line-crossing cooldown deduplication` (`39cf205`)
+- [x] 17. `feat(events): implement write_event_debug_logs for per-stay debug trace inspection` (`68d78bd`)
+- [x] 18. `test(events): add unit tests for event_debug_log export` (`ab71cc2`)
+- [x] 19. `feat(events): implement draw_dwell_events_overlay and save_dwell_examples visual proof helpers` (`ee453a7`)
+- [x] 20. `test(events): add unit tests for draw_dwell_events_overlay and save_dwell_examples` (`5f1c53e`)
+- [x] 21. `feat(events): implement run_dwell_time_events pipeline and CLI entrypoint` (`8d76661`)
+- [x] 22. `test(events): add end-to-end pipeline and CLI tests in test_event_state_machine.py` (`232b26c`)
+- [x] 23. `feat(events): add exploratory notebook 01_explore_dwell_events.ipynb` (`067e368`)
+- [x] 24. `docs(events): document manual track timeline trace, flicker absorption, and track-loss cases in notes` (`4a696df`)
+- [x] 25. `docs(events): document CLI, state machine lifecycle, and events.csv schema in subproject README` (`a2d23fa`)
+- [x] 26. `docs(readme): add Phase 6 dwell-time events CLI instructions to root README` (`06d2cfd`)
+- [x] 27. `docs(progress): complete Phase 6 acceptance criteria, decision log, and CI log`
+
+### Decision Log
+
+| Decision | Options considered | Choice + evidence |
+|----------|--------------------|-------------------|
+| Dwell event emission timing | Emit repeated frame-by-frame alerts once threshold is crossed / Emit a single `dwell_time_event` with full `(start_time, end_time, duration_seconds)` when stay resolves | **Emit single resolved `dwell_time_event` per continuous stay** — enforces the core event principle (`one meaningful behavior -> one clean event`) in `README.md` and `docs/project_phases.md` while recording the exact frame when `active -> triggered` occurred in `event_debug_log/`. |
+| Default hysteresis `grace_frames` | `0` frames / `5` frames (`0.42s @ 12 fps`) / `15` frames | **`grace_frames = 5`** — tuned directly from Phase 5's boundary-flicker analysis (`1–5` frame oscillations); verified on raw `w=1` trajectories to absorb `Track 3`'s 1-frame oscillation at frame `194` and preserve its `1.9167s` dwell event without over-merging distinct visits. |
+| Track-loss-in-zone handling | Emit synthetic `zone_exit` at track end / Resolve stay at `last_inside_time` without `zone_exit` and flag `track_lost_in_zone=True` | **Resolve at `last_inside_time` + flag `track_lost_in_zone=True`** — a track disappearing inside a zone (e.g. `Tracks 1, 6, 7` in `right_aisle`) did not cross out of the polygon; resolving at `last_inside_time` preserves accurate dwell duration (`2.33s`, `2.42s`, `3.25s`) and flags the termination reason in `stay_traces.json`. |
+
+### CI & Validation Log
+
+| Command | Result | Notes |
+|---------|--------|-------|
+| `uv sync --locked` | ✅ exit 0 | clean default locked environment |
+| `uv run --locked ruff check .` | ✅ `All checks passed!` | repo-wide lint gate (49 files including notebooks) |
+| `uv run --locked ruff format --check .` | ✅ `49 files already formatted` | repo-wide format gate |
+| `uv run --locked pytest -v` | ✅ `129 passed, 56 subtests passed` | full unit + integration test suite (`test_event_state_machine.py` + prior suites) |
+| `generate_dwell_events.py data/fallback_clips/people-detection.mp4 ...` | ✅ 596 frames in 5.31 s | 48 events (`16 zone_entry`, `13 zone_exit`, `10 dwell_time_event`, `9 line_crossing`), 16 stay traces, 6 PNG examples |
+
+---
+
+## Completed Phase: 7 — Visual Evidence (2026-11-01)
+
+### Objective
+
+Attach auditable visual proof (`snapshots/<event_id>_<track_id>.jpg` and
+`crops/<event_id>_<track_id>.jpg`) to every structured event in `events.csv` using a
+documented, deterministic best-frame selection rule (`highest_confidence` within the
+event window `[start_frame, end_frame]`), enrich `events.csv` with `snapshot_path` and
+`crop_path` columns, verify that 100% of evidence paths resolve to real non-empty files
+on disk, and inspect edge cases (crop boundary clipping at frame edges, partial occlusion,
+and sequential frame decoding vs random seek).
+
+### Scope
+
+1. Scaffold `cv_projects/07_visual_evidence/` (`README.md`, `notes.md`,
+   `configs/evidence.yaml`, `scripts/`, `notebooks/`, `outputs/`).
+2. Implement `cv_projects/07_visual_evidence/scripts/extract_visual_evidence.py`:
+   - `EvidenceConfig`, `BestFrameSelection`, and `EvidenceEventRecord` dataclasses.
+   - YAML configuration loader and writer (`load_evidence_config`, `save_evidence_config`).
+   - Enriched `events.csv` writer and reader (`write_evidence_events_csv`,
+     `read_evidence_events_csv`) matching the 9-column schema:
+     `event_id, event_type, track_id, zone_id, start_time, end_time, duration_seconds, snapshot_path, crop_path`.
+   - Best-frame selector (`select_best_frame_for_event`) supporting `highest_confidence`
+     (tie-broken by bbox area and frame index), `midpoint`, `start_frame`, and
+     `largest_area`, with nearest-frame fallback if a track has a 1-frame gap at an
+     instantaneous transition.
+   - Clamped padded person cropper (`extract_person_crop`) returning `(crop_img, clipped_at_edge)`.
+   - Annotated full-frame snapshot renderer (`render_event_snapshot`) overlaying optional
+     scene geometry, subject bounding box + confidence, and event metadata banner.
+   - Single-pass sequential video evidence extractor (`run_visual_evidence`) avoiding
+     compressed-video random-seek inaccuracy, writing `snapshots/<event_id>_<track_id>.jpg`,
+     `crops/<event_id>_<track_id>.jpg`, enriched `events.csv`, `evidence_contact_sheet.jpg`,
+     and `visual_evidence_summary.json`.
+   - Evidence path verifier (`verify_evidence_records`) confirming every `snapshot_path`
+     and `crop_path` in `events.csv` exists on disk and is non-empty.
+3. Create exploratory notebook `cv_projects/07_visual_evidence/notebooks/01_explore_visual_evidence.ipynb`.
+4. Add unit and integration tests in `tests/test_visual_evidence.py`.
+5. Run Phase 7 visual evidence extraction on real surveillance footage
+   (`people-detection.mp4` + Phase 3 `tracks.csv` + Phase 6 `events.csv`), inspect a
+   sample of snapshot/crop pairs, and document the best-frame rule and edge-clipping
+   observations in `notes.md`.
+
+### Acceptance Criteria
+
+| # | Criterion | Status | Evidence |
+|---|-----------|--------|----------|
+| 1 | Best-frame selection rule (`highest_confidence` within `[start_frame, end_frame]` window) implemented, tested, and documented | ✅ | `select_best_frame_for_event` (`0f3dfee`) + unit tests (`9b496b2`) + `notes.md` (`9b709fe`) |
+| 2 | Full-frame snapshot (`snapshots/<event_id>_<track_id>.jpg`) and tight padded person crop (`crops/<event_id>_<track_id>.jpg`) generated per event with deterministic naming | ✅ | `48` snapshots + `48` crops generated in `cv_projects/07_visual_evidence/outputs/people_detection/` |
+| 3 | Enriched `events.csv` includes `snapshot_path` and `crop_path` columns (`9` columns total) | ✅ | `EVIDENCE_EVENTS_CSV_HEADER` (`1142916`, `e911895`) verified in `test_visual_evidence.py` (`5bc5e74`) |
+| 4 | 100% of `snapshot_path` and `crop_path` entries in `events.csv` resolve to real, non-empty image files on disk | ✅ | `verify_evidence_records` (`5b47f64`) → `resolved_snapshots=48, resolved_crops=48, all_paths_valid=true` |
+| 5 | Random sample of snapshot/crop pairs visually reviewed and verified to match event descriptions, with edge-clipping cases logged in `notes.md` | ✅ | Inspected `evidence_contact_sheet.jpg`, `snapshots/evt_0006_1.jpg`, `crops/evt_0006_1.jpg`; `7/48` edge-clamped crops logged in `notes.md` (`9b709fe`) |
+| 6 | All local CI-parity checks (`ruff check`, `ruff format --check`, `pytest`) and remote GitHub Actions CI pass 100% | ✅ | `139 passed, 56 subtests passed` in `pytest`; `ruff check` and `ruff format --check` 100% clean |
+
+### Validation & CI Plan
+
+```bash
+uv sync --locked
+uv run --locked ruff check .
+uv run --locked ruff format --check .
+uv run --locked pytest -v
+# phase-specific execution:
+uv run --locked python cv_projects/07_visual_evidence/scripts/extract_visual_evidence.py \
+    --source data/fallback_clips/people-detection.mp4 \
+    --events cv_projects/06_dwell_time_events/outputs/people_detection/events.csv \
+    --tracks cv_projects/03_person_tracking/outputs/people_detection_bytetrack/tracks.csv \
+    --scene-config cv_projects/05_zone_line_reasoning/configs/scene_config.yaml \
+    --config cv_projects/07_visual_evidence/configs/evidence.yaml \
+    --output-dir cv_projects/07_visual_evidence/outputs/people_detection
+```
+
+### Exclusions
+
+- **Spatial heatmaps, zone occupancy aggregations, and `analytics_summary.json`:**
+  Explicitly deferred to Phase 8 (`08_heatmaps_analytics`) per `docs/project_phases.md`.
+
+### Micro-Task Breakdown
+
+- [x] 1. `docs(roadmap): define Phase 7 visual evidence scope and micro-task checklist` (`4895894`)
+- [x] 2. `docs(evidence): scaffold cv_projects/07_visual_evidence README and notes` (`c6b07d1`)
+- [x] 3. `feat(evidence): add default configs/evidence.yaml for best-frame and crop settings` (`a4fb1dc`)
+- [x] 4. `test(helpers): expose Phase 7 visual evidence scripts directory to test suite` (`a24554a`)
+- [x] 5. `types(evidence): define EvidenceConfig, BestFrameSelection, and EvidenceEventRecord dataclasses` (`1142916`)
+- [x] 6. `test(evidence): add unit tests for EvidenceConfig and EvidenceEventRecord validation` (`7de26dd`)
+- [x] 7. `feat(evidence): implement load_evidence_config and save_evidence_config YAML helpers` (`e0179b7`)
+- [x] 8. `test(evidence): add unit tests for evidence.yaml round-trip serialization` (`81fa26d`)
+- [x] 9. `feat(evidence): implement write_evidence_events_csv and read_evidence_events_csv` (`e911895`)
+- [x] 10. `test(evidence): add unit tests for enriched events.csv round-trip serialization` (`5bc5e74`)
+- [x] 11. `feat(evidence): implement index_track_detections and select_best_frame_for_event` (`0f3dfee`)
+- [x] 12. `test(evidence): add unit tests for best-frame selection strategies and fallback handling` (`9b496b2`)
+- [x] 13. `feat(evidence): implement extract_person_crop with padding and frame-edge clamping` (`818104b`)
+- [x] 14. `test(evidence): add unit tests for extract_person_crop interior and boundary clipping` (`bd88ee2`)
+- [x] 15. `feat(evidence): implement render_event_snapshot and render_evidence_contact_sheet` (`366b767`)
+- [x] 16. `test(evidence): add unit tests for snapshot and contact sheet rendering` (`e301260`)
+- [x] 17. `feat(evidence): implement verify_evidence_records path resolution checker` (`5b47f64`)
+- [x] 18. `test(evidence): add unit tests for verify_evidence_records` (`bb01285`)
+- [x] 19. `feat(evidence): implement run_visual_evidence single-pass pipeline and CLI entrypoint` (`dce8bc6`)
+- [x] 20. `test(evidence): add end-to-end pipeline and CLI tests in test_visual_evidence.py` (`6964f3f`, `075486e`, `b1cc716`, `b0ee4e7`)
+- [x] 21. `feat(evidence): add exploratory notebook 01_explore_visual_evidence.ipynb` (`bd153b7`)
+- [x] 22. `docs(evidence): record real people-detection.mp4 visual evidence audit in notes.md` (`9b709fe`)
+- [x] 23. `docs(evidence): document best-frame rule, CLI flags, and verification results in README.md` (`4c90cbd`)
+- [x] 24. `docs(readme): add Phase 7 visual evidence milestone to root README.md` (`31d175f`)
+- [x] 25. `docs(roadmap): mark Phase 7 visual evidence completed in docs/ROADMAP.md`
+
+### Decision Log
+
+| Decision | Options considered | Choice + evidence |
+|----------|--------------------|-------------------|
+| Default `best_frame_strategy` | `highest_confidence` / `midpoint` / `start_frame` / `largest_area` | **`highest_confidence`** — selects the sharpest, least-truncated person bounding box within `[min_frame, max_frame]` (`mean_best_confidence = 0.8912` across `48` events on `people-detection.mp4`), tie-breaking by largest bbox area and earliest frame. |
+| Video frame extraction strategy | Random `cv2.VideoCapture.set(CAP_PROP_POS_FRAMES)` seeks per event / Single-pass sequential `VideoSource.iter_frames()` | **Single-pass sequential `VideoSource.iter_frames()`** — avoids H.264 GOP keyframe seek drift and decodes `34` unique best frames for `48` events in `1.11s`. |
+| Evidence path format in `events.csv` | Absolute OS paths / Portable POSIX-style relative paths (`snapshots/<event_id>_<track_id>.jpg`, `crops/<event_id>_<track_id>.jpg`) | **Portable POSIX-style relative paths** — matches `docs/project_phases.md` (`snapshots/<event_id>_<track_id>.jpg` and `crops/<event_id>_<track_id>.jpg`) and resolves identically on Windows and Linux via `verify_evidence_records`. |
+
+### CI & Validation Log
+
+| Command | Result | Notes |
+|---------|--------|-------|
+| `uv sync --locked` | ✅ exit 0 | clean default locked environment |
+| `uv run --locked ruff check .` | ✅ `All checks passed!` | repo-wide lint gate (52 files including notebooks) |
+| `uv run --locked ruff format --check .` | ✅ `52 files already formatted` | repo-wide format gate |
+| `uv run --locked pytest -v` | ✅ `139 passed, 56 subtests passed` | full unit + integration test suite (`test_visual_evidence.py` + prior suites) |
+| `extract_visual_evidence.py --source data/fallback_clips/people-detection.mp4 ...` | ✅ 48 events in 1.11 s | 48 snapshots, 48 crops, `all_paths_valid=true`, `mean_best_confidence=0.8912` |
+
+
+
 
