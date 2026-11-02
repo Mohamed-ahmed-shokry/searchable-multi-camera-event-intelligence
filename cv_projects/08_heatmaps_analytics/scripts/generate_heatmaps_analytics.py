@@ -28,14 +28,14 @@ except ImportError:
     from extract_trajectories import TrajectoryPoint
 
 try:
-    from reason_zones_lines import SceneConfig, draw_zones_and_lines
+    from reason_zones_lines import SceneConfig, draw_zones_and_lines, point_in_zone
 except ImportError:
     _subproject_5_scripts = (
         Path(__file__).resolve().parents[2] / "05_zone_line_reasoning" / "scripts"
     )
     if str(_subproject_5_scripts) not in sys.path:
         sys.path.insert(0, str(_subproject_5_scripts))
-    from reason_zones_lines import SceneConfig, draw_zones_and_lines
+    from reason_zones_lines import SceneConfig, draw_zones_and_lines, point_in_zone
 
 ZONE_COUNTS_CSV_HEADER: list[str] = [
     "zone_id",
@@ -554,3 +554,143 @@ def render_heatmap_overlay(
         )
 
     return blended
+
+
+def _interval_peak_occupancy(intervals: Sequence[tuple[int, float, float]]) -> int:
+    """Compute peak simultaneous distinct track_ids across [start_time, end_time] intervals."""
+    if not intervals:
+        return 0
+    endpoints: list[tuple[float, int, int]] = []
+    for track_id, start_t, end_t in intervals:
+        # Sort starts (-1) before ends (+1) at identical timestamps
+        endpoints.append((start_t, -1, track_id))
+        endpoints.append((end_t, 1, track_id))
+    endpoints.sort()
+
+    active_tracks: dict[int, int] = {}
+    peak = 0
+    for _, kind, track_id in endpoints:
+        if kind == -1:
+            active_tracks[track_id] = active_tracks.get(track_id, 0) + 1
+            peak = max(peak, len(active_tracks))
+        else:
+            remaining = active_tracks.get(track_id, 0) - 1
+            if remaining <= 0:
+                active_tracks.pop(track_id, None)
+            else:
+                active_tracks[track_id] = remaining
+    return peak
+
+
+def compute_zone_counts(
+    events: Sequence[Any],
+    *,
+    trajectory_points: Sequence[TrajectoryPoint] = (),
+    scene_config: SceneConfig | None = None,
+) -> list[ZoneCountRecord]:
+    """Aggregate per-zone entry_count, exit_count, total_dwell_seconds, and peak_occupancy."""
+    zone_order: list[str] = []
+    zone_map = {}
+    if scene_config is not None:
+        for z in scene_config.zones:
+            if z.zone_id not in zone_order:
+                zone_order.append(z.zone_id)
+                zone_map[z.zone_id] = z
+
+    for ev in events:
+        if ev.event_type in {"zone_entry", "zone_exit", "dwell_time_event"}:
+            if ev.zone_id not in zone_order:
+                zone_order.append(ev.zone_id)
+
+    # Pre-compute frame-by-frame polygon occupancy when scene_config + trajectories are available
+    frame_peak_by_zone: dict[str, int] = {zid: 0 for zid in zone_order}
+    if zone_map and trajectory_points:
+        by_frame: dict[int, list[TrajectoryPoint]] = {}
+        for pt in trajectory_points:
+            by_frame.setdefault(pt.frame_id, []).append(pt)
+        for frame_pts in by_frame.values():
+            for zid, poly_zone in zone_map.items():
+                occupants = {
+                    pt.track_id
+                    for pt in frame_pts
+                    if point_in_zone((pt.x, pt.y), poly_zone)
+                }
+                frame_peak_by_zone[zid] = max(frame_peak_by_zone[zid], len(occupants))
+
+    records: list[ZoneCountRecord] = []
+    for zid in zone_order:
+        entries = sum(
+            1 for ev in events if ev.event_type == "zone_entry" and ev.zone_id == zid
+        )
+        exits = sum(
+            1 for ev in events if ev.event_type == "zone_exit" and ev.zone_id == zid
+        )
+        dwell_events = [
+            ev
+            for ev in events
+            if ev.event_type == "dwell_time_event" and ev.zone_id == zid
+        ]
+        total_dwell = sum(float(ev.duration_seconds) for ev in dwell_events)
+        intervals = [
+            (int(ev.track_id), float(ev.start_time), float(ev.end_time))
+            for ev in dwell_events
+        ]
+        interval_peak = _interval_peak_occupancy(intervals)
+        fallback_peak = 1 if (entries > 0 or dwell_events) else 0
+        peak_occ = max(frame_peak_by_zone.get(zid, 0), interval_peak, fallback_peak)
+
+        records.append(
+            ZoneCountRecord(
+                zone_id=zid,
+                entry_count=entries,
+                exit_count=exits,
+                total_dwell_seconds=round(total_dwell, 4),
+                peak_occupancy=peak_occ,
+            )
+        )
+    return records
+
+
+def compute_line_counts(
+    events: Sequence[Any],
+    *,
+    scene_config: SceneConfig | None = None,
+) -> list[LineCountRecord]:
+    """Aggregate per-line directional crossings (A->B, B->A, total) from line_crossing events."""
+    line_order: list[str] = []
+    if scene_config is not None:
+        for ln in scene_config.lines:
+            if ln.line_id not in line_order:
+                line_order.append(ln.line_id)
+
+    ab_counts: dict[str, int] = {}
+    ba_counts: dict[str, int] = {}
+
+    for ev in events:
+        if ev.event_type != "line_crossing":
+            continue
+        raw_zone = str(ev.zone_id)
+        if ":" in raw_zone:
+            line_id, direction = raw_zone.split(":", 1)
+        else:
+            line_id, direction = raw_zone, "A->B"
+        if line_id not in line_order:
+            line_order.append(line_id)
+        if direction.strip() == "B->A":
+            ba_counts[line_id] = ba_counts.get(line_id, 0) + 1
+        else:
+            ab_counts[line_id] = ab_counts.get(line_id, 0) + 1
+
+    records: list[LineCountRecord] = []
+    for lid in line_order:
+        ab = ab_counts.get(lid, 0)
+        ba = ba_counts.get(lid, 0)
+        records.append(
+            LineCountRecord(
+                line_id=lid,
+                crossings_ab=ab,
+                crossings_ba=ba,
+                total=ab + ba,
+            )
+        )
+    return records
