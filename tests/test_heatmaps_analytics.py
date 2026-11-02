@@ -15,6 +15,7 @@ from generate_heatmaps_analytics import (
     ZoneCountRecord,
     accumulate_trajectory_grid,
     compute_line_counts,
+    compute_track_duration_stats,
     compute_zone_counts,
     load_analytics_config,
     read_line_counts_csv,
@@ -411,3 +412,30 @@ def test_compute_zone_and_line_counts() -> None:
             total=2,
         )
     ]
+
+
+def test_compute_track_duration_stats() -> None:
+    empty_stats = compute_track_duration_stats([])
+    assert empty_stats.track_count == 0
+    assert empty_stats.max_duration_seconds == 0.0
+
+    pts = [
+        # Track 1: duration 1.5s, path length 30.0
+        TrajectoryPoint(track_id=1, frame_id=0, timestamp=0.0, x=10.0, y=10.0),
+        TrajectoryPoint(track_id=1, frame_id=15, timestamp=1.5, x=40.0, y=10.0),
+        # Track 2: duration 5.0s, path length 50.0 (30 + 40 right triangle = 50)
+        TrajectoryPoint(track_id=2, frame_id=0, timestamp=0.0, x=0.0, y=0.0),
+        TrajectoryPoint(track_id=2, frame_id=50, timestamp=5.0, x=30.0, y=40.0),
+    ]
+    stats = compute_track_duration_stats(pts, bucket_edges_seconds=(0.0, 2.0, 4.0))
+    assert stats.track_count == 2
+    assert stats.min_duration_seconds == pytest.approx(1.5)
+    assert stats.max_duration_seconds == pytest.approx(5.0)
+    assert stats.mean_duration_seconds == pytest.approx(3.25)
+    assert stats.mean_path_length_px == pytest.approx(40.0)
+    assert stats.max_path_length_px == pytest.approx(50.0)
+    assert stats.duration_buckets == {
+        "0.0-2.0s": 1,
+        "2.0-4.0s": 0,
+        ">=4.0s": 1,
+    }
