@@ -16,6 +16,7 @@ from generate_heatmaps_analytics import (
     load_analytics_config,
     read_line_counts_csv,
     read_zone_counts_csv,
+    render_heatmap_overlay,
     save_analytics_config,
     smooth_and_normalize_heatmap,
     write_line_counts_csv,
@@ -269,3 +270,22 @@ def test_accumulate_trajectory_grid_and_smooth_normalize() -> None:
         normalization_mode="linear",
     )
     assert float(empty_norm.max()) == 0.0
+
+
+def test_render_heatmap_overlay_resolution_and_blending() -> None:
+    ref_frame = np.full((120, 180, 3), 40, dtype=np.uint8)
+    norm_heat = np.zeros((60, 90), dtype=np.float32)
+    norm_heat[20:40, 30:60] = 1.0
+
+    for cmap in ("jet", "inferno", "turbo", "hot"):
+        rendered = render_heatmap_overlay(
+            ref_frame,
+            norm_heat,
+            heatmap_alpha=0.55,
+            colormap=cmap,
+            scene_config=None,
+        )
+        assert rendered.shape == ref_frame.shape
+        assert rendered.dtype == np.uint8
+        # Active center should differ from un-tinted bottom-right background
+        assert not np.array_equal(rendered[60, 90], rendered[115, 175])
