@@ -11,7 +11,9 @@ from generate_heatmaps_analytics import (
     TrackDurationStats,
     ZoneCountRecord,
     load_analytics_config,
+    read_zone_counts_csv,
     save_analytics_config,
+    write_zone_counts_csv,
 )
 
 
@@ -160,3 +162,34 @@ def test_analytics_config_yaml_round_trip(tmp_path: Path) -> None:
 
     with pytest.raises(FileNotFoundError):
         load_analytics_config(tmp_path / "missing.yaml")
+
+
+def test_zone_counts_csv_round_trip(tmp_path: Path) -> None:
+    records = [
+        ZoneCountRecord(
+            zone_id="entrance_area",
+            entry_count=6,
+            exit_count=6,
+            total_dwell_seconds=10.5833,
+            peak_occupancy=2,
+        ),
+        ZoneCountRecord(
+            zone_id="center_concourse",
+            entry_count=6,
+            exit_count=6,
+            total_dwell_seconds=8.0833,
+            peak_occupancy=2,
+        ),
+    ]
+    csv_path = tmp_path / "zone_counts.csv"
+    write_zone_counts_csv(records, csv_path)
+    loaded = read_zone_counts_csv(csv_path)
+    assert loaded == records
+
+    bad_csv = tmp_path / "bad_zone.csv"
+    bad_csv.write_text("zone_id,entry_count\nz1,1\n", encoding="utf-8")
+    with pytest.raises(ValueError, match="Unexpected zone_counts.csv header"):
+        read_zone_counts_csv(bad_csv)
+
+    with pytest.raises(FileNotFoundError):
+        read_zone_counts_csv(tmp_path / "missing_zone_counts.csv")
