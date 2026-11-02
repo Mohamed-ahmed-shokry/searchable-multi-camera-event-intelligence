@@ -4,6 +4,7 @@ from pathlib import Path
 
 import numpy as np
 import pytest
+from extract_visual_evidence import EventRecord
 from generate_heatmaps_analytics import (
     LINE_COUNTS_CSV_HEADER,
     ZONE_COUNTS_CSV_HEADER,
@@ -13,6 +14,8 @@ from generate_heatmaps_analytics import (
     TrajectoryPoint,
     ZoneCountRecord,
     accumulate_trajectory_grid,
+    compute_line_counts,
+    compute_zone_counts,
     load_analytics_config,
     read_line_counts_csv,
     read_zone_counts_csv,
@@ -22,6 +25,7 @@ from generate_heatmaps_analytics import (
     write_line_counts_csv,
     write_zone_counts_csv,
 )
+from reason_zones_lines import LineSegment, PolygonZone, SceneConfig
 
 
 def test_analytics_config_defaults_and_validation() -> None:
@@ -289,3 +293,125 @@ def test_render_heatmap_overlay_resolution_and_blending() -> None:
         assert rendered.dtype == np.uint8
         # Active center should differ from un-tinted bottom-right background
         assert not np.array_equal(rendered[60, 90], rendered[115, 175])
+
+
+def test_compute_zone_and_line_counts() -> None:
+    scene = SceneConfig(
+        zones=[
+            PolygonZone(
+                zone_id="z_main",
+                name="Main",
+                vertices=[(10.0, 10.0), (90.0, 10.0), (90.0, 90.0), (10.0, 90.0)],
+            ),
+            PolygonZone(
+                zone_id="z_empty",
+                name="Empty",
+                vertices=[(100.0, 10.0), (150.0, 10.0), (150.0, 90.0), (100.0, 90.0)],
+            ),
+        ],
+        lines=[
+            LineSegment(
+                line_id="door_line",
+                name="Door",
+                start=(10.0, 50.0),
+                end=(90.0, 50.0),
+            )
+        ],
+    )
+    events = [
+        EventRecord(
+            event_id="evt_0001",
+            event_type="zone_entry",
+            track_id=1,
+            zone_id="z_main",
+            start_time=1.0,
+            end_time=1.0,
+            duration_seconds=0.0,
+        ),
+        EventRecord(
+            event_id="evt_0002",
+            event_type="zone_entry",
+            track_id=2,
+            zone_id="z_main",
+            start_time=1.5,
+            end_time=1.5,
+            duration_seconds=0.0,
+        ),
+        EventRecord(
+            event_id="evt_0003",
+            event_type="dwell_time_event",
+            track_id=1,
+            zone_id="z_main",
+            start_time=1.0,
+            end_time=3.0,
+            duration_seconds=2.0,
+        ),
+        EventRecord(
+            event_id="evt_0004",
+            event_type="dwell_time_event",
+            track_id=2,
+            zone_id="z_main",
+            start_time=1.5,
+            end_time=4.0,
+            duration_seconds=2.5,
+        ),
+        EventRecord(
+            event_id="evt_0005",
+            event_type="zone_exit",
+            track_id=1,
+            zone_id="z_main",
+            start_time=3.0,
+            end_time=3.0,
+            duration_seconds=0.0,
+        ),
+        EventRecord(
+            event_id="evt_0006",
+            event_type="line_crossing",
+            track_id=1,
+            zone_id="door_line:A->B",
+            start_time=2.0,
+            end_time=2.0,
+            duration_seconds=0.0,
+        ),
+        EventRecord(
+            event_id="evt_0007",
+            event_type="line_crossing",
+            track_id=2,
+            zone_id="door_line:B->A",
+            start_time=2.5,
+            end_time=2.5,
+            duration_seconds=0.0,
+        ),
+    ]
+    pts = [
+        TrajectoryPoint(track_id=1, frame_id=15, timestamp=1.5, x=50.0, y=50.0),
+        TrajectoryPoint(track_id=2, frame_id=15, timestamp=1.5, x=60.0, y=60.0),
+        TrajectoryPoint(track_id=3, frame_id=15, timestamp=1.5, x=70.0, y=70.0),
+    ]
+
+    zcounts = compute_zone_counts(events, trajectory_points=pts, scene_config=scene)
+    assert len(zcounts) == 2
+    assert zcounts[0] == ZoneCountRecord(
+        zone_id="z_main",
+        entry_count=2,
+        exit_count=1,
+        total_dwell_seconds=4.5,
+        peak_occupancy=3,  # 3 simultaneous tracks in frame 15 inside z_main
+    )
+    assert zcounts[1] == ZoneCountRecord(
+        zone_id="z_empty",
+        entry_count=0,
+        exit_count=0,
+        total_dwell_seconds=0.0,
+        peak_occupancy=0,
+    )
+
+    lcounts = compute_line_counts(events, scene_config=scene)
+    assert lcounts == [
+        LineCountRecord(
+            line_id="door_line",
+            crossings_ab=1,
+            crossings_ba=1,
+            total=2,
+        )
+    ]
