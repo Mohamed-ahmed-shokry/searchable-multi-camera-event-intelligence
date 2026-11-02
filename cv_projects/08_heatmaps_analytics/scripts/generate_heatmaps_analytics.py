@@ -5,10 +5,13 @@ track duration distribution calculator, and CLI entrypoint.
 
 from __future__ import annotations
 
+import argparse
 import csv
 import itertools
+import json
 import math
 import sys
+import time
 from collections.abc import Sequence
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
@@ -19,24 +22,62 @@ import numpy as np
 import yaml
 
 try:
-    from extract_trajectories import TrajectoryPoint
+    from extract_trajectories import TrajectoryPoint, read_trajectories_csv
 except ImportError:
     _subproject_4_scripts = (
         Path(__file__).resolve().parents[2] / "04_trajectory_extraction" / "scripts"
     )
     if str(_subproject_4_scripts) not in sys.path:
         sys.path.insert(0, str(_subproject_4_scripts))
-    from extract_trajectories import TrajectoryPoint
+    from extract_trajectories import TrajectoryPoint, read_trajectories_csv
 
 try:
-    from reason_zones_lines import SceneConfig, draw_zones_and_lines, point_in_zone
+    from reason_zones_lines import (
+        SceneConfig,
+        VideoSource,
+        draw_zones_and_lines,
+        load_scene_config,
+        point_in_zone,
+    )
 except ImportError:
     _subproject_5_scripts = (
         Path(__file__).resolve().parents[2] / "05_zone_line_reasoning" / "scripts"
     )
     if str(_subproject_5_scripts) not in sys.path:
         sys.path.insert(0, str(_subproject_5_scripts))
-    from reason_zones_lines import SceneConfig, draw_zones_and_lines, point_in_zone
+    from reason_zones_lines import (
+        SceneConfig,
+        VideoSource,
+        draw_zones_and_lines,
+        load_scene_config,
+        point_in_zone,
+    )
+
+try:
+    from generate_dwell_events import EVENTS_CSV_HEADER, read_events_csv
+except ImportError:
+    _subproject_6_scripts = (
+        Path(__file__).resolve().parents[2] / "06_dwell_time_events" / "scripts"
+    )
+    if str(_subproject_6_scripts) not in sys.path:
+        sys.path.insert(0, str(_subproject_6_scripts))
+    from generate_dwell_events import EVENTS_CSV_HEADER, read_events_csv
+
+try:
+    from extract_visual_evidence import (
+        EVIDENCE_EVENTS_CSV_HEADER,
+        read_evidence_events_csv,
+    )
+except ImportError:
+    _subproject_7_scripts = (
+        Path(__file__).resolve().parents[2] / "07_visual_evidence" / "scripts"
+    )
+    if str(_subproject_7_scripts) not in sys.path:
+        sys.path.insert(0, str(_subproject_7_scripts))
+    from extract_visual_evidence import (
+        EVIDENCE_EVENTS_CSV_HEADER,
+        read_evidence_events_csv,
+    )
 
 ZONE_COUNTS_CSV_HEADER: list[str] = [
     "zone_id",
@@ -767,3 +808,315 @@ def compute_track_duration_stats(
         max_path_length_px=float(len_arr.max()),
         duration_buckets=buckets,
     )
+
+
+def _load_any_events_csv(events_csv_path: Path) -> list[Any]:
+    """Load either Phase 6 (7-column) or Phase 7 (9-column) events.csv."""
+    if not events_csv_path.is_file():
+        raise FileNotFoundError(f"events.csv not found: {events_csv_path}")
+    with events_csv_path.open("r", encoding="utf-8", newline="") as handle:
+        reader = csv.reader(handle)
+        header = next(reader, None)
+    if header == EVIDENCE_EVENTS_CSV_HEADER:
+        return list(read_evidence_events_csv(events_csv_path))
+    if header == EVENTS_CSV_HEADER:
+        return list(read_events_csv(events_csv_path))
+    raise ValueError(f"Unrecognized events.csv header in {events_csv_path}: {header}")
+
+
+def run_heatmaps_analytics(
+    *,
+    source_path: Path,
+    trajectories_csv_path: Path,
+    events_csv_path: Path,
+    output_dir: Path,
+    config_path: Path | None = None,
+    scene_config_path: Path | None = None,
+    grid_bin_size_override: int | None = None,
+    gaussian_sigma_override: float | None = None,
+    normalization_mode_override: str | None = None,
+    max_points_per_track_cell_override: int | None = None,
+    colormap_override: str | None = None,
+) -> dict[str, Any]:
+    """Execute the complete Phase 8 heatmaps and analytics pipeline."""
+    t0 = time.perf_counter()
+    output_dir.mkdir(parents=True, exist_ok=True)
+
+    base_cfg = (
+        load_analytics_config(config_path)
+        if config_path is not None and config_path.is_file()
+        else AnalyticsConfig()
+    )
+    cfg = AnalyticsConfig(
+        grid_bin_size_px=(
+            grid_bin_size_override
+            if grid_bin_size_override is not None
+            else base_cfg.grid_bin_size_px
+        ),
+        gaussian_sigma_px=(
+            gaussian_sigma_override
+            if gaussian_sigma_override is not None
+            else base_cfg.gaussian_sigma_px
+        ),
+        normalization_mode=(
+            normalization_mode_override
+            if normalization_mode_override is not None
+            else base_cfg.normalization_mode
+        ),
+        percentile_clip=base_cfg.percentile_clip,
+        max_points_per_track_cell=(
+            max_points_per_track_cell_override
+            if max_points_per_track_cell_override is not None
+            else base_cfg.max_points_per_track_cell
+        ),
+        heatmap_alpha=base_cfg.heatmap_alpha,
+        colormap=(
+            colormap_override if colormap_override is not None else base_cfg.colormap
+        ),
+        overlay_scene_geometry=base_cfg.overlay_scene_geometry,
+        reference_frame_index=base_cfg.reference_frame_index,
+        duration_bucket_edges_seconds=base_cfg.duration_bucket_edges_seconds,
+    )
+
+    scene_cfg: SceneConfig | None = None
+    if scene_config_path is not None and scene_config_path.is_file():
+        scene_cfg = load_scene_config(scene_config_path)
+
+    trajectory_points = read_trajectories_csv(trajectories_csv_path)
+    events = _load_any_events_csv(events_csv_path)
+
+    with VideoSource(source_path) as vs:
+        meta = vs.metadata
+        frame_width = int(meta.width)
+        frame_height = int(meta.height)
+        frame_count = int(meta.frame_count)
+        fps = float(meta.fps)
+        ref_idx = min(cfg.reference_frame_index, max(0, frame_count - 1))
+        reference_frame = vs.read_frame(ref_idx)
+
+    raw_grid, full_res_density = accumulate_trajectory_grid(
+        trajectory_points,
+        frame_width=frame_width,
+        frame_height=frame_height,
+        grid_bin_size_px=cfg.grid_bin_size_px,
+        max_points_per_track_cell=cfg.max_points_per_track_cell,
+    )
+    normalized_heatmap = smooth_and_normalize_heatmap(
+        full_res_density,
+        gaussian_sigma_px=cfg.gaussian_sigma_px,
+        normalization_mode=cfg.normalization_mode,
+        percentile_clip=cfg.percentile_clip,
+    )
+    overlay_img = render_heatmap_overlay(
+        reference_frame,
+        normalized_heatmap,
+        heatmap_alpha=cfg.heatmap_alpha,
+        colormap=cfg.colormap,
+        scene_config=scene_cfg if cfg.overlay_scene_geometry else None,
+    )
+
+    heatmap_path = output_dir / "heatmap.png"
+    cv2.imwrite(str(heatmap_path), overlay_img)
+
+    zone_counts = compute_zone_counts(
+        events,
+        trajectory_points=trajectory_points,
+        scene_config=scene_cfg,
+    )
+    line_counts = compute_line_counts(events, scene_config=scene_cfg)
+    track_stats = compute_track_duration_stats(
+        trajectory_points,
+        bucket_edges_seconds=cfg.duration_bucket_edges_seconds,
+    )
+
+    zone_counts_path = write_zone_counts_csv(
+        zone_counts, output_dir / "zone_counts.csv"
+    )
+    line_counts_path = write_line_counts_csv(
+        line_counts, output_dir / "line_counts.csv"
+    )
+    config_out_path = save_analytics_config(cfg, output_dir / "analytics.yaml")
+
+    peak_row, peak_col = (
+        tuple(
+            int(v) for v in np.unravel_index(int(np.argmax(raw_grid)), raw_grid.shape)
+        )
+        if raw_grid.size > 0
+        else (0, 0)
+    )
+    peak_x_px = round((peak_col + 0.5) * cfg.grid_bin_size_px, 1)
+    peak_y_px = round((peak_row + 0.5) * cfg.grid_bin_size_px, 1)
+
+    event_counts_by_type: dict[str, int] = {}
+    for ev in events:
+        event_counts_by_type[ev.event_type] = (
+            event_counts_by_type.get(ev.event_type, 0) + 1
+        )
+
+    elapsed_s = time.perf_counter() - t0
+    summary: dict[str, Any] = {
+        "source_path": str(source_path),
+        "trajectories_csv_input": str(trajectories_csv_path),
+        "events_csv_input": str(events_csv_path),
+        "heatmap_output": str(heatmap_path),
+        "zone_counts_output": str(zone_counts_path),
+        "line_counts_output": str(line_counts_path),
+        "analytics_config_output": str(config_out_path),
+        "video_metadata": {
+            "width": frame_width,
+            "height": frame_height,
+            "fps": fps,
+            "frame_count": frame_count,
+            "reference_frame_index": ref_idx,
+        },
+        "heatmap_stats": {
+            "grid_shape": [int(raw_grid.shape[0]), int(raw_grid.shape[1])],
+            "grid_bin_size_px": cfg.grid_bin_size_px,
+            "gaussian_sigma_px": cfg.gaussian_sigma_px,
+            "normalization_mode": cfg.normalization_mode,
+            "max_points_per_track_cell": cfg.max_points_per_track_cell,
+            "total_trajectory_points": len(trajectory_points),
+            "active_grid_cells": int(np.count_nonzero(raw_grid > 0)),
+            "peak_grid_cell": {
+                "row": peak_row,
+                "col": peak_col,
+                "center_x_px": peak_x_px,
+                "center_y_px": peak_y_px,
+                "capped_count": float(raw_grid[peak_row, peak_col])
+                if raw_grid.size > 0
+                else 0.0,
+            },
+        },
+        "event_counts_by_type": event_counts_by_type,
+        "zone_counts": [
+            {
+                "zone_id": z.zone_id,
+                "entry_count": z.entry_count,
+                "exit_count": z.exit_count,
+                "total_dwell_seconds": z.total_dwell_seconds,
+                "peak_occupancy": z.peak_occupancy,
+            }
+            for z in zone_counts
+        ],
+        "line_counts": [
+            {
+                "line_id": l.line_id,
+                "crossings_ab": l.crossings_ab,
+                "crossings_ba": l.crossings_ba,
+                "total": l.total,
+            }
+            for l in line_counts
+        ],
+        "track_duration_distribution": track_stats.to_dict(),
+        "elapsed_seconds": round(elapsed_s, 4),
+    }
+
+    summary_path = output_dir / "analytics_summary.json"
+    summary_path.write_text(json.dumps(summary, indent=2), encoding="utf-8")
+    return summary
+
+
+def build_parser() -> argparse.ArgumentParser:
+    """Build CLI argument parser for Phase 8 heatmaps and analytics."""
+    parser = argparse.ArgumentParser(
+        description="Phase 8: Generate spatial activity heatmap and zone/line analytics."
+    )
+    parser.add_argument(
+        "--source",
+        type=Path,
+        required=True,
+        help="Path to the source video file or MOT sequence directory.",
+    )
+    parser.add_argument(
+        "--trajectories",
+        type=Path,
+        required=True,
+        help="Path to Phase 4 trajectories.csv input file.",
+    )
+    parser.add_argument(
+        "--events",
+        type=Path,
+        required=True,
+        help="Path to Phase 6 or Phase 7 events.csv input file.",
+    )
+    parser.add_argument(
+        "--config",
+        type=Path,
+        default=Path(__file__).resolve().parents[1] / "configs" / "analytics.yaml",
+        help="Path to analytics.yaml configuration file.",
+    )
+    parser.add_argument(
+        "--scene-config",
+        type=Path,
+        default=(
+            Path(__file__).resolve().parents[2]
+            / "05_zone_line_reasoning"
+            / "configs"
+            / "scene_config.yaml"
+        ),
+        help="Optional path to Phase 5 scene_config.yaml for zone/line overlays.",
+    )
+    parser.add_argument(
+        "--output-dir",
+        type=Path,
+        default=Path(__file__).resolve().parents[1] / "outputs" / "default_run",
+        help="Directory to write heatmap.png, zone_counts.csv, line_counts.csv, and analytics_summary.json.",
+    )
+    parser.add_argument(
+        "--grid-bin-size",
+        type=int,
+        default=None,
+        help="Optional override for grid_bin_size_px.",
+    )
+    parser.add_argument(
+        "--sigma",
+        type=float,
+        default=None,
+        help="Optional override for gaussian_sigma_px.",
+    )
+    parser.add_argument(
+        "--normalization",
+        type=str,
+        choices=list(VALID_NORMALIZATION_MODES),
+        default=None,
+        help="Optional override for normalization_mode.",
+    )
+    parser.add_argument(
+        "--max-points-per-track-cell",
+        type=int,
+        default=None,
+        help="Optional override for max_points_per_track_cell.",
+    )
+    parser.add_argument(
+        "--colormap",
+        type=str,
+        choices=list(VALID_COLORMAPS),
+        default=None,
+        help="Optional override for colormap.",
+    )
+    return parser
+
+
+def main(argv: Sequence[str] | None = None) -> int:
+    """CLI entrypoint for Phase 8 heatmaps and analytics."""
+    parser = build_parser()
+    args = parser.parse_args(argv)
+    summary = run_heatmaps_analytics(
+        source_path=args.source,
+        trajectories_csv_path=args.trajectories,
+        events_csv_path=args.events,
+        output_dir=args.output_dir,
+        config_path=args.config,
+        scene_config_path=args.scene_config,
+        grid_bin_size_override=args.grid_bin_size,
+        gaussian_sigma_override=args.sigma,
+        normalization_mode_override=args.normalization,
+        max_points_per_track_cell_override=args.max_points_per_track_cell,
+        colormap_override=args.colormap,
+    )
+    print(json.dumps(summary, indent=2))
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())
