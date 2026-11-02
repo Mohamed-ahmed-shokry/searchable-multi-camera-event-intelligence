@@ -4,7 +4,9 @@ from pathlib import Path
 
 import numpy as np
 import pytest
+from extract_trajectories import write_trajectories_csv
 from extract_visual_evidence import EventRecord
+from generate_dwell_events import write_events_csv
 from generate_heatmaps_analytics import (
     LINE_COUNTS_CSV_HEADER,
     ZONE_COUNTS_CSV_HEADER,
@@ -21,11 +23,16 @@ from generate_heatmaps_analytics import (
     read_line_counts_csv,
     read_zone_counts_csv,
     render_heatmap_overlay,
+    run_heatmaps_analytics,
     save_analytics_config,
     smooth_and_normalize_heatmap,
     write_line_counts_csv,
     write_zone_counts_csv,
 )
+from generate_heatmaps_analytics import (
+    main as generate_heatmaps_analytics_main,
+)
+from helpers import make_video
 from reason_zones_lines import LineSpec, SceneConfig, ZoneSpec
 
 
@@ -439,3 +446,108 @@ def test_compute_track_duration_stats() -> None:
         "2.0-4.0s": 0,
         ">=4.0s": 1,
     }
+
+
+def test_run_heatmaps_analytics_pipeline_and_cli_end_to_end(tmp_path: Path) -> None:
+    video_path = make_video(tmp_path, name="analytics_clip.avi", count=5)
+    traj_csv = tmp_path / "trajectories.csv"
+    events_csv = tmp_path / "events.csv"
+    out_dir = tmp_path / "analytics_out"
+
+    pts = [
+        TrajectoryPoint(
+            track_id=1, frame_id=i, timestamp=i * 0.1, x=20.0 + i * 4, y=24.0
+        )
+        for i in range(5)
+    ]
+    write_trajectories_csv(traj_csv, pts)
+
+    events = [
+        EventRecord(
+            event_id="evt_0001",
+            event_type="zone_entry",
+            track_id=1,
+            zone_id="entrance_area",
+            start_time=0.0,
+            end_time=0.0,
+            duration_seconds=0.0,
+        ),
+        EventRecord(
+            event_id="evt_0002",
+            event_type="dwell_time_event",
+            track_id=1,
+            zone_id="entrance_area",
+            start_time=0.0,
+            end_time=0.4,
+            duration_seconds=0.4,
+        ),
+        EventRecord(
+            event_id="evt_0003",
+            event_type="line_crossing",
+            track_id=1,
+            zone_id="doorway_line:B->A",
+            start_time=0.2,
+            end_time=0.2,
+            duration_seconds=0.0,
+        ),
+    ]
+    write_events_csv(events_csv, events)
+
+    summary = run_heatmaps_analytics(
+        source_path=video_path,
+        trajectories_csv_path=traj_csv,
+        events_csv_path=events_csv,
+        output_dir=out_dir,
+        scene_config_path=None,
+    )
+    assert summary["heatmap_stats"]["total_trajectory_points"] == 5
+    assert (out_dir / "heatmap.png").is_file()
+    assert (out_dir / "zone_counts.csv").is_file()
+    assert (out_dir / "line_counts.csv").is_file()
+    assert (out_dir / "analytics_summary.json").is_file()
+
+    zloaded = read_zone_counts_csv(out_dir / "zone_counts.csv")
+    assert zloaded == [
+        ZoneCountRecord(
+            zone_id="entrance_area",
+            entry_count=1,
+            exit_count=0,
+            total_dwell_seconds=0.4,
+            peak_occupancy=1,
+        )
+    ]
+    lloaded = read_line_counts_csv(out_dir / "line_counts.csv")
+    assert lloaded == [
+        LineCountRecord(
+            line_id="doorway_line",
+            crossings_ab=0,
+            crossings_ba=1,
+            total=1,
+        )
+    ]
+
+    cli_out = tmp_path / "cli_out"
+    rc = generate_heatmaps_analytics_main(
+        [
+            "--source",
+            str(video_path),
+            "--trajectories",
+            str(traj_csv),
+            "--events",
+            str(events_csv),
+            "--output-dir",
+            str(cli_out),
+            "--grid-bin-size",
+            "8",
+            "--sigma",
+            "12.0",
+            "--normalization",
+            "percentile",
+            "--max-points-per-track-cell",
+            "3",
+            "--colormap",
+            "turbo",
+        ]
+    )
+    assert rc == 0
+    assert (cli_out / "heatmap.png").is_file()
