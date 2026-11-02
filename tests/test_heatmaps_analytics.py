@@ -1,0 +1,118 @@
+from __future__ import annotations
+
+import pytest
+from generate_heatmaps_analytics import (
+    LINE_COUNTS_CSV_HEADER,
+    ZONE_COUNTS_CSV_HEADER,
+    AnalyticsConfig,
+    LineCountRecord,
+    TrackDurationStats,
+    ZoneCountRecord,
+)
+
+
+def test_analytics_config_defaults_and_validation() -> None:
+    cfg = AnalyticsConfig()
+    assert cfg.grid_bin_size_px == 16
+    assert cfg.gaussian_sigma_px == pytest.approx(24.0)
+    assert cfg.normalization_mode == "log"
+    assert cfg.percentile_clip == pytest.approx(99.0)
+    assert cfg.max_points_per_track_cell == 6
+    assert cfg.heatmap_alpha == pytest.approx(0.55)
+    assert cfg.colormap == "jet"
+    assert cfg.overlay_scene_geometry is True
+    assert cfg.reference_frame_index == 35
+
+    with pytest.raises(ValueError, match="grid_bin_size_px must be >= 1"):
+        AnalyticsConfig(grid_bin_size_px=0)
+
+    with pytest.raises(ValueError, match="gaussian_sigma_px must be >= 0"):
+        AnalyticsConfig(gaussian_sigma_px=-1.0)
+
+    with pytest.raises(ValueError, match="normalization_mode must be one of"):
+        AnalyticsConfig(normalization_mode="invalid")
+
+    with pytest.raises(ValueError, match="percentile_clip must be in"):
+        AnalyticsConfig(percentile_clip=0.0)
+
+    with pytest.raises(ValueError, match="max_points_per_track_cell must be >= 0"):
+        AnalyticsConfig(max_points_per_track_cell=-1)
+
+    with pytest.raises(ValueError, match="heatmap_alpha must be in"):
+        AnalyticsConfig(heatmap_alpha=1.5)
+
+    with pytest.raises(ValueError, match="colormap must be one of"):
+        AnalyticsConfig(colormap="rainbow")
+
+    with pytest.raises(ValueError, match="reference_frame_index must be >= 0"):
+        AnalyticsConfig(reference_frame_index=-2)
+
+    with pytest.raises(
+        ValueError, match="duration_bucket_edges_seconds must have at least 2 edges"
+    ):
+        AnalyticsConfig(duration_bucket_edges_seconds=(0.0,))
+
+
+def test_zone_and_line_count_record_validation() -> None:
+    assert ZONE_COUNTS_CSV_HEADER == [
+        "zone_id",
+        "entry_count",
+        "exit_count",
+        "total_dwell_seconds",
+        "peak_occupancy",
+    ]
+    assert LINE_COUNTS_CSV_HEADER == [
+        "line_id",
+        "crossings_ab",
+        "crossings_ba",
+        "total",
+    ]
+
+    zrec = ZoneCountRecord(
+        zone_id="entrance_area",
+        entry_count=5,
+        exit_count=4,
+        total_dwell_seconds=8.25,
+        peak_occupancy=2,
+    )
+    assert zrec.to_row() == ["entrance_area", "5", "4", "8.2500", "2"]
+
+    with pytest.raises(ValueError, match="zone_id must be a non-empty string"):
+        ZoneCountRecord(
+            zone_id="",
+            entry_count=1,
+            exit_count=1,
+            total_dwell_seconds=1.0,
+            peak_occupancy=1,
+        )
+
+    lrec = LineCountRecord(
+        line_id="doorway_line",
+        crossings_ab=2,
+        crossings_ba=3,
+        total=5,
+    )
+    assert lrec.to_row() == ["doorway_line", "2", "3", "5"]
+
+    with pytest.raises(ValueError, match="total \\(4\\) must equal"):
+        LineCountRecord(
+            line_id="doorway_line",
+            crossings_ab=2,
+            crossings_ba=3,
+            total=4,
+        )
+
+    stats = TrackDurationStats(
+        track_count=3,
+        min_duration_seconds=1.5,
+        max_duration_seconds=5.0,
+        mean_duration_seconds=3.0,
+        median_duration_seconds=2.5,
+        p90_duration_seconds=4.5,
+        mean_path_length_px=120.456,
+        max_path_length_px=210.789,
+        duration_buckets={"0.0-2.0s": 1, "2.0-4.0s": 1, "4.0-6.0s": 1},
+    )
+    d = stats.to_dict()
+    assert d["track_count"] == 3
+    assert d["mean_path_length_px"] == pytest.approx(120.46)
