@@ -934,6 +934,128 @@ uv run --locked python cv_projects/07_visual_evidence/scripts/extract_visual_evi
 | `uv run --locked pytest -v` | ✅ `139 passed, 56 subtests passed` | full unit + integration test suite (`test_visual_evidence.py` + prior suites) |
 | `extract_visual_evidence.py --source data/fallback_clips/people-detection.mp4 ...` | ✅ 48 events in 1.11 s | 48 snapshots, 48 crops, `all_paths_valid=true`, `mean_best_confidence=0.8912` |
 
+---
+
+## Current Phase: 8 — Heatmaps and Analytics (2026-11-02)
+
+### Objective
+
+Turn extracted trajectories (`trajectories.csv`), scene geometry (`scene_config.yaml`), and
+structured events (`events.csv`) into visual and statistical activity summaries:
+1. Accumulate ground-plane trajectory points into a 2D spatial grid with optional
+   per-track-cell cap / log normalization (preventing a single stationary person from
+   washing out movement corridors), apply Gaussian smoothing, and render `heatmap.png`
+   overlaid on a scene reference frame at exact frame resolution.
+2. Compute per-zone statistics (`zone_counts.csv`:
+   `zone_id, entry_count, exit_count, total_dwell_seconds, peak_occupancy`), cross-checked
+   against `events.csv` and frame-by-frame trajectory containment.
+3. Compute per-line statistics (`line_counts.csv`:
+   `line_id, crossings_ab, crossings_ba, total`).
+4. Compute track duration and path-length distribution metrics (`min`, `max`, `mean`,
+   `median`, `p90`, histogram buckets) and export a human-readable, schema-validated
+   `analytics_summary.json`.
+
+### Scope
+
+1. Scaffold `cv_projects/08_heatmaps_analytics/` (`README.md`, `notes.md`,
+   `configs/analytics.yaml`, `scripts/`, `notebooks/`, `outputs/`).
+2. Expose `cv_projects/08_heatmaps_analytics/scripts` in `tests/helpers.py` and
+   `tests/conftest.py`.
+3. Implement `cv_projects/08_heatmaps_analytics/scripts/generate_heatmaps_analytics.py`:
+   - `AnalyticsConfig`, `ZoneCountRecord`, `LineCountRecord`, and `TrackDurationStats`
+     dataclasses with strict validation.
+   - YAML configuration loader and writer (`load_analytics_config`, `save_analytics_config`).
+   - CSV writers and readers for `zone_counts.csv`
+     (`zone_id, entry_count, exit_count, total_dwell_seconds, peak_occupancy`) and
+     `line_counts.csv` (`line_id, crossings_ab, crossings_ba, total`).
+   - 2D spatial density accumulator (`accumulate_trajectory_grid`) with configurable bin
+     size (`grid_bin_size_px`), per-track-per-cell cap (`max_points_per_track_cell`) to
+     mitigate stationary-person dominance, and exact upsampling to `(frame_height, frame_width)`.
+   - Gaussian smoother and normalization helper (`smooth_and_normalize_heatmap`) supporting
+     `log`, `percentile`, and `linear` normalization.
+   - Heatmap overlay renderer (`render_heatmap_overlay`) blending OpenCV colormap
+     (`jet` / `inferno` / `turbo` / `hot`) onto the reference frame with optional Phase 5
+     zone/line geometry and legend bar.
+   - Per-zone statistics aggregator (`compute_zone_counts`) combining `events.csv`
+     (`zone_entry`, `zone_exit`, `dwell_time_event`) with frame-by-frame polygon
+     occupancy to compute exact `peak_occupancy`.
+   - Per-line directional crossing aggregator (`compute_line_counts`) from `events.csv`
+     (`line_crossing` events `<line_id>:A->B` and `<line_id>:B->A`).
+   - Track duration & path-length distribution calculator (`compute_track_duration_stats`).
+   - End-to-end pipeline (`run_heatmaps_analytics`) and CLI (`main`) producing
+     `heatmap.png`, `zone_counts.csv`, `line_counts.csv`, `analytics.yaml`, and
+     `analytics_summary.json`.
+4. Create exploratory notebook
+   `cv_projects/08_heatmaps_analytics/notebooks/01_explore_heatmaps_analytics.ipynb`.
+5. Add unit and integration tests in `tests/test_heatmaps_analytics.py`.
+6. Execute Phase 8 on real surveillance footage (`people-detection.mp4` + Phase 4
+   `trajectories.csv` + Phase 5 `scene_config.yaml` + Phase 7 `events.csv`), visually
+   inspect `heatmap.png`, cross-check `zone_counts.csv` and `line_counts.csv` against
+   manual counts from `events.csv`, and document findings in `notes.md`.
+
+### Acceptance Criteria
+
+| # | Criterion | Status | Evidence |
+|---|-----------|--------|----------|
+| 1 | 2D trajectory grid accumulation, Gaussian smoothing, and reference-frame overlay produce `heatmap.png` whose hot spots match visible activity in the footage | ☐ | — |
+| 2 | `zone_counts.csv` matches schema (`zone_id, entry_count, exit_count, total_dwell_seconds, peak_occupancy`) and is cross-checked against manual counts from `events.csv` | ☐ | — |
+| 3 | `line_counts.csv` matches schema (`line_id, crossings_ab, crossings_ba, total`) and matches directional `line_crossing` events | ☐ | — |
+| 4 | Track duration distribution and structured `analytics_summary.json` validate cleanly and are human-readable | ☐ | — |
+| 5 | Stationary-person dominance and grid-vs-frame resolution alignment risks mitigated and documented in `notes.md` | ☐ | — |
+| 6 | All local CI-parity checks (`ruff check`, `ruff format --check`, `pytest`) and remote GitHub Actions CI pass 100% | ☐ | — |
+
+### Validation & CI Plan
+
+```bash
+uv sync --locked
+uv run --locked ruff check .
+uv run --locked ruff format --check .
+uv run --locked pytest -v
+# phase-specific execution:
+uv run --locked python cv_projects/08_heatmaps_analytics/scripts/generate_heatmaps_analytics.py \
+    --source data/fallback_clips/people-detection.mp4 \
+    --trajectories cv_projects/04_trajectory_extraction/outputs/people_detection/trajectories.csv \
+    --events cv_projects/07_visual_evidence/outputs/people_detection/events.csv \
+    --scene-config cv_projects/05_zone_line_reasoning/configs/scene_config.yaml \
+    --config cv_projects/08_heatmaps_analytics/configs/analytics.yaml \
+    --output-dir cv_projects/08_heatmaps_analytics/outputs/people_detection
+```
+
+### Exclusions
+
+- **Full quantitative MOT17/VIRAT benchmark report (`evaluation_report.md`, `metrics.json`)
+  and SQLite search indexing (`intelligence.db`):** Explicitly deferred to Phase 9
+  (`09_cv_evaluation`) and Phase 10 (`10_searchable_outputs`) per `docs/project_phases.md`.
+
+### Micro-Task Breakdown
+
+- [x] 1. `docs(roadmap): define Phase 8 heatmaps and analytics scope and micro-task checklist`
+- [ ] 2. `docs(analytics): scaffold cv_projects/08_heatmaps_analytics README and notes`
+- [ ] 3. `feat(analytics): add default configs/analytics.yaml for heatmap and aggregation settings`
+- [ ] 4. `test(helpers): expose Phase 8 heatmaps analytics scripts directory to test suite`
+- [ ] 5. `types(analytics): define AnalyticsConfig, ZoneCountRecord, LineCountRecord, and TrackDurationStats dataclasses`
+- [ ] 6. `test(analytics): add unit tests for AnalyticsConfig and record dataclass validation`
+- [ ] 7. `feat(analytics): implement load_analytics_config and save_analytics_config YAML helpers`
+- [ ] 8. `test(analytics): add unit tests for analytics.yaml round-trip serialization`
+- [ ] 9. `feat(analytics): implement write_zone_counts_csv and read_zone_counts_csv`
+- [ ] 10. `test(analytics): add unit tests for zone_counts.csv round-trip serialization`
+- [ ] 11. `feat(analytics): implement write_line_counts_csv and read_line_counts_csv`
+- [ ] 12. `test(analytics): add unit tests for line_counts.csv round-trip serialization`
+- [ ] 13. `feat(analytics): implement accumulate_trajectory_grid and smooth_and_normalize_heatmap`
+- [ ] 14. `test(analytics): add unit tests for grid accumulation, stationary cap, and smoothing`
+- [ ] 15. `feat(analytics): implement render_heatmap_overlay with colormap, geometry, and legend`
+- [ ] 16. `test(analytics): add unit tests for render_heatmap_overlay resolution and blending`
+- [ ] 17. `feat(analytics): implement compute_zone_counts and compute_line_counts aggregators`
+- [ ] 18. `test(analytics): add unit tests for zone_counts, peak occupancy, and line_counts`
+- [ ] 19. `feat(analytics): implement compute_track_duration_stats distribution helper`
+- [ ] 20. `test(analytics): add unit tests for compute_track_duration_stats`
+- [ ] 21. `feat(analytics): implement run_heatmaps_analytics pipeline and CLI entrypoint`
+- [ ] 22. `test(analytics): add end-to-end pipeline and CLI tests in test_heatmaps_analytics.py`
+- [ ] 23. `feat(analytics): add exploratory notebook 01_explore_heatmaps_analytics.ipynb`
+- [ ] 24. `docs(analytics): document real people-detection.mp4 heatmap and zone/line cross-check in notes and READMEs`
+- [ ] 25. `docs(roadmap): mark Phase 8 heatmaps and analytics completed in docs/ROADMAP.md`
+
+
 
 
 
