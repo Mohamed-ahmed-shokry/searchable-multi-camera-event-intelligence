@@ -598,9 +598,11 @@ def compute_zone_counts(
                 zone_map[z.zone_id] = z
 
     for ev in events:
-        if ev.event_type in {"zone_entry", "zone_exit", "dwell_time_event"}:
-            if ev.zone_id not in zone_order:
-                zone_order.append(ev.zone_id)
+        if (
+            ev.event_type in {"zone_entry", "zone_exit", "dwell_time_event"}
+            and ev.zone_id not in zone_order
+        ):
+            zone_order.append(ev.zone_id)
 
     # Pre-compute frame-by-frame polygon occupancy when scene_config + trajectories are available
     frame_peak_by_zone: dict[str, int] = {zid: 0 for zid in zone_order}
