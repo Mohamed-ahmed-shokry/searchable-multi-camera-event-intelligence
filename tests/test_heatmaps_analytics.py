@@ -11,8 +11,10 @@ from generate_heatmaps_analytics import (
     TrackDurationStats,
     ZoneCountRecord,
     load_analytics_config,
+    read_line_counts_csv,
     read_zone_counts_csv,
     save_analytics_config,
+    write_line_counts_csv,
     write_zone_counts_csv,
 )
 
@@ -193,3 +195,32 @@ def test_zone_counts_csv_round_trip(tmp_path: Path) -> None:
 
     with pytest.raises(FileNotFoundError):
         read_zone_counts_csv(tmp_path / "missing_zone_counts.csv")
+
+
+def test_line_counts_csv_round_trip(tmp_path: Path) -> None:
+    records = [
+        LineCountRecord(
+            line_id="doorway_line",
+            crossings_ab=0,
+            crossings_ba=6,
+            total=6,
+        ),
+        LineCountRecord(
+            line_id="aisle_split_line",
+            crossings_ab=1,
+            crossings_ba=2,
+            total=3,
+        ),
+    ]
+    csv_path = tmp_path / "line_counts.csv"
+    write_line_counts_csv(records, csv_path)
+    loaded = read_line_counts_csv(csv_path)
+    assert loaded == records
+
+    bad_csv = tmp_path / "bad_line.csv"
+    bad_csv.write_text("line_id,total\nl1,1\n", encoding="utf-8")
+    with pytest.raises(ValueError, match="Unexpected line_counts.csv header"):
+        read_line_counts_csv(bad_csv)
+
+    with pytest.raises(FileNotFoundError):
+        read_line_counts_csv(tmp_path / "missing_line_counts.csv")
