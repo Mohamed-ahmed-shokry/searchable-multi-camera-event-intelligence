@@ -17,10 +17,12 @@ from evaluate_pipeline import (
     evaluate_detection_precision_recall,
     evaluate_qualitative_events,
     evaluate_tracking_metrics,
+    export_failure_examples,
     load_evaluation_config,
     save_evaluation_config,
 )
 from generate_dwell_events import EventRecord
+from helpers import make_sequence, make_video
 from track_people import FrameTracks, TrackDetection
 
 
@@ -348,6 +350,30 @@ class TestCollectStageFpsTable(unittest.TestCase):
             self.assertEqual(len(default_table), 8)
             total_share = sum(r.runtime_share_pct for r in default_table)
             self.assertAlmostEqual(total_share, 100.0, delta=0.1)
+
+
+class TestExportFailureExamples(unittest.TestCase):
+    """Test export_failure_examples annotated image creation."""
+
+    def test_export_failure_examples_writes_four_annotated_jpegs(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            seq_dir = make_sequence(root, name="mot_seq", count=5)
+            vid_path = make_video(root, name="surv.avi", count=5)
+            gt = {23: [TrackDetection(23, 28, 10.0, 10.0, 40.0, 40.0, 1.0)]}
+            pred = {23: [TrackDetection(23, 12, 11.0, 11.0, 41.0, 41.0, 0.9)]}
+            cases = export_failure_examples(
+                root / "out",
+                mot17_source=seq_dir,
+                surveillance_source=vid_path,
+                gt_by_frame=gt,
+                pred_by_frame=pred,
+            )
+            self.assertEqual(len(cases), 4)
+            for c in cases:
+                img_file = root / "out" / c.image_path
+                self.assertTrue(img_file.is_file())
+                self.assertGreater(img_file.stat().st_size, 0)
 
 
 if __name__ == "__main__":
