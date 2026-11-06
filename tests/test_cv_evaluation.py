@@ -14,6 +14,7 @@ from evaluate_pipeline import (
     StageFpsRecord,
     TrackingMetrics,
     evaluate_detection_precision_recall,
+    evaluate_tracking_metrics,
     load_evaluation_config,
     save_evaluation_config,
 )
@@ -232,6 +233,45 @@ class TestEvaluateDetectionPrecisionRecall(unittest.TestCase):
 
         with self.assertRaises(ValueError):
             evaluate_detection_precision_recall(gt, preds, iou_threshold=0.0)
+
+
+class TestEvaluateTrackingMetrics(unittest.TestCase):
+    """Test evaluate_tracking_metrics with MT/PT/ML lifespan coverage and ID switches."""
+
+    def test_tracking_metrics_mt_pt_ml_and_idsw(self) -> None:
+        # GT track 1: present in all 5 frames (0..4) -> matched in all 5 -> MT (100%)
+        # GT track 2: present in 5 frames -> matched in 2 frames -> PT (40%)
+        # GT track 3: present in 5 frames -> matched in 0 frames -> ML (0%)
+        gt: dict[int, list[TrackDetection]] = {}
+        preds: list[FrameTracks] = []
+        for fid in range(5):
+            gt[fid] = [
+                TrackDetection(fid, 1, 10.0, 10.0, 50.0, 50.0, 1.0),
+                TrackDetection(fid, 2, 100.0, 100.0, 140.0, 140.0, 1.0),
+                TrackDetection(fid, 3, 200.0, 200.0, 240.0, 240.0, 1.0),
+            ]
+            # Pred for GT 1 switches ID from 10 to 99 at frame 3
+            pred_id_for_1 = 10 if fid < 3 else 99
+            frame_preds = [
+                TrackDetection(fid, pred_id_for_1, 10.0, 10.0, 50.0, 50.0, 0.9),
+            ]
+            # Pred 20 for GT 2 appears at frame 0 and frame 4 (fragmentation gap of 3 frames)
+            if fid in (0, 4):
+                frame_preds.append(
+                    TrackDetection(fid, 20, 100.0, 100.0, 140.0, 140.0, 0.85)
+                )
+            preds.append(FrameTracks(frame_id=fid, tracks=tuple(frame_preds)))
+
+        tm = evaluate_tracking_metrics("bytetrack", gt, preds, iou_threshold=0.5)
+        self.assertEqual(tm.tracker_name, "bytetrack")
+        self.assertEqual(tm.num_gt_tracks, 3)
+        self.assertEqual(tm.num_pred_tracks, 3)  # IDs 10, 99, 20
+        self.assertEqual(tm.mostly_tracked, 1)
+        self.assertEqual(tm.partially_tracked, 1)
+        self.assertEqual(tm.mostly_lost, 1)
+        self.assertEqual(tm.id_switches, 1)
+        self.assertEqual(tm.fragmentation_count, 1)
+        self.assertEqual(len(tm.id_switch_events), 1)
 
 
 if __name__ == "__main__":
