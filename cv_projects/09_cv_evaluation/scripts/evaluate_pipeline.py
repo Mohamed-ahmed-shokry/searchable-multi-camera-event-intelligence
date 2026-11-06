@@ -1248,21 +1248,27 @@ def generate_evaluation_report_markdown(
         "",
         "## 1. Executive Summary",
         "",
-        f"- **Quantitative Detection (`MOT17-11-FRCNN`, IoU >= {detection_metrics.iou_threshold:.2f}):** "
-        f"Precision = **`{detection_metrics.precision:.4f}`**, "
-        f"Recall = **`{detection_metrics.recall:.4f}`**, "
-        f"F1 = **`{detection_metrics.f1:.4f}`**, "
-        f"Mean Matched IoU = **`{detection_metrics.mean_iou:.4f}`** "
-        f"(`TP={detection_metrics.tp}`, `FP={detection_metrics.fp}`, `FN={detection_metrics.fn}`).",
-        f"- **Quantitative Tracking (`MOT17-11-FRCNN`):** "
-        f"Primary tracker (`{primary_trk.tracker_name if primary_trk else 'N/A'}`) achieves "
-        f"**`MOTA = {mota_str}`**, **`IDF1 = {idf1_str}`**, and **`ID Switches = {idsw_str}`**.",
-        f"- **Qualitative Surveillance Spot-Check (`people-detection.mp4`):** "
-        f"Zone entry accuracy = **`{qualitative_check.zone_entry_accuracy * 100.0:.1f}%`**, "
-        f"Zone exit accuracy = **`{qualitative_check.zone_exit_accuracy * 100.0:.1f}%`**, "
-        f"Line crossing accuracy = **`{qualitative_check.line_crossing_accuracy * 100.0:.1f}%`**, "
-        f"Dwell count match = **`{qualitative_check.dwell_count_matches}`** "
-        f"(max dwell duration error = `{qualitative_check.max_dwell_duration_error_seconds:.4f}s`).",
+        (
+            f"- **Quantitative Detection (`MOT17-11-FRCNN`, IoU >= {detection_metrics.iou_threshold:.2f}):** "
+            f"Precision = **`{detection_metrics.precision:.4f}`**, "
+            f"Recall = **`{detection_metrics.recall:.4f}`**, "
+            f"F1 = **`{detection_metrics.f1:.4f}`**, "
+            f"Mean Matched IoU = **`{detection_metrics.mean_iou:.4f}`** "
+            f"(`TP={detection_metrics.tp}`, `FP={detection_metrics.fp}`, `FN={detection_metrics.fn}`)."
+        ),
+        (
+            f"- **Quantitative Tracking (`MOT17-11-FRCNN`):** "
+            f"Primary tracker (`{primary_trk.tracker_name if primary_trk else 'N/A'}`) achieves "
+            f"**`MOTA = {mota_str}`**, **`IDF1 = {idf1_str}`**, and **`ID Switches = {idsw_str}`**."
+        ),
+        (
+            f"- **Qualitative Surveillance Spot-Check (`people-detection.mp4`):** "
+            f"Zone entry accuracy = **`{qualitative_check.zone_entry_accuracy * 100.0:.1f}%`**, "
+            f"Zone exit accuracy = **`{qualitative_check.zone_exit_accuracy * 100.0:.1f}%`**, "
+            f"Line crossing accuracy = **`{qualitative_check.line_crossing_accuracy * 100.0:.1f}%`**, "
+            f"Dwell count match = **`{qualitative_check.dwell_count_matches}`** "
+            f"(max dwell duration error = `{qualitative_check.max_dwell_duration_error_seconds:.4f}s`)."
+        ),
         "",
         "---",
         "",
@@ -1340,8 +1346,10 @@ def generate_evaluation_report_markdown(
             f"- **Total Structured Events Audited:** `{qualitative_check.total_events}`",
             f"- **Dwell Event Count Matches Manual Audit:** `{qualitative_check.dwell_count_matches}`",
             f"- **Track-Loss-in-Zone Count Matches Manual Audit:** `{qualitative_check.track_lost_in_zone_matches}`",
-            f"- **Max Dwell Duration Discrepancy:** `{qualitative_check.max_dwell_duration_error_seconds:.6f}s` "
-            f"(Within Tolerance: `{qualitative_check.dwell_within_tolerance}`)",
+            (
+                f"- **Max Dwell Duration Discrepancy:** `{qualitative_check.max_dwell_duration_error_seconds:.6f}s` "
+                f"(Within Tolerance: `{qualitative_check.dwell_within_tolerance}`)"
+            ),
             "",
             "---",
             "",
