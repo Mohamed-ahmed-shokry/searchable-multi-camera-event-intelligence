@@ -11,6 +11,7 @@ from typing import Any
 
 import yaml
 from evaluate_mot import compute_iou_matrix, evaluate_tracking
+from generate_dwell_events import EventRecord
 from track_people import FrameTracks, TrackDetection, analyze_track_anomalies
 
 
@@ -587,4 +588,123 @@ def evaluate_tracking_metrics(
         mostly_lost=mostly_lost,
         fragmentation_count=len(anomalies["fragmentations"]),
         id_switch_events=tuple(mot["id_switch_events"]),
+    )
+
+
+def evaluate_qualitative_events(
+    events: Sequence[EventRecord],
+    config: EvaluationConfig,
+    *,
+    stay_traces: Sequence[Mapping[str, Any]] | None = None,
+) -> QualitativeSpotCheck:
+    """Compare automated events.csv and stay traces against manual playback audit expectations."""
+    actual_entries: dict[str, int] = dict.fromkeys(config.expected_zone_entries, 0)
+    actual_exits: dict[str, int] = dict.fromkeys(config.expected_zone_exits, 0)
+    actual_crossings: dict[str, int] = dict.fromkeys(config.expected_line_crossings, 0)
+
+    dwell_events: list[EventRecord] = []
+    max_dwell_error = 0.0
+
+    for ev in events:
+        if ev.event_type == "zone_entry":
+            actual_entries[ev.zone_or_line_id] = (
+                actual_entries.get(ev.zone_or_line_id, 0) + 1
+            )
+        elif ev.event_type == "zone_exit":
+            actual_exits[ev.zone_or_line_id] = (
+                actual_exits.get(ev.zone_or_line_id, 0) + 1
+            )
+        elif ev.event_type == "line_crossing":
+            actual_crossings[ev.zone_or_line_id] = (
+                actual_crossings.get(ev.zone_or_line_id, 0) + 1
+            )
+        elif ev.event_type == "dwell_time_event":
+            dwell_events.append(ev)
+            expected_dur = ev.end_time - ev.start_time
+            err = abs(ev.duration_seconds - expected_dur)
+            if err > max_dwell_error:
+                max_dwell_error = err
+
+    entry_comp: dict[str, dict[str, int | bool]] = {}
+    entry_matches = 0
+    for zid, exp in config.expected_zone_entries.items():
+        act = actual_entries.get(zid, 0)
+        is_match = act == exp
+        if is_match:
+            entry_matches += 1
+        entry_comp[zid] = {"expected": exp, "actual": act, "match": is_match}
+
+    exit_comp: dict[str, dict[str, int | bool]] = {}
+    exit_matches = 0
+    for zid, exp in config.expected_zone_exits.items():
+        act = actual_exits.get(zid, 0)
+        is_match = act == exp
+        if is_match:
+            exit_matches += 1
+        exit_comp[zid] = {"expected": exp, "actual": act, "match": is_match}
+
+    line_comp: dict[str, dict[str, int | bool]] = {}
+    line_matches = 0
+    for lid, exp in config.expected_line_crossings.items():
+        act = actual_crossings.get(lid, 0)
+        is_match = act == exp
+        if is_match:
+            line_matches += 1
+        line_comp[lid] = {"expected": exp, "actual": act, "match": is_match}
+
+    if stay_traces is not None:
+        triggered_by_key: dict[tuple[int, str, float], float] = {}
+        actual_lost = 0
+        for st in stay_traces:
+            if bool(st.get("track_lost_in_zone", False)):
+                actual_lost += 1
+            if str(st.get("peak_state", "")) == "triggered":
+                key = (
+                    int(st["track_id"]),
+                    str(st["zone_id"]),
+                    round(float(st["enter_time"]), 3),
+                )
+                triggered_by_key[key] = float(st["duration_seconds"])
+        for ev in dwell_events:
+            key = (ev.track_id, ev.zone_or_line_id, round(ev.start_time, 3))
+            if key in triggered_by_key:
+                err = abs(ev.duration_seconds - triggered_by_key[key])
+                if err > max_dwell_error:
+                    max_dwell_error = err
+        lost_matches = actual_lost == config.expected_track_lost_in_zone_count
+    else:
+        total_entries = sum(actual_entries.values())
+        total_exits = sum(actual_exits.values())
+        lost_matches = (
+            total_entries - total_exits
+        ) == config.expected_track_lost_in_zone_count
+
+    entry_acc = (
+        entry_matches / len(config.expected_zone_entries)
+        if config.expected_zone_entries
+        else 1.0
+    )
+    exit_acc = (
+        exit_matches / len(config.expected_zone_exits)
+        if config.expected_zone_exits
+        else 1.0
+    )
+    line_acc = (
+        line_matches / len(config.expected_line_crossings)
+        if config.expected_line_crossings
+        else 1.0
+    )
+
+    return QualitativeSpotCheck(
+        total_events=len(events),
+        zone_entry_accuracy=round(entry_acc, 4),
+        zone_exit_accuracy=round(exit_acc, 4),
+        line_crossing_accuracy=round(line_acc, 4),
+        dwell_count_matches=(len(dwell_events) == config.expected_dwell_events_count),
+        track_lost_in_zone_matches=lost_matches,
+        max_dwell_duration_error_seconds=round(max_dwell_error, 6),
+        dwell_within_tolerance=(max_dwell_error <= config.dwell_tolerance_seconds),
+        zone_entry_comparison=entry_comp,
+        zone_exit_comparison=exit_comp,
+        line_crossing_comparison=line_comp,
     )
