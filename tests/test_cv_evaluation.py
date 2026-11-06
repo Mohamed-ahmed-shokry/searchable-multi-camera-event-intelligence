@@ -18,6 +18,7 @@ from evaluate_pipeline import (
     evaluate_qualitative_events,
     evaluate_tracking_metrics,
     export_failure_examples,
+    generate_evaluation_report_markdown,
     load_evaluation_config,
     save_evaluation_config,
 )
@@ -374,6 +375,80 @@ class TestExportFailureExamples(unittest.TestCase):
                 img_file = root / "out" / c.image_path
                 self.assertTrue(img_file.is_file())
                 self.assertGreater(img_file.stat().st_size, 0)
+
+
+class TestGenerateEvaluationReportMarkdown(unittest.TestCase):
+    """Test generate_evaluation_report_markdown sections and tables."""
+
+    def test_generate_evaluation_report_markdown_contains_all_sections(self) -> None:
+        det = DetectionMetrics(0.8, 0.6, 0.6857, 60, 15, 40, 100, 75, 0.85)
+        trk = [
+            TrackingMetrics(
+                "bytetrack",
+                0.45,
+                0.85,
+                0.60,
+                0.8,
+                0.6,
+                2,
+                60,
+                15,
+                40,
+                100,
+                75,
+                10,
+                8,
+                4,
+                3,
+                3,
+                5,
+            )
+        ]
+        qual = QualitativeSpotCheck(
+            total_events=4,
+            zone_entry_accuracy=1.0,
+            zone_exit_accuracy=1.0,
+            line_crossing_accuracy=1.0,
+            dwell_count_matches=True,
+            track_lost_in_zone_matches=True,
+            max_dwell_duration_error_seconds=0.0,
+            dwell_within_tolerance=True,
+            zone_entry_comparison={"z1": {"expected": 1, "actual": 1, "match": True}},
+            zone_exit_comparison={"z1": {"expected": 1, "actual": 1, "match": True}},
+            line_crossing_comparison={
+                "l1:A->B": {"expected": 1, "actual": 1, "match": True}
+            },
+        )
+        fps_table = [
+            StageFpsRecord("02_det", "Detection", "cuda:0", 100, 5.0, 20.0, 50.0, 100.0)
+        ]
+        failures = [
+            FailureCaseRecord(
+                "failure_01",
+                "id_switch",
+                "MOT17",
+                23,
+                "Switch Title",
+                "Symptom text",
+                "Root cause text",
+                "Mitigation text",
+                "failure_examples/f1.jpg",
+            )
+        ]
+        md = generate_evaluation_report_markdown(
+            detection_metrics=det,
+            tracking_metrics=trk,
+            qualitative_check=qual,
+            stage_fps_table=fps_table,
+            failure_cases=failures,
+        )
+        self.assertIn("## 1. Executive Summary", md)
+        self.assertIn("## 2. Quantitative Evaluation", md)
+        self.assertIn("## 3. Qualitative Surveillance Evaluation", md)
+        self.assertIn("## 4. Per-Stage Processing FPS", md)
+        self.assertIn("## 5. Concrete Failure Examples", md)
+        self.assertIn("`bytetrack`", md)
+        self.assertIn("`failure_01`", md)
 
 
 if __name__ == "__main__":
