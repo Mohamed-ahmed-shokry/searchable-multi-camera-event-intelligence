@@ -20,11 +20,13 @@ from evaluate_pipeline import (
     export_failure_examples,
     generate_evaluation_report_markdown,
     load_evaluation_config,
+    main,
+    run_cv_evaluation,
     save_evaluation_config,
 )
-from generate_dwell_events import EventRecord
+from generate_dwell_events import EventRecord, write_events_csv
 from helpers import make_sequence, make_video
-from track_people import FrameTracks, TrackDetection
+from track_people import FrameTracks, TrackDetection, write_tracks_csv
 
 
 class TestEvaluationDataclasses(unittest.TestCase):
@@ -449,6 +451,83 @@ class TestGenerateEvaluationReportMarkdown(unittest.TestCase):
         self.assertIn("## 5. Concrete Failure Examples", md)
         self.assertIn("`bytetrack`", md)
         self.assertIn("`failure_01`", md)
+
+
+class TestRunCvEvaluationAndCli(unittest.TestCase):
+    """Test run_cv_evaluation end-to-end execution and CLI entrypoint."""
+
+    def test_run_cv_evaluation_and_cli_end_to_end(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            seq_dir = make_sequence(root, name="mot_seq", count=3)
+            gt_dir = seq_dir / "gt"
+            gt_dir.mkdir(parents=True, exist_ok=True)
+            gt_path = gt_dir / "gt.txt"
+            gt_path.write_text(
+                "1,1,10,10,30,30,1,1,1.0\n"
+                "2,1,12,12,30,30,1,1,1.0\n"
+                "3,1,14,14,30,30,1,1,1.0\n",
+                encoding="utf-8",
+            )
+
+            bt_csv = root / "bytetrack.csv"
+            write_tracks_csv(
+                bt_csv,
+                [
+                    FrameTracks(0, (TrackDetection(0, 1, 10.0, 10.0, 40.0, 40.0, 0.9),)),
+                    FrameTracks(1, (TrackDetection(1, 1, 12.0, 12.0, 42.0, 42.0, 0.9),)),
+                    FrameTracks(2, (TrackDetection(2, 1, 14.0, 14.0, 44.0, 44.0, 0.9),)),
+                ],
+            )
+            bs_csv = root / "botsort.csv"
+            write_tracks_csv(
+                bs_csv,
+                [
+                    FrameTracks(0, (TrackDetection(0, 5, 10.0, 10.0, 40.0, 40.0, 0.9),)),
+                    FrameTracks(1, (TrackDetection(1, 5, 12.0, 12.0, 42.0, 42.0, 0.9),)),
+                    FrameTracks(2, (TrackDetection(2, 5, 14.0, 14.0, 44.0, 44.0, 0.9),)),
+                ],
+            )
+
+            vid_path = make_video(root, name="surv.avi", count=3)
+            ev_csv = root / "events.csv"
+            write_events_csv(
+                ev_csv,
+                [
+                    EventRecord("evt_0001", "zone_entry", 1, "z1", 0.0, 0.0, 0.0),
+                    EventRecord("evt_0002", "dwell_time_event", 1, "z1", 0.0, 1.5, 1.5),
+                    EventRecord("evt_0003", "zone_exit", 1, "z1", 1.6, 1.6, 0.0),
+                    EventRecord("evt_0004", "line_crossing", 1, "l1:A->B", 1.7, 1.7, 0.0),
+                ],
+            )
+
+            cfg = EvaluationConfig(
+                mot17_max_frames=3,
+                mot17_sequence_path=str(seq_dir),
+                mot17_gt_path=str(gt_path),
+                mot17_bytetrack_csv=str(bt_csv),
+                mot17_botsort_csv=str(bs_csv),
+                surveillance_video_path=str(vid_path),
+                surveillance_events_csv=str(ev_csv),
+                expected_zone_entries={"z1": 1},
+                expected_zone_exits={"z1": 1},
+                expected_line_crossings={"l1:A->B": 1},
+                expected_dwell_events_count=1,
+                expected_track_lost_in_zone_count=0,
+            )
+            cfg_yaml = save_evaluation_config(cfg, root / "eval.yaml")
+            out_dir = root / "eval_out"
+            summary = run_cv_evaluation(cfg, out_dir, project_root=root)
+            self.assertAlmostEqual(summary["mota"], 1.0, places=4)
+            self.assertAlmostEqual(summary["idf1"], 1.0, places=4)
+            self.assertTrue((out_dir / "evaluation_report.md").is_file())
+            self.assertTrue((out_dir / "metrics.json").is_file())
+            self.assertEqual(len(summary["failure_examples"]), 4)
+
+            cli_out = root / "cli_out"
+            rc = main(["--config", str(cfg_yaml), "--output-dir", str(cli_out)])
+            self.assertEqual(rc, 0)
+            self.assertTrue((cli_out / "metrics.json").is_file())
 
 
 if __name__ == "__main__":
