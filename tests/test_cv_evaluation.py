@@ -13,9 +13,11 @@ from evaluate_pipeline import (
     QualitativeSpotCheck,
     StageFpsRecord,
     TrackingMetrics,
+    evaluate_detection_precision_recall,
     load_evaluation_config,
     save_evaluation_config,
 )
+from track_people import FrameTracks, TrackDetection
 
 
 class TestEvaluationDataclasses(unittest.TestCase):
@@ -185,6 +187,51 @@ class TestEvaluationConfigYaml(unittest.TestCase):
 
             with self.assertRaises(FileNotFoundError):
                 load_evaluation_config(root / "missing.yaml")
+
+
+class TestEvaluateDetectionPrecisionRecall(unittest.TestCase):
+    """Test evaluate_detection_precision_recall against synthetic ground truth."""
+
+    def test_detection_precision_recall_tp_fp_fn(self) -> None:
+        gt = {
+            0: [
+                TrackDetection(0, 1, 10.0, 10.0, 50.0, 50.0, 1.0),
+                TrackDetection(0, 2, 100.0, 100.0, 140.0, 140.0, 1.0),
+            ],
+            1: [
+                TrackDetection(1, 1, 12.0, 12.0, 52.0, 52.0, 1.0),
+            ],
+        }
+        preds = [
+            FrameTracks(
+                frame_id=0,
+                tracks=(
+                    TrackDetection(0, 10, 10.0, 10.0, 50.0, 50.0, 0.9),  # TP (IoU=1.0)
+                    TrackDetection(
+                        0, 11, 200.0, 200.0, 240.0, 240.0, 0.8
+                    ),  # FP (no overlap)
+                ),
+            ),
+            FrameTracks(
+                frame_id=1,
+                tracks=(
+                    TrackDetection(1, 10, 12.0, 12.0, 52.0, 52.0, 0.95),  # TP (IoU=1.0)
+                ),
+            ),
+        ]
+        res = evaluate_detection_precision_recall(gt, preds, iou_threshold=0.5)
+        self.assertEqual(res.tp, 2)
+        self.assertEqual(res.fp, 1)
+        self.assertEqual(res.fn, 1)
+        self.assertEqual(res.num_gt, 3)
+        self.assertEqual(res.num_predictions, 3)
+        self.assertAlmostEqual(res.precision, 0.6667, places=4)
+        self.assertAlmostEqual(res.recall, 0.6667, places=4)
+        self.assertAlmostEqual(res.f1, 0.6667, places=4)
+        self.assertAlmostEqual(res.mean_iou, 1.0, places=4)
+
+        with self.assertRaises(ValueError):
+            evaluate_detection_precision_recall(gt, preds, iou_threshold=0.0)
 
 
 if __name__ == "__main__":
