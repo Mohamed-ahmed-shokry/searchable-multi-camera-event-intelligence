@@ -1227,3 +1227,161 @@ def export_failure_examples(
             image_path=f4_rel,
         ),
     ]
+
+
+def generate_evaluation_report_markdown(
+    *,
+    detection_metrics: DetectionMetrics,
+    tracking_metrics: Sequence[TrackingMetrics],
+    qualitative_check: QualitativeSpotCheck,
+    stage_fps_table: Sequence[StageFpsRecord],
+    failure_cases: Sequence[FailureCaseRecord],
+) -> str:
+    """Render an honest, comprehensive Markdown evaluation report (evaluation_report.md)."""
+    primary_trk = tracking_metrics[0] if tracking_metrics else None
+    mota_str = f"{primary_trk.mota:.4f}" if primary_trk else "N/A"
+    idf1_str = f"{primary_trk.idf1:.4f}" if primary_trk else "N/A"
+    idsw_str = str(primary_trk.id_switches) if primary_trk else "N/A"
+
+    lines: list[str] = [
+        "# Phase 9 — Computer Vision Pipeline Evaluation Report",
+        "",
+        "## 1. Executive Summary",
+        "",
+        f"- **Quantitative Detection (`MOT17-11-FRCNN`, IoU >= {detection_metrics.iou_threshold:.2f}):** "
+        f"Precision = **`{detection_metrics.precision:.4f}`**, "
+        f"Recall = **`{detection_metrics.recall:.4f}`**, "
+        f"F1 = **`{detection_metrics.f1:.4f}`**, "
+        f"Mean Matched IoU = **`{detection_metrics.mean_iou:.4f}`** "
+        f"(`TP={detection_metrics.tp}`, `FP={detection_metrics.fp}`, `FN={detection_metrics.fn}`).",
+        f"- **Quantitative Tracking (`MOT17-11-FRCNN`):** "
+        f"Primary tracker (`{primary_trk.tracker_name if primary_trk else 'N/A'}`) achieves "
+        f"**`MOTA = {mota_str}`**, **`IDF1 = {idf1_str}`**, and **`ID Switches = {idsw_str}`**.",
+        f"- **Qualitative Surveillance Spot-Check (`people-detection.mp4`):** "
+        f"Zone entry accuracy = **`{qualitative_check.zone_entry_accuracy * 100.0:.1f}%`**, "
+        f"Zone exit accuracy = **`{qualitative_check.zone_exit_accuracy * 100.0:.1f}%`**, "
+        f"Line crossing accuracy = **`{qualitative_check.line_crossing_accuracy * 100.0:.1f}%`**, "
+        f"Dwell count match = **`{qualitative_check.dwell_count_matches}`** "
+        f"(max dwell duration error = `{qualitative_check.max_dwell_duration_error_seconds:.4f}s`).",
+        "",
+        "---",
+        "",
+        "## 2. Quantitative Evaluation (`MOT17-11-FRCNN` Ground Truth)",
+        "",
+        "### 2.1 Pedestrian Detection Precision & Recall",
+        "",
+        "| Metric | Value | Notes |",
+        "| --- | ---: | --- |",
+        f"| **Precision** | `{detection_metrics.precision:.4f}` (`{detection_metrics.precision * 100.0:.2f}%`) | High precision avoids false-positive ghost tracks |",
+        f"| **Recall** | `{detection_metrics.recall:.4f}` (`{detection_metrics.recall * 100.0:.2f}%`) | Reflects single-threshold (`0.40`) detector vs. heavily occluded/distant GT |",
+        f"| **F1 Score** | `{detection_metrics.f1:.4f}` | Harmonic mean of precision and recall |",
+        f"| **True Positives (TP)** | `{detection_metrics.tp}` | Matched boxes at `IoU >= {detection_metrics.iou_threshold:.2f}` |",
+        f"| **False Positives (FP)** | `{detection_metrics.fp}` | Unmatched predicted boxes |",
+        f"| **False Negatives (FN)** | `{detection_metrics.fn}` | Missed GT pedestrian boxes (mostly low-visibility/far-depth) |",
+        f"| **Mean Matched IoU** | `{detection_metrics.mean_iou:.4f}` | Localization tightness on matched detections |",
+        "",
+        "### 2.2 Multi-Object Tracking (`ByteTrack` vs `BoT-SORT`)",
+        "",
+        "| Tracker | MOTA | MOTP | IDF1 | Precision | Recall | ID Switches | Fragmentations | Mostly Tracked (`>=80%`) | Partially Tracked (`20-80%`) | Mostly Lost (`<20%`) |",
+        "| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |",
+    ]
+
+    for tm in tracking_metrics:
+        lines.append(
+            f"| `{tm.tracker_name}` | `{tm.mota:.4f}` | `{tm.motp:.4f}` | `{tm.idf1:.4f}` | "
+            f"`{tm.precision:.4f}` | `{tm.recall:.4f}` | `{tm.id_switches}` | "
+            f"`{tm.fragmentation_count}` | `{tm.mostly_tracked}/{tm.num_gt_tracks}` | "
+            f"`{tm.partially_tracked}/{tm.num_gt_tracks}` | `{tm.mostly_lost}/{tm.num_gt_tracks}` |"
+        )
+
+    lines.extend(
+        [
+            "",
+            "---",
+            "",
+            "## 3. Qualitative Surveillance Evaluation (`people-detection.mp4`)",
+            "",
+            "### 3.1 Zone Entry & Exit Spot-Check vs. Manual Playback Audit",
+            "",
+            "| Zone ID | Expected Entries | Actual Entries | Entry Match | Expected Exits | Actual Exits | Exit Match |",
+            "| --- | ---: | ---: | :---: | ---: | ---: | :---: |",
+        ]
+    )
+
+    all_zones = list(qualitative_check.zone_entry_comparison.keys())
+    for zid in all_zones:
+        en = qualitative_check.zone_entry_comparison.get(zid, {})
+        ex = qualitative_check.zone_exit_comparison.get(zid, {})
+        lines.append(
+            f"| `{zid}` | `{en.get('expected', 0)}` | `{en.get('actual', 0)}` | "
+            f"`{en.get('match', False)}` | `{ex.get('expected', 0)}` | "
+            f"`{ex.get('actual', 0)}` | `{ex.get('match', False)}` |"
+        )
+
+    lines.extend(
+        [
+            "",
+            "### 3.2 Directional Tripwire Line Crossing Spot-Check",
+            "",
+            "| Directed Line ID | Manual Audit Count | Automated Count | Match |",
+            "| --- | ---: | ---: | :---: |",
+        ]
+    )
+    for lid, lc in qualitative_check.line_crossing_comparison.items():
+        lines.append(
+            f"| `{lid}` | `{lc.get('expected', 0)}` | `{lc.get('actual', 0)}` | `{lc.get('match', False)}` |"
+        )
+
+    lines.extend(
+        [
+            "",
+            "### 3.3 Dwell Duration & State-Machine Integrity Sanity Checks",
+            "",
+            f"- **Total Structured Events Audited:** `{qualitative_check.total_events}`",
+            f"- **Dwell Event Count Matches Manual Audit:** `{qualitative_check.dwell_count_matches}`",
+            f"- **Track-Loss-in-Zone Count Matches Manual Audit:** `{qualitative_check.track_lost_in_zone_matches}`",
+            f"- **Max Dwell Duration Discrepancy:** `{qualitative_check.max_dwell_duration_error_seconds:.6f}s` "
+            f"(Within Tolerance: `{qualitative_check.dwell_within_tolerance}`)",
+            "",
+            "---",
+            "",
+            "## 4. Per-Stage Processing FPS & Latency Benchmark",
+            "",
+            "| Stage ID | Stage Name | Device | Frames | Elapsed (s) | Throughput (FPS) | Latency (ms/frame) | Share of Pipeline (%) | Notes |",
+            "| --- | --- | --- | ---: | ---: | ---: | ---: | ---: | --- |",
+        ]
+    )
+
+    for st in stage_fps_table:
+        lines.append(
+            f"| `{st.stage_id}` | {st.stage_name} | `{st.device}` | `{st.frames_processed}` | "
+            f"`{st.elapsed_seconds:.4f}` | **`{st.fps:.2f}`** | `{st.ms_per_frame:.2f}` | "
+            f"`{st.runtime_share_pct:.2f}%` | {st.notes} |"
+        )
+
+    lines.extend(
+        [
+            "",
+            "---",
+            "",
+            "## 5. Concrete Failure Examples & Honest Limitations",
+            "",
+        ]
+    )
+
+    for fc in failure_cases:
+        lines.extend(
+            [
+                f"### 5.{failure_cases.index(fc) + 1} `{fc.case_id}` — {fc.title}",
+                "",
+                f"- **Source & Frame:** `{fc.source_name}` (Frame `{fc.frame_id}`)",
+                f"- **Category:** `{fc.category}`",
+                f"- **Visual Artifact:** `{fc.image_path}`",
+                f"- **Observed Symptom:** {fc.symptom}",
+                f"- **Root Cause:** {fc.root_cause}",
+                f"- **Impact & Mitigation:** {fc.impact_and_mitigation}",
+                "",
+            ]
+        )
+
+    return "\n".join(lines)
