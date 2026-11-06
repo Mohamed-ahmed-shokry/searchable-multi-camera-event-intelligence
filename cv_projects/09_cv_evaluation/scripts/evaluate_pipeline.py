@@ -606,7 +606,7 @@ def evaluate_qualitative_events(
     max_dwell_error = 0.0
 
     for ev in events:
-        target_id = str(getattr(ev, "zone_or_line_id", None) or getattr(ev, "zone_id"))
+        target_id = str(getattr(ev, "zone_or_line_id", None) or ev.zone_id)
         if ev.event_type == "zone_entry":
             actual_entries[target_id] = actual_entries.get(target_id, 0) + 1
         elif ev.event_type == "zone_exit":
@@ -660,9 +660,7 @@ def evaluate_qualitative_events(
                 )
                 triggered_by_key[key] = float(st["duration_seconds"])
         for ev in dwell_events:
-            target_id = str(
-                getattr(ev, "zone_or_line_id", None) or getattr(ev, "zone_id")
-            )
+            target_id = str(getattr(ev, "zone_or_line_id", None) or ev.zone_id)
             key = (ev.track_id, target_id, round(ev.start_time, 3))
             if key in triggered_by_key:
                 err = abs(ev.duration_seconds - triggered_by_key[key])
