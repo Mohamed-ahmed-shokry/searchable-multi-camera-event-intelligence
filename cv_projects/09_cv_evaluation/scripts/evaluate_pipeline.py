@@ -10,8 +10,8 @@ from pathlib import Path
 from typing import Any
 
 import yaml
-from evaluate_mot import compute_iou_matrix
-from track_people import FrameTracks, TrackDetection
+from evaluate_mot import compute_iou_matrix, evaluate_tracking
+from track_people import FrameTracks, TrackDetection, analyze_track_anomalies
 
 
 @dataclass(frozen=True, slots=True)
@@ -496,4 +496,95 @@ def evaluate_detection_precision_recall(
         num_predictions=total_pred,
         mean_iou=round(mean_iou, 4),
         iou_threshold=iou_threshold,
+    )
+
+
+def evaluate_tracking_metrics(
+    tracker_name: str,
+    gt_by_frame: Mapping[int, Sequence[TrackDetection]],
+    predictions: Mapping[int, Sequence[TrackDetection]] | Sequence[FrameTracks],
+    *,
+    iou_threshold: float = 0.5,
+) -> TrackingMetrics:
+    """Compute CLEAR-MOT (MOTA, MOTP, IDSW), IDF1, MT/PT/ML lifespan coverage, and fragmentations."""
+    if not 0.0 < iou_threshold <= 1.0:
+        raise ValueError("iou_threshold must be in (0.0, 1.0]")
+
+    pred_by_frame = _normalize_pred_by_frame(predictions)
+    mot = evaluate_tracking(gt_by_frame, pred_by_frame, iou_threshold=iou_threshold)
+
+    all_frames = sorted(set(gt_by_frame.keys()) | set(pred_by_frame.keys()))
+    frame_tracks_seq = [
+        FrameTracks(frame_id=fid, tracks=tuple(pred_by_frame.get(fid, ())))
+        for fid in all_frames
+    ]
+    anomalies = analyze_track_anomalies(frame_tracks_seq)
+
+    gt_lifespan_frames: dict[int, int] = {}
+    gt_matched_frames: dict[int, int] = {}
+    pred_track_ids: set[int] = set()
+
+    for frame_id in all_frames:
+        gt_list = list(gt_by_frame.get(frame_id, ()))
+        pred_list = list(pred_by_frame.get(frame_id, ()))
+        for gt in gt_list:
+            gt_lifespan_frames[gt.track_id] = gt_lifespan_frames.get(gt.track_id, 0) + 1
+        for pred in pred_list:
+            pred_track_ids.add(pred.track_id)
+
+        if not gt_list or not pred_list:
+            continue
+
+        iou_mat = compute_iou_matrix(gt_list, pred_list)
+        candidates: list[tuple[float, int, int]] = []
+        for i in range(len(gt_list)):
+            for j in range(len(pred_list)):
+                score = float(iou_mat[i, j])
+                if score >= iou_threshold:
+                    candidates.append((score, i, j))
+        candidates.sort(key=lambda item: item[0], reverse=True)
+
+        matched_gt: set[int] = set()
+        matched_pred: set[int] = set()
+        for _score, i, j in candidates:
+            if i in matched_gt or j in matched_pred:
+                continue
+            matched_gt.add(i)
+            matched_pred.add(j)
+            gid = gt_list[i].track_id
+            gt_matched_frames[gid] = gt_matched_frames.get(gid, 0) + 1
+
+    mostly_tracked = 0
+    partially_tracked = 0
+    mostly_lost = 0
+    for gid, total_frames in gt_lifespan_frames.items():
+        matched = gt_matched_frames.get(gid, 0)
+        ratio = matched / total_frames if total_frames > 0 else 0.0
+        if ratio >= 0.8:
+            mostly_tracked += 1
+        elif ratio >= 0.2:
+            partially_tracked += 1
+        else:
+            mostly_lost += 1
+
+    return TrackingMetrics(
+        tracker_name=tracker_name,
+        mota=float(mot["mota"]),
+        motp=float(mot["motp"]),
+        idf1=float(mot["idf1"]),
+        precision=float(mot["precision"]),
+        recall=float(mot["recall"]),
+        id_switches=int(mot["id_switches"]),
+        tp=int(mot["matches"]),
+        fp=int(mot["fp"]),
+        fn=int(mot["fn"]),
+        num_gt_boxes=int(mot["num_gt"]),
+        num_pred_boxes=int(mot["num_predictions"]),
+        num_gt_tracks=len(gt_lifespan_frames),
+        num_pred_tracks=len(pred_track_ids),
+        mostly_tracked=mostly_tracked,
+        partially_tracked=partially_tracked,
+        mostly_lost=mostly_lost,
+        fragmentation_count=len(anomalies["fragmentations"]),
+        id_switch_events=tuple(mot["id_switch_events"]),
     )
