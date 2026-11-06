@@ -14,10 +14,12 @@ from evaluate_pipeline import (
     StageFpsRecord,
     TrackingMetrics,
     evaluate_detection_precision_recall,
+    evaluate_qualitative_events,
     evaluate_tracking_metrics,
     load_evaluation_config,
     save_evaluation_config,
 )
+from generate_dwell_events import EventRecord
 from track_people import FrameTracks, TrackDetection
 
 
@@ -272,6 +274,69 @@ class TestEvaluateTrackingMetrics(unittest.TestCase):
         self.assertEqual(tm.id_switches, 1)
         self.assertEqual(tm.fragmentation_count, 1)
         self.assertEqual(len(tm.id_switch_events), 1)
+
+
+class TestEvaluateQualitativeEvents(unittest.TestCase):
+    """Test evaluate_qualitative_events against manual playback audit expectations."""
+
+    def test_qualitative_events_spot_check(self) -> None:
+        cfg = EvaluationConfig(
+            expected_zone_entries={"z1": 1},
+            expected_zone_exits={"z1": 1},
+            expected_line_crossings={"l1:A->B": 1},
+            expected_dwell_events_count=1,
+            expected_track_lost_in_zone_count=0,
+        )
+        events = [
+            EventRecord(
+                "evt_0001", 1, "zone_entry", "z1", 1.0, 1.0, 0.0, 0.9, "s.jpg", "c.jpg"
+            ),
+            EventRecord(
+                "evt_0002",
+                1,
+                "dwell_time_event",
+                "z1",
+                1.0,
+                3.0,
+                2.0,
+                0.9,
+                "s.jpg",
+                "c.jpg",
+            ),
+            EventRecord(
+                "evt_0003", 1, "zone_exit", "z1", 3.1, 3.1, 0.0, 0.9, "s.jpg", "c.jpg"
+            ),
+            EventRecord(
+                "evt_0004",
+                1,
+                "line_crossing",
+                "l1:A->B",
+                3.2,
+                3.2,
+                0.0,
+                0.9,
+                "s.jpg",
+                "c.jpg",
+            ),
+        ]
+        stay_traces = [
+            {
+                "track_id": 1,
+                "zone_id": "z1",
+                "enter_time": 1.0,
+                "duration_seconds": 2.0,
+                "peak_state": "triggered",
+                "track_lost_in_zone": False,
+            }
+        ]
+        res = evaluate_qualitative_events(events, cfg, stay_traces=stay_traces)
+        self.assertEqual(res.total_events, 4)
+        self.assertEqual(res.zone_entry_accuracy, 1.0)
+        self.assertEqual(res.zone_exit_accuracy, 1.0)
+        self.assertEqual(res.line_crossing_accuracy, 1.0)
+        self.assertTrue(res.dwell_count_matches)
+        self.assertTrue(res.track_lost_in_zone_matches)
+        self.assertTrue(res.dwell_within_tolerance)
 
 
 if __name__ == "__main__":
