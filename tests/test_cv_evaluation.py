@@ -474,18 +474,30 @@ class TestRunCvEvaluationAndCli(unittest.TestCase):
             write_tracks_csv(
                 bt_csv,
                 [
-                    FrameTracks(0, (TrackDetection(0, 1, 10.0, 10.0, 40.0, 40.0, 0.9),)),
-                    FrameTracks(1, (TrackDetection(1, 1, 12.0, 12.0, 42.0, 42.0, 0.9),)),
-                    FrameTracks(2, (TrackDetection(2, 1, 14.0, 14.0, 44.0, 44.0, 0.9),)),
+                    FrameTracks(
+                        0, (TrackDetection(0, 1, 10.0, 10.0, 40.0, 40.0, 0.9),)
+                    ),
+                    FrameTracks(
+                        1, (TrackDetection(1, 1, 12.0, 12.0, 42.0, 42.0, 0.9),)
+                    ),
+                    FrameTracks(
+                        2, (TrackDetection(2, 1, 14.0, 14.0, 44.0, 44.0, 0.9),)
+                    ),
                 ],
             )
             bs_csv = root / "botsort.csv"
             write_tracks_csv(
                 bs_csv,
                 [
-                    FrameTracks(0, (TrackDetection(0, 5, 10.0, 10.0, 40.0, 40.0, 0.9),)),
-                    FrameTracks(1, (TrackDetection(1, 5, 12.0, 12.0, 42.0, 42.0, 0.9),)),
-                    FrameTracks(2, (TrackDetection(2, 5, 14.0, 14.0, 44.0, 44.0, 0.9),)),
+                    FrameTracks(
+                        0, (TrackDetection(0, 5, 10.0, 10.0, 40.0, 40.0, 0.9),)
+                    ),
+                    FrameTracks(
+                        1, (TrackDetection(1, 5, 12.0, 12.0, 42.0, 42.0, 0.9),)
+                    ),
+                    FrameTracks(
+                        2, (TrackDetection(2, 5, 14.0, 14.0, 44.0, 44.0, 0.9),)
+                    ),
                 ],
             )
 
@@ -497,7 +509,9 @@ class TestRunCvEvaluationAndCli(unittest.TestCase):
                     EventRecord("evt_0001", "zone_entry", 1, "z1", 0.0, 0.0, 0.0),
                     EventRecord("evt_0002", "dwell_time_event", 1, "z1", 0.0, 1.5, 1.5),
                     EventRecord("evt_0003", "zone_exit", 1, "z1", 1.6, 1.6, 0.0),
-                    EventRecord("evt_0004", "line_crossing", 1, "l1:A->B", 1.7, 1.7, 0.0),
+                    EventRecord(
+                        "evt_0004", "line_crossing", 1, "l1:A->B", 1.7, 1.7, 0.0
+                    ),
                 ],
             )
 
