@@ -5,7 +5,10 @@ spot-checks, per-stage FPS benchmarking, and annotated failure example extractio
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+from pathlib import Path
 from typing import Any
+
+import yaml
 
 
 @dataclass(frozen=True, slots=True)
@@ -291,3 +294,119 @@ class FailureCaseRecord:
             "impact_and_mitigation": self.impact_and_mitigation,
             "image_path": self.image_path,
         }
+
+
+def load_evaluation_config(path: Path | str | None = None) -> EvaluationConfig:
+    """Load an EvaluationConfig from a YAML file, or return defaults if None."""
+    if path is None:
+        return EvaluationConfig()
+    config_path = Path(path)
+    if not config_path.is_file():
+        raise FileNotFoundError(f"Evaluation config file not found: {config_path}")
+
+    raw = yaml.safe_load(config_path.read_text(encoding="utf-8"))
+    if raw is None:
+        return EvaluationConfig()
+    if not isinstance(raw, dict):
+        raise TypeError("Evaluation config YAML root must be a mapping")
+
+    defaults = EvaluationConfig()
+    return EvaluationConfig(
+        iou_threshold=float(raw.get("iou_threshold", defaults.iou_threshold)),
+        min_gt_visibility=float(
+            raw.get("min_gt_visibility", defaults.min_gt_visibility)
+        ),
+        mot17_max_frames=int(raw.get("mot17_max_frames", defaults.mot17_max_frames)),
+        mot17_sequence_path=str(
+            raw.get("mot17_sequence_path", defaults.mot17_sequence_path)
+        ),
+        mot17_gt_path=str(raw.get("mot17_gt_path", defaults.mot17_gt_path)),
+        mot17_bytetrack_csv=str(
+            raw.get("mot17_bytetrack_csv", defaults.mot17_bytetrack_csv)
+        ),
+        mot17_botsort_csv=str(raw.get("mot17_botsort_csv", defaults.mot17_botsort_csv)),
+        surveillance_video_path=str(
+            raw.get("surveillance_video_path", defaults.surveillance_video_path)
+        ),
+        surveillance_events_csv=str(
+            raw.get("surveillance_events_csv", defaults.surveillance_events_csv)
+        ),
+        surveillance_zone_counts_csv=str(
+            raw.get(
+                "surveillance_zone_counts_csv", defaults.surveillance_zone_counts_csv
+            )
+        ),
+        surveillance_line_counts_csv=str(
+            raw.get(
+                "surveillance_line_counts_csv", defaults.surveillance_line_counts_csv
+            )
+        ),
+        surveillance_stay_traces_json=str(
+            raw.get(
+                "surveillance_stay_traces_json", defaults.surveillance_stay_traces_json
+            )
+        ),
+        dwell_tolerance_seconds=float(
+            raw.get("dwell_tolerance_seconds", defaults.dwell_tolerance_seconds)
+        ),
+        expected_zone_entries={
+            str(k): int(v)
+            for k, v in dict(
+                raw.get("expected_zone_entries", defaults.expected_zone_entries)
+            ).items()
+        },
+        expected_zone_exits={
+            str(k): int(v)
+            for k, v in dict(
+                raw.get("expected_zone_exits", defaults.expected_zone_exits)
+            ).items()
+        },
+        expected_line_crossings={
+            str(k): int(v)
+            for k, v in dict(
+                raw.get("expected_line_crossings", defaults.expected_line_crossings)
+            ).items()
+        },
+        expected_dwell_events_count=int(
+            raw.get(
+                "expected_dwell_events_count", defaults.expected_dwell_events_count
+            )
+        ),
+        expected_track_lost_in_zone_count=int(
+            raw.get(
+                "expected_track_lost_in_zone_count",
+                defaults.expected_track_lost_in_zone_count,
+            )
+        ),
+    )
+
+
+def save_evaluation_config(config: EvaluationConfig, path: Path | str) -> Path:
+    """Serialize an EvaluationConfig to YAML."""
+    out_path = Path(path)
+    out_path.parent.mkdir(parents=True, exist_ok=True)
+    payload = {
+        "iou_threshold": config.iou_threshold,
+        "min_gt_visibility": config.min_gt_visibility,
+        "mot17_max_frames": config.mot17_max_frames,
+        "mot17_sequence_path": config.mot17_sequence_path,
+        "mot17_gt_path": config.mot17_gt_path,
+        "mot17_bytetrack_csv": config.mot17_bytetrack_csv,
+        "mot17_botsort_csv": config.mot17_botsort_csv,
+        "surveillance_video_path": config.surveillance_video_path,
+        "surveillance_events_csv": config.surveillance_events_csv,
+        "surveillance_zone_counts_csv": config.surveillance_zone_counts_csv,
+        "surveillance_line_counts_csv": config.surveillance_line_counts_csv,
+        "surveillance_stay_traces_json": config.surveillance_stay_traces_json,
+        "dwell_tolerance_seconds": config.dwell_tolerance_seconds,
+        "expected_zone_entries": dict(config.expected_zone_entries),
+        "expected_zone_exits": dict(config.expected_zone_exits),
+        "expected_line_crossings": dict(config.expected_line_crossings),
+        "expected_dwell_events_count": config.expected_dwell_events_count,
+        "expected_track_lost_in_zone_count": config.expected_track_lost_in_zone_count,
+    }
+    out_path.write_text(
+        yaml.safe_dump(payload, sort_keys=False),
+        encoding="utf-8",
+    )
+    return out_path
