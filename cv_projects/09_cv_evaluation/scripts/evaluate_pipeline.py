@@ -368,9 +368,7 @@ def load_evaluation_config(path: Path | str | None = None) -> EvaluationConfig:
             ).items()
         },
         expected_dwell_events_count=int(
-            raw.get(
-                "expected_dwell_events_count", defaults.expected_dwell_events_count
-            )
+            raw.get("expected_dwell_events_count", defaults.expected_dwell_events_count)
         ),
         expected_track_lost_in_zone_count=int(
             raw.get(
