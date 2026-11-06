@@ -1,0 +1,32 @@
+# Phase 9 — CV Evaluation Configuration
+iou_threshold: 0.5
+min_gt_visibility: 0.0
+mot17_max_frames: 300
+mot17_sequence_path: "data/mot17/MOT17-11-FRCNN"
+mot17_gt_path: "data/mot17/MOT17-11-FRCNN/gt/gt.txt"
+mot17_bytetrack_csv: "cv_projects/03_person_tracking/outputs/mot17_11_comparison/bytetrack/tracks.csv"
+mot17_botsort_csv: "cv_projects/03_person_tracking/outputs/mot17_11_comparison/botsort/tracks.csv"
+
+surveillance_video_path: "data/fallback_clips/people-detection.mp4"
+surveillance_events_csv: "cv_projects/07_visual_evidence/outputs/people_detection/events.csv"
+surveillance_zone_counts_csv: "cv_projects/08_heatmaps_analytics/outputs/people_detection/zone_counts.csv"
+surveillance_line_counts_csv: "cv_projects/08_heatmaps_analytics/outputs/people_detection/line_counts.csv"
+surveillance_stay_traces_json: "cv_projects/06_dwell_time_events/outputs/people_detection/event_debug_log/stay_traces.json"
+dwell_tolerance_seconds: 0.1
+
+# Manual playback verification ground truth for people-detection.mp4 (596 frames @ 12.0 fps)
+expected_zone_entries:
+  entrance_area: 7
+  center_concourse: 6
+  right_aisle: 3
+expected_zone_exits:
+  entrance_area: 7
+  center_concourse: 6
+  right_aisle: 0
+expected_line_crossings:
+  "doorway_line:A->B": 0
+  "doorway_line:B->A": 7
+  "aisle_split_line:A->B": 1
+  "aisle_split_line:B->A": 1
+expected_dwell_events_count: 10
+expected_track_lost_in_zone_count: 3
