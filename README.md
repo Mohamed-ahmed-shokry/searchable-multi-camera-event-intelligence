@@ -117,6 +117,9 @@ uv run --locked python cv_projects/07_visual_evidence/scripts/extract_visual_evi
 
 # Run Phase 8 spatial heatmaps and zone/line analytics (runs in the default locked environment)
 uv run --locked python cv_projects/08_heatmaps_analytics/scripts/generate_heatmaps_analytics.py --source <source_path> --trajectories <trajectories.csv> --events <events.csv>
+
+# Run Phase 9 quantitative MOT17 and qualitative surveillance CV evaluation
+uv run --locked python cv_projects/09_cv_evaluation/scripts/evaluate_pipeline.py --config cv_projects/09_cv_evaluation/configs/evaluation.yaml --output-dir cv_projects/09_cv_evaluation/outputs/full_evaluation
 ```
 
 The two detection extras conflict intentionally; do not use `--all-extras`.
