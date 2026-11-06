@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
+import tempfile
 import unittest
+from pathlib import Path
 
 from evaluate_pipeline import (
     DetectionMetrics,
@@ -11,6 +13,8 @@ from evaluate_pipeline import (
     QualitativeSpotCheck,
     StageFpsRecord,
     TrackingMetrics,
+    load_evaluation_config,
+    save_evaluation_config,
 )
 
 
@@ -152,6 +156,35 @@ class TestEvaluationDataclasses(unittest.TestCase):
             image_path="failure_examples/failure_01.jpg",
         )
         self.assertEqual(fc.to_dict()["frame_id"], 23)
+
+
+class TestEvaluationConfigYaml(unittest.TestCase):
+    """Test load_evaluation_config and save_evaluation_config YAML helpers."""
+
+    def test_yaml_round_trip_and_error_cases(self) -> None:
+        self.assertEqual(load_evaluation_config(None), EvaluationConfig())
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            cfg = EvaluationConfig(
+                iou_threshold=0.6,
+                mot17_max_frames=150,
+                expected_dwell_events_count=8,
+            )
+            yaml_path = save_evaluation_config(cfg, root / "evaluation.yaml")
+            loaded = load_evaluation_config(yaml_path)
+            self.assertEqual(loaded, cfg)
+
+            empty_yaml = root / "empty.yaml"
+            empty_yaml.write_text("", encoding="utf-8")
+            self.assertEqual(load_evaluation_config(empty_yaml), EvaluationConfig())
+
+            invalid_yaml = root / "invalid.yaml"
+            invalid_yaml.write_text("- item1\n- item2\n", encoding="utf-8")
+            with self.assertRaises(TypeError):
+                load_evaluation_config(invalid_yaml)
+
+            with self.assertRaises(FileNotFoundError):
+                load_evaluation_config(root / "missing.yaml")
 
 
 if __name__ == "__main__":
