@@ -9,6 +9,7 @@ Importing helpers here makes every test module order-independent.
 from helpers import (  # noqa: F401
     ANALYTICS_SCRIPTS,
     DETECTION_SCRIPTS,
+    EVALUATION_SCRIPTS,
     EVENTS_SCRIPTS,
     EVIDENCE_SCRIPTS,
     INSPECTION_SCRIPTS,
