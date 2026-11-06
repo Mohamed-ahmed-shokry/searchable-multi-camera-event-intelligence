@@ -1073,6 +1073,122 @@ uv run --locked python cv_projects/08_heatmaps_analytics/scripts/generate_heatma
 | `uv run --locked pytest -v` | ✅ `149 passed, 56 subtests passed` | full unit + integration test suite (`test_heatmaps_analytics.py` + prior suites) |
 | `generate_heatmaps_analytics.py --source data/fallback_clips/people-detection.mp4 ...` | ✅ 409 pts, 48 events in 0.32 s | `heatmap.png` (`768×432`), `zone_counts.csv` (3 zones), `line_counts.csv` (2 lines), `analytics_summary.json` |
 
+---
+
+## Current Phase: 9 — CV Evaluation (2026-11-06)
+
+### Objective
+
+Measure pipeline quality honestly against MOT17 pedestrian ground truth and by structured manual
+playback verification on static surveillance footage (`people-detection.mp4`):
+1. **Quantitative evaluation (`MOT17-11-FRCNN` ground truth):** compute detection precision,
+   recall, F1, TP, FP, FN, and mean IoU at `iou_threshold=0.5`, plus full CLEAR-MOT and identity
+   tracking metrics (`MOTA`, `MOTP`, `IDF1`, `ID switches`, `fragmentations`, `mostly_tracked`,
+   `mostly_lost`) for both `ByteTrack` and `BoT-SORT`.
+2. **Qualitative evaluation (`people-detection.mp4` surveillance clip):** verify automated zone
+   entry/exit counts, directional line crossing counts, dwell-time durations (`max_abs_error_seconds`),
+   hysteresis boundary-flicker suppression, and track-loss-in-zone handling against manual
+   frame-by-frame audit ground truth.
+3. **Per-stage processing FPS & latency benchmark:** aggregate processing FPS, wall-clock duration,
+   and share of total pipeline runtime across all 8 CV stages (`01_video_inspection` through
+   `08_heatmaps_analytics`) on the RTX 3060 Laptop GPU (`cuda:0`) and CPU geometry stages.
+4. **Annotated visual failure examples (`failure_examples/`):** extract and annotate concrete
+   failure frames with diagnostic callout banners and bounding boxes (`failure_01_mot17_crowded_id_switch.jpg`,
+   `failure_02_mot17_small_occluded_misses.jpg`, `failure_03_boundary_truncated_crop.jpg`,
+   `failure_04_track_loss_in_right_aisle.jpg`), and generate `evaluation_report.md` and
+   `metrics.json` prioritizing honesty over polish.
+
+### Scope
+
+1. Scaffold `cv_projects/09_cv_evaluation/` (`README.md`, `notes.md`, `configs/evaluation.yaml`,
+   `scripts/`, `notebooks/`, `outputs/`).
+2. Expose `cv_projects/09_cv_evaluation/scripts` in `tests/helpers.py` and `tests/conftest.py`.
+3. Implement `cv_projects/09_cv_evaluation/scripts/evaluate_pipeline.py`:
+   - `EvaluationConfig`, `DetectionMetrics`, `TrackingMetrics`, `QualitativeSpotCheck`,
+     `StageFpsRecord`, and `FailureCaseRecord` dataclasses with strict validation.
+   - YAML configuration loader and writer (`load_evaluation_config`, `save_evaluation_config`).
+   - Quantitative detection evaluator (`evaluate_detection_precision_recall`) computing frame-by-frame
+     bipartite IoU matching against MOT17 ground truth (`precision`, `recall`, `f1`, `tp`, `fp`,
+     `fn`, `mean_iou`).
+   - Quantitative tracking evaluator (`evaluate_tracking_metrics`) computing `MOTA`, `MOTP`,
+     `IDF1`, `ID switches`, `precision`, `recall`, `fragmentation_count`, `mostly_tracked_count`
+     (`>=80%` lifespan tracked), `partially_tracked_count` (`20%–80%`), and `mostly_lost_count`
+     (`<20%`).
+   - Qualitative surveillance spot-check evaluator (`evaluate_qualitative_events`) comparing
+     `events.csv`, `zone_counts.csv`, `line_counts.csv`, and `stay_traces.json` against manual
+     playback audit expectations.
+   - Per-stage FPS and latency table builder (`collect_stage_fps_table`) reading stage summary
+     JSONs (or explicit stage records) and computing `fps`, `ms_per_frame`, and `runtime_share_pct`.
+   - Annotated failure frame generator (`export_failure_examples`) rendering high-contrast diagnostic
+     visuals into `failure_examples/*.jpg`.
+   - Markdown evaluation report generator (`generate_evaluation_report_markdown`) producing
+     `evaluation_report.md`.
+   - End-to-end evaluation pipeline (`run_cv_evaluation`) and CLI (`main`) writing `metrics.json`,
+     `evaluation_report.md`, `evaluation.yaml`, and `failure_examples/*.jpg`.
+4. Create exploratory notebook `cv_projects/09_cv_evaluation/notebooks/01_explore_cv_evaluation.ipynb`.
+5. Add comprehensive unit and integration tests in `tests/test_cv_evaluation.py`.
+6. Execute Phase 9 on real `MOT17-11-FRCNN` and `people-detection.mp4` artifacts, inspect
+   `evaluation_report.md`, `metrics.json`, and `failure_examples/*.jpg`, and document findings
+   in `notes.md` and `README.md`.
+
+### Acceptance Criteria
+
+| # | Criterion | Status | Evidence |
+|---|-----------|--------|----------|
+| 1 | Quantitative detection (`precision`, `recall`, `f1`, `tp`, `fp`, `fn`, `mean_iou`) and tracking (`MOTA`, `MOTP`, `IDF1`, `id_switches`, `mostly_tracked`, `mostly_lost`) metrics computed on `MOT17-11-FRCNN` | ⏳ | Pending implementation |
+| 2 | Qualitative spot-check accuracy recorded for zone entries/exits, directional line crossings, and dwell durations against manual playback audit on `people-detection.mp4` | ⏳ | Pending implementation |
+| 3 | Per-stage processing FPS and latency table included across Phases 1–8 (`metrics.json` and `evaluation_report.md`) | ⏳ | Pending implementation |
+| 4 | Concrete failure examples saved in `failure_examples/` and explained honestly with frame numbers and root causes in `evaluation_report.md` and `notes.md` | ⏳ | Pending implementation |
+| 5 | All local CI-parity checks (`ruff check`, `ruff format --check`, `pytest`) and remote GitHub Actions CI pass 100% | ⏳ | Pending implementation |
+
+### Validation & CI Plan
+
+```bash
+uv sync --locked
+uv run --locked ruff check .
+uv run --locked ruff format --check .
+uv run --locked pytest -v
+# phase-specific execution:
+uv run --locked python cv_projects/09_cv_evaluation/scripts/evaluate_pipeline.py \
+    --config cv_projects/09_cv_evaluation/configs/evaluation.yaml \
+    --output-dir cv_projects/09_cv_evaluation/outputs/full_evaluation
+```
+
+### Exclusions
+
+- **SQLite event indexing (`intelligence.db`, `search_events.py`) and unified package integration
+  (`src/event_intelligence/`):** Explicitly deferred to Phase 10 (`10_searchable_outputs`) and
+  Phase 11 (`11_pipeline_integration`) per `docs/project_phases.md`.
+
+### Micro-Task Breakdown
+
+- [ ] 1. `docs(roadmap): define Phase 9 CV evaluation scope and micro-task checklist`
+- [ ] 2. `docs(evaluation): scaffold cv_projects/09_cv_evaluation README and notes`
+- [ ] 3. `feat(evaluation): add default configs/evaluation.yaml for MOT17, qualitative audit, and failure cases`
+- [ ] 4. `test(helpers): expose Phase 9 CV evaluation scripts directory to test suite`
+- [ ] 5. `types(evaluation): define EvaluationConfig, DetectionMetrics, TrackingMetrics, QualitativeSpotCheck, StageFpsRecord, and FailureCaseRecord dataclasses`
+- [ ] 6. `test(evaluation): add unit tests for evaluation dataclasses and validation`
+- [ ] 7. `feat(evaluation): implement load_evaluation_config and save_evaluation_config YAML helpers`
+- [ ] 8. `test(evaluation): add unit tests for evaluation.yaml round-trip serialization`
+- [ ] 9. `feat(evaluation): implement evaluate_detection_precision_recall on MOT17 ground truth`
+- [ ] 10. `test(evaluation): add unit tests for evaluate_detection_precision_recall`
+- [ ] 11. `feat(evaluation): implement evaluate_tracking_metrics with MT/PT/ML lifespan coverage and fragmentations`
+- [ ] 12. `test(evaluation): add unit tests for evaluate_tracking_metrics`
+- [ ] 13. `feat(evaluation): implement evaluate_qualitative_events against manual playback audit`
+- [ ] 14. `test(evaluation): add unit tests for evaluate_qualitative_events`
+- [ ] 15. `feat(evaluation): implement collect_stage_fps_table across pipeline stages`
+- [ ] 16. `test(evaluation): add unit tests for collect_stage_fps_table`
+- [ ] 17. `feat(evaluation): implement export_failure_examples annotated diagnostic renderer`
+- [ ] 18. `test(evaluation): add unit tests for export_failure_examples`
+- [ ] 19. `feat(evaluation): implement generate_evaluation_report_markdown report builder`
+- [ ] 20. `test(evaluation): add unit tests for generate_evaluation_report_markdown`
+- [ ] 21. `feat(evaluation): implement run_cv_evaluation pipeline and CLI entrypoint`
+- [ ] 22. `test(evaluation): add end-to-end pipeline and CLI tests in test_cv_evaluation.py`
+- [ ] 23. `feat(evaluation): add exploratory notebook 01_explore_cv_evaluation.ipynb`
+- [ ] 24. `docs(evaluation): document real MOT17 and surveillance evaluation results in notes and READMEs`
+- [ ] 25. `docs(roadmap): mark Phase 9 CV evaluation completed in docs/ROADMAP.md`
+
+
 
 
 
