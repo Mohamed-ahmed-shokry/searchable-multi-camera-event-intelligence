@@ -1113,15 +1113,15 @@ def export_failure_examples(
     f2_rel = "failure_examples/failure_02_mot17_small_occluded_misses.jpg"
     cv2.imwrite(str(base_dir / f2_rel), f2_img)
 
-    # Case 3: Surveillance Clip Frame 19 Boundary-Truncated Entry Crop (Track 1 @ y2=431.8)
+    # Case 3: Surveillance Clip Frame 19 Boundary-Truncated Entry Crop (Track 1 @ y2=430.96)
     f3_frame = _load_frame_from_source(
         surveillance_source, 19, fallback_size=(768, 432)
     )
     fh, fw = f3_frame.shape[:2]
     cv2.rectangle(
         f3_frame,
-        (int(fw * 0.34), int(fh * 0.68)),
-        (int(fw * 0.45), fh - 1),
+        (int(fw * 0.252), int(fh * 0.739)),
+        (int(fw * 0.400), fh - 1),
         (0, 140, 255),
         2,
     )
@@ -1139,7 +1139,7 @@ def export_failure_examples(
     f3_img = _draw_failure_banner(
         f3_frame,
         "FAILURE 03 [people-detection.mp4 Frame 19]: Bottom-Edge BBox Truncation on Entry",
-        "Shopper Track #1 enters at y2=431.8 px (frame height=432); foot anchor & crop clamped",
+        "Shopper Track #1 enters at y2=430.96 px (frame height=432); foot anchor & crop clamped",
         accent_bgr=(0, 140, 255),
     )
     f3_rel = "failure_examples/failure_03_boundary_truncated_crop.jpg"
@@ -1221,7 +1221,7 @@ def export_failure_examples(
             title="Bottom-Border BBox Truncation & Clipped Evidence Crops at Entrance",
             symptom=(
                 "When shoppers enter from the bottom edge of people-detection.mp4 (frames 19, 181, "
-                "183, 340, 345), y2 touches 431.8 px (frame height 432 px), clipping 7 of 48 crops."
+                "183, 340, 345), y2 reaches 430.96-431.8 px (frame height 432 px), clipping 7 of 48 crops."
             ),
             root_cause=(
                 "The camera field of view cuts across the physical doorway threshold at y=432; "
