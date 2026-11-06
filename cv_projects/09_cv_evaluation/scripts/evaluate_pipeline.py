@@ -32,14 +32,14 @@ for _sub in (
     if _sp not in sys.path:
         sys.path.insert(0, _sp)
 
-from evaluate_mot import compute_iou_matrix, evaluate_tracking, load_mot17_gt  # noqa: E402
-from extract_visual_evidence import (  # noqa: E402
+from evaluate_mot import compute_iou_matrix, evaluate_tracking, load_mot17_gt
+from extract_visual_evidence import (
     EvidenceEventRecord,
     read_evidence_events_csv,
 )
-from generate_dwell_events import EventRecord, read_events_csv  # noqa: E402
-from inspect_video import VideoSource  # noqa: E402
-from track_people import (  # noqa: E402
+from generate_dwell_events import EventRecord, read_events_csv
+from inspect_video import VideoSource
+from track_people import (
     FrameTracks,
     TrackDetection,
     analyze_track_anomalies,
