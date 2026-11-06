@@ -4,11 +4,14 @@ spot-checks, per-stage FPS benchmarking, and annotated failure example extractio
 
 from __future__ import annotations
 
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
 import yaml
+from evaluate_mot import compute_iou_matrix
+from track_people import FrameTracks, TrackDetection
 
 
 @dataclass(frozen=True, slots=True)
@@ -408,3 +411,89 @@ def save_evaluation_config(config: EvaluationConfig, path: Path | str) -> Path:
         encoding="utf-8",
     )
     return out_path
+
+
+def _normalize_pred_by_frame(
+    predictions: Mapping[int, Sequence[TrackDetection]] | Sequence[FrameTracks],
+) -> dict[int, list[TrackDetection]]:
+    if isinstance(predictions, Mapping):
+        return {int(k): list(v) for k, v in predictions.items()}
+    return {ft.frame_id: list(ft.tracks) for ft in predictions}
+
+
+def evaluate_detection_precision_recall(
+    gt_by_frame: Mapping[int, Sequence[TrackDetection]],
+    predictions: Mapping[int, Sequence[TrackDetection]] | Sequence[FrameTracks],
+    *,
+    iou_threshold: float = 0.5,
+) -> DetectionMetrics:
+    """Compute frame-by-frame detection precision, recall, F1, TP, FP, FN, and mean IoU."""
+    if not 0.0 < iou_threshold <= 1.0:
+        raise ValueError("iou_threshold must be in (0.0, 1.0]")
+
+    pred_by_frame = _normalize_pred_by_frame(predictions)
+    all_frames = sorted(set(gt_by_frame.keys()) | set(pred_by_frame.keys()))
+
+    total_gt = 0
+    total_pred = 0
+    tp = 0
+    fp = 0
+    fn = 0
+    iou_sum = 0.0
+
+    for frame_id in all_frames:
+        gt_list = list(gt_by_frame.get(frame_id, ()))
+        pred_list = list(pred_by_frame.get(frame_id, ()))
+        total_gt += len(gt_list)
+        total_pred += len(pred_list)
+
+        if not gt_list:
+            fp += len(pred_list)
+            continue
+        if not pred_list:
+            fn += len(gt_list)
+            continue
+
+        iou_mat = compute_iou_matrix(gt_list, pred_list)
+        candidates: list[tuple[float, int, int]] = []
+        for i in range(len(gt_list)):
+            for j in range(len(pred_list)):
+                score = float(iou_mat[i, j])
+                if score >= iou_threshold:
+                    candidates.append((score, i, j))
+        candidates.sort(key=lambda item: item[0], reverse=True)
+
+        matched_gt: set[int] = set()
+        matched_pred: set[int] = set()
+        for score, i, j in candidates:
+            if i in matched_gt or j in matched_pred:
+                continue
+            matched_gt.add(i)
+            matched_pred.add(j)
+            tp += 1
+            iou_sum += score
+
+        fn += len(gt_list) - len(matched_gt)
+        fp += len(pred_list) - len(matched_pred)
+
+    precision = tp / total_pred if total_pred > 0 else 0.0
+    recall = tp / total_gt if total_gt > 0 else 0.0
+    f1 = (
+        (2.0 * precision * recall / (precision + recall))
+        if (precision + recall) > 0.0
+        else 0.0
+    )
+    mean_iou = iou_sum / tp if tp > 0 else 0.0
+
+    return DetectionMetrics(
+        precision=round(precision, 4),
+        recall=round(recall, 4),
+        f1=round(f1, 4),
+        tp=tp,
+        fp=fp,
+        fn=fn,
+        num_gt=total_gt,
+        num_predictions=total_pred,
+        mean_iou=round(mean_iou, 4),
+        iou_threshold=iou_threshold,
+    )
