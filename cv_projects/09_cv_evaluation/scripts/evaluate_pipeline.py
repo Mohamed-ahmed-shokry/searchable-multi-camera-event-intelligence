@@ -17,9 +17,7 @@ class EvaluationConfig:
     mot17_max_frames: int = 300
     mot17_sequence_path: str = "data/mot17/MOT17-11-FRCNN"
     mot17_gt_path: str = "data/mot17/MOT17-11-FRCNN/gt/gt.txt"
-    mot17_bytetrack_csv: str = (
-        "cv_projects/03_person_tracking/outputs/mot17_11_comparison/bytetrack/tracks.csv"
-    )
+    mot17_bytetrack_csv: str = "cv_projects/03_person_tracking/outputs/mot17_11_comparison/bytetrack/tracks.csv"
     mot17_botsort_csv: str = (
         "cv_projects/03_person_tracking/outputs/mot17_11_comparison/botsort/tracks.csv"
     )
