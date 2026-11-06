@@ -622,8 +622,7 @@ def evaluate_qualitative_events(
             dwell_events.append(ev)
             expected_dur = ev.end_time - ev.start_time
             err = abs(ev.duration_seconds - expected_dur)
-            if err > max_dwell_error:
-                max_dwell_error = err
+            max_dwell_error = max(max_dwell_error, err)
 
     entry_comp: dict[str, dict[str, int | bool]] = {}
     entry_matches = 0
@@ -669,8 +668,7 @@ def evaluate_qualitative_events(
             key = (ev.track_id, ev.zone_or_line_id, round(ev.start_time, 3))
             if key in triggered_by_key:
                 err = abs(ev.duration_seconds - triggered_by_key[key])
-                if err > max_dwell_error:
-                    max_dwell_error = err
+                max_dwell_error = max(max_dwell_error, err)
         lost_matches = actual_lost == config.expected_track_lost_in_zone_count
     else:
         total_entries = sum(actual_entries.values())
