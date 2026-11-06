@@ -606,18 +606,13 @@ def evaluate_qualitative_events(
     max_dwell_error = 0.0
 
     for ev in events:
+        target_id = str(getattr(ev, "zone_or_line_id", None) or getattr(ev, "zone_id"))
         if ev.event_type == "zone_entry":
-            actual_entries[ev.zone_or_line_id] = (
-                actual_entries.get(ev.zone_or_line_id, 0) + 1
-            )
+            actual_entries[target_id] = actual_entries.get(target_id, 0) + 1
         elif ev.event_type == "zone_exit":
-            actual_exits[ev.zone_or_line_id] = (
-                actual_exits.get(ev.zone_or_line_id, 0) + 1
-            )
+            actual_exits[target_id] = actual_exits.get(target_id, 0) + 1
         elif ev.event_type == "line_crossing":
-            actual_crossings[ev.zone_or_line_id] = (
-                actual_crossings.get(ev.zone_or_line_id, 0) + 1
-            )
+            actual_crossings[target_id] = actual_crossings.get(target_id, 0) + 1
         elif ev.event_type == "dwell_time_event":
             dwell_events.append(ev)
             expected_dur = ev.end_time - ev.start_time
@@ -665,7 +660,10 @@ def evaluate_qualitative_events(
                 )
                 triggered_by_key[key] = float(st["duration_seconds"])
         for ev in dwell_events:
-            key = (ev.track_id, ev.zone_or_line_id, round(ev.start_time, 3))
+            target_id = str(
+                getattr(ev, "zone_or_line_id", None) or getattr(ev, "zone_id")
+            )
+            key = (ev.track_id, target_id, round(ev.start_time, 3))
             if key in triggered_by_key:
                 err = abs(ev.duration_seconds - triggered_by_key[key])
                 max_dwell_error = max(max_dwell_error, err)

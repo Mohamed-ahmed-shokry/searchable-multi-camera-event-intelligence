@@ -288,36 +288,10 @@ class TestEvaluateQualitativeEvents(unittest.TestCase):
             expected_track_lost_in_zone_count=0,
         )
         events = [
-            EventRecord(
-                "evt_0001", 1, "zone_entry", "z1", 1.0, 1.0, 0.0, 0.9, "s.jpg", "c.jpg"
-            ),
-            EventRecord(
-                "evt_0002",
-                1,
-                "dwell_time_event",
-                "z1",
-                1.0,
-                3.0,
-                2.0,
-                0.9,
-                "s.jpg",
-                "c.jpg",
-            ),
-            EventRecord(
-                "evt_0003", 1, "zone_exit", "z1", 3.1, 3.1, 0.0, 0.9, "s.jpg", "c.jpg"
-            ),
-            EventRecord(
-                "evt_0004",
-                1,
-                "line_crossing",
-                "l1:A->B",
-                3.2,
-                3.2,
-                0.0,
-                0.9,
-                "s.jpg",
-                "c.jpg",
-            ),
+            EventRecord("evt_0001", "zone_entry", 1, "z1", 1.0, 1.0, 0.0),
+            EventRecord("evt_0002", "dwell_time_event", 1, "z1", 1.0, 3.0, 2.0),
+            EventRecord("evt_0003", "zone_exit", 1, "z1", 3.1, 3.1, 0.0),
+            EventRecord("evt_0004", "line_crossing", 1, "l1:A->B", 3.2, 3.2, 0.0),
         ]
         stay_traces = [
             {
