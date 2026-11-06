@@ -938,16 +938,13 @@ def _load_frame_from_source(
                     return img
         if p.exists():
             try:
-                src = VideoSource.open(p)
+                src = VideoSource(p)
                 try:
-                    for idx, frame in src.iter_frames():
-                        if idx == frame_id:
-                            return frame.copy()
-                        if idx > frame_id:
-                            break
+                    if 0 <= frame_id < len(src):
+                        return src.read_frame(frame_id).copy()
                 finally:
                     src.close()
-            except OSError:
+            except (OSError, ValueError):
                 pass
     w, h = fallback_size
     canvas = np.full((h, w, 3), 28, dtype=np.uint8)
