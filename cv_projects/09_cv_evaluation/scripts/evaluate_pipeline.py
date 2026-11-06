@@ -4,7 +4,10 @@ spot-checks, per-stage FPS benchmarking, and annotated failure example extractio
 
 from __future__ import annotations
 
+import argparse
 import json
+import sys
+import time
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -13,10 +16,35 @@ from typing import Any
 import cv2
 import numpy as np
 import yaml
-from evaluate_mot import compute_iou_matrix, evaluate_tracking
-from generate_dwell_events import EventRecord
-from inspect_video import VideoSource
-from track_people import FrameTracks, TrackDetection, analyze_track_anomalies
+
+_PROJECT_ROOT = Path(__file__).resolve().parents[3]
+for _sub in (
+    "01_video_inspection",
+    "02_person_detection",
+    "03_person_tracking",
+    "04_trajectory_extraction",
+    "05_zone_line_reasoning",
+    "06_dwell_time_events",
+    "07_visual_evidence",
+    "08_heatmaps_analytics",
+):
+    _sp = str(_PROJECT_ROOT / "cv_projects" / _sub / "scripts")
+    if _sp not in sys.path:
+        sys.path.insert(0, _sp)
+
+from evaluate_mot import compute_iou_matrix, evaluate_tracking, load_mot17_gt  # noqa: E402
+from extract_visual_evidence import (  # noqa: E402
+    EvidenceEventRecord,
+    read_evidence_events_csv,
+)
+from generate_dwell_events import EventRecord, read_events_csv  # noqa: E402
+from inspect_video import VideoSource  # noqa: E402
+from track_people import (  # noqa: E402
+    FrameTracks,
+    TrackDetection,
+    analyze_track_anomalies,
+    read_tracks_csv,
+)
 
 
 @dataclass(frozen=True, slots=True)
@@ -596,7 +624,7 @@ def evaluate_tracking_metrics(
 
 
 def evaluate_qualitative_events(
-    events: Sequence[EventRecord],
+    events: Sequence[EventRecord | EvidenceEventRecord],
     config: EvaluationConfig,
     *,
     stay_traces: Sequence[Mapping[str, Any]] | None = None,
@@ -1393,3 +1421,225 @@ def generate_evaluation_report_markdown(
         )
 
     return "\n".join(lines)
+
+
+def _load_any_events_csv(path: Path) -> list[EventRecord | EvidenceEventRecord]:
+    try:
+        return list(read_evidence_events_csv(path))
+    except ValueError:
+        return list(read_events_csv(path))
+
+
+def run_cv_evaluation(
+    config: EvaluationConfig,
+    output_dir: Path | str,
+    *,
+    project_root: Path | str | None = None,
+) -> dict[str, Any]:
+    """Execute the full Phase 9 CV evaluation pipeline and write all artifacts."""
+    t0 = time.perf_counter()
+    root = Path(project_root) if project_root is not None else _PROJECT_ROOT
+    out_dir = Path(output_dir)
+    out_dir.mkdir(parents=True, exist_ok=True)
+
+    def _resolve(rel_or_abs: str) -> Path:
+        p = Path(rel_or_abs)
+        return p if p.is_absolute() else (root / p)
+
+    gt_path = _resolve(config.mot17_gt_path)
+    bt_path = _resolve(config.mot17_bytetrack_csv)
+    bs_path = _resolve(config.mot17_botsort_csv)
+
+    bt_preds = read_tracks_csv(bt_path)
+    gt_by_frame = load_mot17_gt(
+        gt_path,
+        min_visibility=config.min_gt_visibility,
+        max_frames=config.mot17_max_frames,
+    )
+
+    det_metrics = evaluate_detection_precision_recall(
+        gt_by_frame,
+        bt_preds,
+        iou_threshold=config.iou_threshold,
+    )
+
+    trk_list: list[TrackingMetrics] = [
+        evaluate_tracking_metrics(
+            "bytetrack",
+            gt_by_frame,
+            bt_preds,
+            iou_threshold=config.iou_threshold,
+        )
+    ]
+    if bs_path.is_file():
+        bs_preds = read_tracks_csv(bs_path)
+        trk_list.append(
+            evaluate_tracking_metrics(
+                "botsort",
+                gt_by_frame,
+                bs_preds,
+                iou_threshold=config.iou_threshold,
+            )
+        )
+
+    events_path = _resolve(config.surveillance_events_csv)
+    events = _load_any_events_csv(events_path)
+
+    stay_traces_path = _resolve(config.surveillance_stay_traces_json)
+    stay_traces: list[dict[str, Any]] | None = None
+    if stay_traces_path.is_file():
+        loaded_traces = json.loads(stay_traces_path.read_text(encoding="utf-8"))
+        if isinstance(loaded_traces, list):
+            stay_traces = loaded_traces
+
+    qual_check = evaluate_qualitative_events(
+        events,
+        config,
+        stay_traces=stay_traces,
+    )
+
+    stage_fps = collect_stage_fps_table(project_root=root)
+
+    mot17_seq = _resolve(config.mot17_sequence_path)
+    surv_vid = _resolve(config.surveillance_video_path)
+    bt_by_frame = _normalize_pred_by_frame(bt_preds)
+    failures = export_failure_examples(
+        out_dir,
+        mot17_source=mot17_seq if mot17_seq.exists() else None,
+        surveillance_source=surv_vid if surv_vid.exists() else None,
+        gt_by_frame=gt_by_frame,
+        pred_by_frame=bt_by_frame,
+    )
+
+    report_md = generate_evaluation_report_markdown(
+        detection_metrics=det_metrics,
+        tracking_metrics=trk_list,
+        qualitative_check=qual_check,
+        stage_fps_table=stage_fps,
+        failure_cases=failures,
+    )
+
+    report_path = out_dir / "evaluation_report.md"
+    report_path.write_text(report_md + "\n", encoding="utf-8")
+    cfg_out_path = save_evaluation_config(config, out_dir / "evaluation.yaml")
+
+    primary_trk = trk_list[0]
+    elapsed = round(time.perf_counter() - t0, 4)
+    metrics_payload: dict[str, Any] = {
+        "precision": det_metrics.precision,
+        "recall": det_metrics.recall,
+        "f1": det_metrics.f1,
+        "mota": primary_trk.mota,
+        "motp": primary_trk.motp,
+        "idf1": primary_trk.idf1,
+        "id_switches": primary_trk.id_switches,
+        "per_stage_fps": {r.stage_id: r.fps for r in stage_fps},
+        "detection": det_metrics.to_dict(),
+        "tracking": {t.tracker_name: t.to_dict() for t in trk_list},
+        "qualitative": qual_check.to_dict(),
+        "stage_benchmarks": [r.to_dict() for r in stage_fps],
+        "failure_examples": [f.to_dict() for f in failures],
+        "outputs": {
+            "evaluation_report_md": str(report_path),
+            "metrics_json": str(out_dir / "metrics.json"),
+            "evaluation_yaml": str(cfg_out_path),
+            "failure_examples": [f.image_path for f in failures],
+        },
+        "elapsed_seconds": elapsed,
+    }
+
+    metrics_path = out_dir / "metrics.json"
+    metrics_path.write_text(
+        json.dumps(metrics_payload, indent=2) + "\n",
+        encoding="utf-8",
+    )
+    return metrics_payload
+
+
+def build_parser() -> argparse.ArgumentParser:
+    """Create CLI argument parser for Phase 9 CV evaluation."""
+    parser = argparse.ArgumentParser(
+        description="Run Phase 9 quantitative MOT17 and qualitative surveillance CV evaluation."
+    )
+    parser.add_argument(
+        "--config",
+        type=Path,
+        default=None,
+        help="Path to configs/evaluation.yaml",
+    )
+    parser.add_argument(
+        "--output-dir",
+        type=Path,
+        default=Path("cv_projects/09_cv_evaluation/outputs/full_evaluation"),
+        help="Directory to write evaluation_report.md, metrics.json, and failure_examples/",
+    )
+    parser.add_argument(
+        "--mot17-gt",
+        type=Path,
+        default=None,
+        help="Optional override for MOT17 gt.txt path",
+    )
+    parser.add_argument(
+        "--mot17-tracks",
+        type=Path,
+        default=None,
+        help="Optional override for primary MOT17 tracks.csv path",
+    )
+    parser.add_argument(
+        "--events",
+        type=Path,
+        default=None,
+        help="Optional override for surveillance events.csv path",
+    )
+    return parser
+
+
+def main(argv: Sequence[str] | None = None) -> int:
+    """CLI entrypoint for Phase 9 CV evaluation."""
+    parser = build_parser()
+    args = parser.parse_args(argv)
+    try:
+        cfg = load_evaluation_config(args.config)
+        cfg = EvaluationConfig(
+            iou_threshold=cfg.iou_threshold,
+            min_gt_visibility=cfg.min_gt_visibility,
+            mot17_max_frames=cfg.mot17_max_frames,
+            mot17_sequence_path=cfg.mot17_sequence_path,
+            mot17_gt_path=(
+                str(args.mot17_gt) if args.mot17_gt is not None else cfg.mot17_gt_path
+            ),
+            mot17_bytetrack_csv=(
+                str(args.mot17_tracks)
+                if args.mot17_tracks is not None
+                else cfg.mot17_bytetrack_csv
+            ),
+            mot17_botsort_csv=cfg.mot17_botsort_csv,
+            surveillance_video_path=cfg.surveillance_video_path,
+            surveillance_events_csv=(
+                str(args.events)
+                if args.events is not None
+                else cfg.surveillance_events_csv
+            ),
+            surveillance_zone_counts_csv=cfg.surveillance_zone_counts_csv,
+            surveillance_line_counts_csv=cfg.surveillance_line_counts_csv,
+            surveillance_stay_traces_json=cfg.surveillance_stay_traces_json,
+            dwell_tolerance_seconds=cfg.dwell_tolerance_seconds,
+            expected_zone_entries=cfg.expected_zone_entries,
+            expected_zone_exits=cfg.expected_zone_exits,
+            expected_line_crossings=cfg.expected_line_crossings,
+            expected_dwell_events_count=cfg.expected_dwell_events_count,
+            expected_track_lost_in_zone_count=cfg.expected_track_lost_in_zone_count,
+        )
+        summary = run_cv_evaluation(cfg, args.output_dir)
+        print(
+            f"Evaluation complete: MOTA={summary['mota']:.4f} IDF1={summary['idf1']:.4f} "
+            f"Precision={summary['precision']:.4f} Recall={summary['recall']:.4f} "
+            f"-> {args.output_dir}"
+        )
+        return 0
+    except (OSError, ValueError, TypeError) as exc:
+        parser.exit(2, f"error: {exc}\n")
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())
