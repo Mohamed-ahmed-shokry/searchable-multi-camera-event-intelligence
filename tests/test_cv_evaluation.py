@@ -13,6 +13,7 @@ from evaluate_pipeline import (
     QualitativeSpotCheck,
     StageFpsRecord,
     TrackingMetrics,
+    collect_stage_fps_table,
     evaluate_detection_precision_recall,
     evaluate_qualitative_events,
     evaluate_tracking_metrics,
@@ -311,6 +312,42 @@ class TestEvaluateQualitativeEvents(unittest.TestCase):
         self.assertTrue(res.dwell_count_matches)
         self.assertTrue(res.track_lost_in_zone_matches)
         self.assertTrue(res.dwell_within_tolerance)
+
+
+class TestCollectStageFpsTable(unittest.TestCase):
+    """Test collect_stage_fps_table runtime share normalization and defaults."""
+
+    def test_collect_stage_fps_table_with_overrides_and_defaults(self) -> None:
+        overrides = [
+            StageFpsRecord(
+                "01_test",
+                "Stage 1",
+                "cuda:0",
+                100,
+                2.0,
+                50.0,
+                20.0,
+            ),
+            StageFpsRecord(
+                "02_test",
+                "Stage 2",
+                "cpu",
+                100,
+                8.0,
+                12.5,
+                80.0,
+            ),
+        ]
+        table = collect_stage_fps_table(stage_overrides=overrides)
+        self.assertEqual(len(table), 2)
+        self.assertAlmostEqual(table[0].runtime_share_pct, 20.0, places=2)
+        self.assertAlmostEqual(table[1].runtime_share_pct, 80.0, places=2)
+
+        with tempfile.TemporaryDirectory() as tmp:
+            default_table = collect_stage_fps_table(project_root=Path(tmp))
+            self.assertEqual(len(default_table), 8)
+            total_share = sum(r.runtime_share_pct for r in default_table)
+            self.assertAlmostEqual(total_share, 100.0, delta=0.1)
 
 
 if __name__ == "__main__":
