@@ -24,8 +24,7 @@ class SearchConfig:
         "people_detection_bytetrack/track_summary.csv"
     )
     trajectories_csv: str = (
-        "cv_projects/04_trajectory_extraction/outputs/"
-        "people_detection/trajectories.csv"
+        "cv_projects/04_trajectory_extraction/outputs/people_detection/trajectories.csv"
     )
     trajectory_summary_csv: str = (
         "cv_projects/04_trajectory_extraction/outputs/"
