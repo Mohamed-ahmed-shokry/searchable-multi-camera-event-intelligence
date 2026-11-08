@@ -1,0 +1,12 @@
+# Phase 10 — Searchable Outputs Configuration
+source_name: "people-detection.mp4"
+detections_csv: "cv_projects/02_person_detection/outputs/people_detection_run/detections.csv"
+tracks_csv: "cv_projects/03_person_tracking/outputs/people_detection_bytetrack/tracks.csv"
+tracking_summary_csv: "cv_projects/03_person_tracking/outputs/people_detection_bytetrack/track_summary.csv"
+trajectories_csv: "cv_projects/04_trajectory_extraction/outputs/people_detection/trajectories.csv"
+trajectory_summary_csv: "cv_projects/04_trajectory_extraction/outputs/people_detection/track_summary.csv"
+events_csv: "cv_projects/07_visual_evidence/outputs/people_detection/events.csv"
+evidence_root: "cv_projects/07_visual_evidence/outputs/people_detection"
+zone_counts_csv: "cv_projects/08_heatmaps_analytics/outputs/people_detection/zone_counts.csv"
+line_counts_csv: "cv_projects/08_heatmaps_analytics/outputs/people_detection/line_counts.csv"
+default_query_limit: 50
