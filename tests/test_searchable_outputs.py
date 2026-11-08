@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import sqlite3
 import tempfile
 import unittest
 from pathlib import Path
@@ -12,6 +13,7 @@ from search_events import (
     EvidenceLookupResult,
     SearchConfig,
     TrackSearchResult,
+    init_intelligence_db,
     load_search_config,
     save_search_config,
 )
@@ -108,6 +110,32 @@ class TestSearchConfigYaml(unittest.TestCase):
 
             with self.assertRaises(FileNotFoundError):
                 load_search_config(root / "missing.yaml")
+
+
+class TestInitIntelligenceDb(unittest.TestCase):
+    """Test init_intelligence_db creates all 7 tables and secondary indexes."""
+
+    def test_init_intelligence_db_creates_tables_and_indexes(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            db_path = init_intelligence_db(Path(tmp) / "intelligence.db")
+            self.assertTrue(db_path.is_file())
+            with sqlite3.connect(db_path) as conn:
+                tables = {
+                    row[0]
+                    for row in conn.execute(
+                        "SELECT name FROM sqlite_master WHERE type='table'"
+                    ).fetchall()
+                }
+                for expected in (
+                    "detections",
+                    "track_observations",
+                    "tracks",
+                    "trajectories",
+                    "events",
+                    "zone_counts",
+                    "line_counts",
+                ):
+                    self.assertIn(expected, tables)
 
 
 if __name__ == "__main__":
