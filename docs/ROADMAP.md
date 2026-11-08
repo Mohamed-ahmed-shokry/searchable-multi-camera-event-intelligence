@@ -1206,6 +1206,120 @@ uv run --locked python cv_projects/09_cv_evaluation/scripts/evaluate_pipeline.py
 | `uv run --locked pytest -v` | ✅ `161 passed, 56 subtests passed` | full unit + integration test suite (`test_cv_evaluation.py` + prior suites) |
 | `evaluate_pipeline.py --config cv_projects/09_cv_evaluation/configs/evaluation.yaml ...` | ✅ `MOTA=0.4484 IDF1=0.6026 Precision=0.8287 Recall=0.5670` | generated `evaluation_report.md`, `metrics.json`, `evaluation.yaml`, and 4 annotated `failure_examples/*.jpg` |
 
+---
+
+## Current Phase: 10 — Searchable Outputs (2026-11-08)
+
+### Objective
+
+Query every structured CV output (`events`, `tracks`, `trajectories`, `detections`, `zone_counts`,
+`line_counts`, and visual evidence `snapshots/` + `crops/`) without needing a product or web UI:
+1. **Documented SQLite Relational Database (`intelligence.db` + `schema.md`):** ingest Phase 2
+   `detections.csv`, Phase 3 `tracks.csv` + `track_summary.csv`, Phase 4 `trajectories.csv` +
+   `track_summary.csv`, Phase 7 `events.csv` (with `snapshot_path` and `crop_path`), and Phase 8
+   `zone_counts.csv` + `line_counts.csv` into an indexed SQLite database (`intelligence.db`) using
+   Python's stdlib `sqlite3`.
+2. **CLI & Programmatic Search Engine (`search_events.py`):** support querying events by
+   `event_type`, `zone_id` (exact or prefix match for directed lines), `track_id`, time range
+   (`[min_time, max_time]`), and `min_duration`; querying tracks by duration (`[min_duration,
+   max_duration]`) and path length (`min_path_length_px`); and looking up visual evidence by
+   `event_id` with automatic filesystem resolution and verification of `snapshot_path` and
+   `crop_path`.
+3. **Worked Query Examples (`search_examples.md`):** automatically generate and verify worked CLI
+   and SQL query examples with exact expected outputs and verified evidence paths on real
+   `people-detection.mp4` data.
+
+### Scope
+
+1. Scaffold `cv_projects/10_searchable_outputs/` (`README.md`, `notes.md`, `schema.md`,
+   `configs/search.yaml`, `scripts/`, `notebooks/`, `outputs/`).
+2. Expose `cv_projects/10_searchable_outputs/scripts` in `tests/helpers.py` and
+   `tests/conftest.py`.
+3. Implement `cv_projects/10_searchable_outputs/scripts/search_events.py`:
+   - `SearchConfig`, `EventSearchResult`, `TrackSearchResult`, `EvidenceLookupResult`, and
+     `DatabaseSummary` dataclasses with strict validation.
+   - YAML configuration loader and writer (`load_search_config`, `save_search_config`).
+   - SQLite schema DDL and initializer (`init_intelligence_db`) creating tables `detections`,
+     `track_observations`, `tracks`, `trajectories`, `events`, `zone_counts`, and `line_counts`
+     with secondary indexes on `(event_type, zone_id)`, `(track_id)`, `(start_time, end_time)`,
+     and `(duration_seconds)`.
+   - Ingestion pipeline (`ingest_intelligence_db`) loading CSV artifacts into `intelligence.db`
+     idempotently (replacing rows on re-ingest) and returning a `DatabaseSummary`.
+   - Event query engine (`query_events`) filtering by `event_type`, `zone_id`, `track_id`,
+     `min_time`, `max_time`, `min_duration`, and `limit`.
+   - Track query engine (`query_tracks`) filtering by `min_duration`, `max_duration`,
+     `min_path_length_px`, `track_id`, and `limit`, enriched with per-track event counts.
+   - Evidence lookup engine (`lookup_event_evidence`) resolving `snapshot_path` and `crop_path`
+     against `evidence_root` and verifying that both files exist and are non-empty on disk.
+   - Worked examples & schema doc generator (`generate_search_examples_markdown`,
+     `generate_schema_markdown`) and end-to-end CLI (`build_parser`, `main`) supporting
+     `build`, `events`, `tracks`, `evidence`, and `summary` subcommands / flags.
+4. Create exploratory notebook
+   `cv_projects/10_searchable_outputs/notebooks/01_explore_searchable_outputs.ipynb`.
+5. Add comprehensive unit and integration tests in `tests/test_searchable_outputs.py`.
+6. Execute Phase 10 on real `people-detection.mp4` artifacts (`418` detections, `409` track
+   observations, `7` tracks, `409` trajectory points, `48` events with `48` snapshots + `48`
+   crops, `3` zone counts, `2` line counts), verify all documented queries and evidence paths,
+   and update `schema.md`, `search_examples.md`, `notes.md`, and `README.md`.
+
+### Acceptance Criteria
+
+| # | Criterion | Status | Evidence |
+|---|-----------|--------|----------|
+| 1 | `intelligence.db` loads events, tracks, trajectories, detections, and zone/line counts with a documented schema (`schema.md`) | ⏳ | Pending implementation |
+| 2 | `search_events.py` CLI and query functions support events by type / zone / track / time range, tracks by duration, and evidence lookup by event ID | ⏳ | Pending implementation |
+| 3 | Every documented query in `search_examples.md` runs against `intelligence.db` and returns exact, verified results | ⏳ | Pending implementation |
+| 4 | All evidence paths (`snapshot_path`, `crop_path`) returned by queries resolve to real, non-empty JPEG files on disk | ⏳ | Pending implementation |
+| 5 | All local CI-parity checks (`ruff check`, `ruff format --check`, `pytest`) and remote GitHub Actions CI pass 100% | ⏳ | Pending implementation |
+
+### Validation & CI Plan
+
+```bash
+uv sync --locked
+uv run --locked ruff check .
+uv run --locked ruff format --check .
+uv run --locked pytest -v
+# phase-specific execution:
+uv run --locked python cv_projects/10_searchable_outputs/scripts/search_events.py \
+    --config cv_projects/10_searchable_outputs/configs/search.yaml \
+    --build
+```
+
+### Exclusions
+
+- **Consolidating all 10 experiments into `src/event_intelligence/` (`Phase 11`) and web/FastAPI
+  productization (`Phase 12`):** Explicitly deferred to Phase 11 and Phase 12 per
+  `docs/project_phases.md`.
+
+### Micro-Task Breakdown
+
+- [ ] 1. `docs(roadmap): define Phase 10 searchable outputs scope and micro-task checklist`
+- [ ] 2. `docs(search): scaffold cv_projects/10_searchable_outputs README, schema.md, and notes.md`
+- [ ] 3. `feat(search): add default configs/search.yaml for SQLite ingestion and evidence resolution`
+- [ ] 4. `test(helpers): expose Phase 10 searchable outputs scripts directory to test suite`
+- [ ] 5. `types(search): define SearchConfig, EventSearchResult, TrackSearchResult, EvidenceLookupResult, and DatabaseSummary dataclasses`
+- [ ] 6. `test(search): add unit tests for search dataclasses and validation`
+- [ ] 7. `feat(search): implement load_search_config and save_search_config YAML helpers`
+- [ ] 8. `test(search): add unit tests for search.yaml round-trip serialization`
+- [ ] 9. `feat(search): implement SQLite schema DDL and init_intelligence_db`
+- [ ] 10. `test(search): add unit tests for init_intelligence_db schema tables and indexes`
+- [ ] 11. `feat(search): implement ingest_intelligence_db loading detections, tracks, trajectories, events, and counts`
+- [ ] 12. `test(search): add unit tests for ingest_intelligence_db row counts and idempotency`
+- [ ] 13. `feat(search): implement query_events by event_type, zone_id, track_id, time range, and min_duration`
+- [ ] 14. `test(search): add unit tests for query_events filters and combinations`
+- [ ] 15. `feat(search): implement query_tracks by duration range and path length`
+- [ ] 16. `test(search): add unit tests for query_tracks filters and ordering`
+- [ ] 17. `feat(search): implement lookup_event_evidence with on-disk snapshot and crop verification`
+- [ ] 18. `test(search): add unit tests for lookup_event_evidence path resolution`
+- [ ] 19. `feat(search): implement generate_schema_markdown and generate_search_examples_markdown`
+- [ ] 20. `test(search): add unit tests for schema and worked examples markdown generation`
+- [ ] 21. `feat(search): implement run_searchable_outputs pipeline and CLI entrypoint in search_events.py`
+- [ ] 22. `test(search): add end-to-end pipeline and CLI query tests in test_searchable_outputs.py`
+- [ ] 23. `feat(search): add exploratory notebook 01_explore_searchable_outputs.ipynb`
+- [ ] 24. `docs(search): generate real intelligence.db, schema.md, search_examples.md, and document in notes and READMEs`
+- [ ] 25. `docs(roadmap): mark Phase 10 searchable outputs completed in docs/ROADMAP.md`
+
+
 
 
 
