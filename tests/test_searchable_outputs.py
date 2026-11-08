@@ -5,6 +5,7 @@ from __future__ import annotations
 import sqlite3
 import tempfile
 import unittest
+from contextlib import closing
 from pathlib import Path
 
 from search_events import (
@@ -119,7 +120,7 @@ class TestInitIntelligenceDb(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             db_path = init_intelligence_db(Path(tmp) / "intelligence.db")
             self.assertTrue(db_path.is_file())
-            with sqlite3.connect(db_path) as conn:
+            with closing(sqlite3.connect(db_path)) as conn:
                 tables = {
                     row[0]
                     for row in conn.execute(

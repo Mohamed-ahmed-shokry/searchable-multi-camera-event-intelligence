@@ -5,6 +5,7 @@ programmatic queries for events, tracks, and visual evidence, and worked example
 from __future__ import annotations
 
 import sqlite3
+from contextlib import closing
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -341,6 +342,7 @@ def init_intelligence_db(db_path: Path | str) -> Path:
     """Create intelligence.db and execute SCHEMA_DDL idempotently."""
     out_db = Path(db_path)
     out_db.parent.mkdir(parents=True, exist_ok=True)
-    with sqlite3.connect(out_db) as conn:
+    with closing(sqlite3.connect(out_db)) as conn:
         conn.executescript(SCHEMA_DDL)
+        conn.commit()
     return out_db
