@@ -869,8 +869,10 @@ def generate_search_examples_markdown(
     q4 = query_tracks(db_path, min_duration=5.0)
 
     all_events = query_events(db_path, limit=500)
-    sample_event_id = all_events[1].event_id if len(all_events) > 1 else (
-        all_events[0].event_id if all_events else ""
+    sample_event_id = (
+        all_events[1].event_id
+        if len(all_events) > 1
+        else (all_events[0].event_id if all_events else "")
     )
     ev_lookup = (
         lookup_event_evidence(db_path, sample_event_id, evidence_root=evidence_root)
@@ -994,13 +996,19 @@ def generate_search_examples_markdown(
                 f"    --evidence-event-id {ev_lookup.event.event_id}",
                 "```",
                 "",
-                f"- **Event:** `{ev_lookup.event.event_id}` (`{ev_lookup.event.event_type}`, "
-                f"`track_id={ev_lookup.event.track_id}`, `zone_id={ev_lookup.event.zone_id}`, "
-                f"`duration={ev_lookup.event.duration_seconds:.4f}s`)",
-                f"- **Relative Snapshot Path:** `{ev_lookup.event.snapshot_path}` "
-                f"(`exists={ev_lookup.snapshot_exists}`, `{ev_lookup.snapshot_size_bytes}` bytes)",
-                f"- **Relative Crop Path:** `{ev_lookup.event.crop_path}` "
-                f"(`exists={ev_lookup.crop_exists}`, `{ev_lookup.crop_size_bytes}` bytes)",
+                (
+                    f"- **Event:** `{ev_lookup.event.event_id}` (`{ev_lookup.event.event_type}`, "
+                    f"`track_id={ev_lookup.event.track_id}`, `zone_id={ev_lookup.event.zone_id}`, "
+                    f"`duration={ev_lookup.event.duration_seconds:.4f}s`)"
+                ),
+                (
+                    f"- **Relative Snapshot Path:** `{ev_lookup.event.snapshot_path}` "
+                    f"(`exists={ev_lookup.snapshot_exists}`, `{ev_lookup.snapshot_size_bytes}` bytes)"
+                ),
+                (
+                    f"- **Relative Crop Path:** `{ev_lookup.event.crop_path}` "
+                    f"(`exists={ev_lookup.crop_exists}`, `{ev_lookup.crop_size_bytes}` bytes)"
+                ),
                 f"- **Evidence Valid:** `{ev_lookup.is_valid}`",
             ]
         )
