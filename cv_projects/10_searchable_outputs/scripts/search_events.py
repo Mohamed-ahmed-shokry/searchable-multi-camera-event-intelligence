@@ -819,3 +819,190 @@ def lookup_event_evidence(
         snapshot_size_bytes=snap_size,
         crop_size_bytes=crop_size,
     )
+
+
+def generate_schema_markdown(summary: DatabaseSummary) -> str:
+    """Render schema.md documenting all 7 SQLite tables, indexes, and row counts."""
+    lines: list[str] = [
+        "# Phase 10 SQLite Schema — `intelligence.db`",
+        "",
+        f"Source video: **`{summary.source_name}`**",
+        "",
+        "## 1. Table Row Count Summary",
+        "",
+        "| Table Name | Primary Key | Secondary Indexes | Row Count | Description |",
+        "| --- | --- | --- | ---: | --- |",
+        f"| `detections` | `detection_id` | `idx_detections_frame_id (frame_id)` | `{summary.detections_count}` | Phase 2 person detections (`x1, y1, x2, y2, confidence, class_name`) |",
+        f"| `track_observations` | `observation_id` | `idx_track_obs_track_frame (track_id, frame_id)` | `{summary.track_observations_count}` | Phase 3 per-frame tracked bounding boxes |",
+        f"| `tracks` | `track_id` | `idx_tracks_duration (duration_seconds DESC)` | `{summary.tracks_count}` | Per-identity lifespan and ground-plane `path_length_px` |",
+        f"| `trajectories` | `(track_id, frame_id)` | `idx_trajectories_timestamp (timestamp)` | `{summary.trajectories_count}` | Phase 4 smoothed `bottom_center` foot-anchor coordinates |",
+        f"| `events` | `event_id` | `idx_events_type_zone`, `idx_events_track_id`, `idx_events_time_range` | `{summary.events_count}` | Phase 6/7 structured events with `snapshot_path` and `crop_path` |",
+        f"| `zone_counts` | `zone_id` | — | `{summary.zone_counts_rows}` | Phase 8 per-zone entries, exits, total dwell, and peak occupancy |",
+        f"| `line_counts` | `line_id` | — | `{summary.line_counts_rows}` | Phase 8 per-line directional crossings (`A->B`, `B->A`, `total`) |",
+        "",
+        "---",
+        "",
+        "## 2. SQLite DDL (`SCHEMA_DDL`)",
+        "",
+        "```sql",
+        SCHEMA_DDL.strip(),
+        "```",
+    ]
+    return "\n".join(lines)
+
+
+def generate_search_examples_markdown(
+    db_path: Path | str,
+    *,
+    evidence_root: Path | str | None = None,
+) -> str:
+    """Execute 5 canonical CLI/SQL queries against intelligence.db and render search_examples.md."""
+    q1 = query_events(db_path, event_type="dwell_time_event", zone_id="right_aisle")
+    q2 = query_events(
+        db_path,
+        event_type="line_crossing",
+        zone_id="doorway_line",
+        min_time=15.0,
+        max_time=20.0,
+    )
+    q3 = query_events(db_path, track_id=1)
+    q4 = query_tracks(db_path, min_duration=5.0)
+
+    all_events = query_events(db_path, limit=500)
+    sample_event_id = all_events[1].event_id if len(all_events) > 1 else (
+        all_events[0].event_id if all_events else ""
+    )
+    ev_lookup = (
+        lookup_event_evidence(db_path, sample_event_id, evidence_root=evidence_root)
+        if sample_event_id
+        else None
+    )
+
+    lines: list[str] = [
+        "# Phase 10 Worked Search Examples — `search_examples.md`",
+        "",
+        "Every query below was executed directly against `intelligence.db` via `scripts/search_events.py`.",
+        "",
+        "---",
+        "",
+        "## Query 1 — Dwell-Time Events in `right_aisle`",
+        "",
+        "```bash",
+        "uv run --locked python cv_projects/10_searchable_outputs/scripts/search_events.py \\",
+        "    --db cv_projects/10_searchable_outputs/outputs/people_detection/intelligence.db \\",
+        "    --event-type dwell_time_event --zone right_aisle",
+        "```",
+        "",
+        f"**Returned `{len(q1)}` events:**",
+        "",
+        "| `event_id` | `event_type` | `track_id` | `zone_id` | `start_time` | `end_time` | `duration_seconds` | `snapshot_path` | `crop_path` |",
+        "| --- | --- | ---: | --- | ---: | ---: | ---: | --- | --- |",
+    ]
+    for e in q1:
+        lines.append(
+            f"| `{e.event_id}` | `{e.event_type}` | `{e.track_id}` | `{e.zone_id}` | "
+            f"`{e.start_time:.4f}` | `{e.end_time:.4f}` | `{e.duration_seconds:.4f}` | "
+            f"`{e.snapshot_path}` | `{e.crop_path}` |"
+        )
+
+    lines.extend(
+        [
+            "",
+            "---",
+            "",
+            "## Query 2 — `doorway_line` Crossings Between `15.0s` and `20.0s`",
+            "",
+            "```bash",
+            "uv run --locked python cv_projects/10_searchable_outputs/scripts/search_events.py \\",
+            "    --db cv_projects/10_searchable_outputs/outputs/people_detection/intelligence.db \\",
+            "    --event-type line_crossing --zone doorway_line --min-time 15.0 --max-time 20.0",
+            "```",
+            "",
+            f"**Returned `{len(q2)}` events:**",
+            "",
+            "| `event_id` | `event_type` | `track_id` | `zone_id` | `start_time` | `snapshot_path` |",
+            "| --- | --- | ---: | --- | ---: | --- |",
+        ]
+    )
+    for e in q2:
+        lines.append(
+            f"| `{e.event_id}` | `{e.event_type}` | `{e.track_id}` | `{e.zone_id}` | "
+            f"`{e.start_time:.4f}` | `{e.snapshot_path}` |"
+        )
+
+    lines.extend(
+        [
+            "",
+            "---",
+            "",
+            "## Query 3 — Complete Event Timeline for `track_id = 1`",
+            "",
+            "```bash",
+            "uv run --locked python cv_projects/10_searchable_outputs/scripts/search_events.py \\",
+            "    --db cv_projects/10_searchable_outputs/outputs/people_detection/intelligence.db \\",
+            "    --track-id 1",
+            "```",
+            "",
+            f"**Returned `{len(q3)}` events:**",
+            "",
+            "| `event_id` | `event_type` | `zone_id` | `start_time` | `end_time` | `duration_seconds` |",
+            "| --- | --- | --- | ---: | ---: | ---: |",
+        ]
+    )
+    for e in q3:
+        lines.append(
+            f"| `{e.event_id}` | `{e.event_type}` | `{e.zone_id}` | "
+            f"`{e.start_time:.4f}` | `{e.end_time:.4f}` | `{e.duration_seconds:.4f}` |"
+        )
+
+    lines.extend(
+        [
+            "",
+            "---",
+            "",
+            "## Query 4 — Tracks with Duration `>= 5.0` Seconds",
+            "",
+            "```bash",
+            "uv run --locked python cv_projects/10_searchable_outputs/scripts/search_events.py \\",
+            "    --db cv_projects/10_searchable_outputs/outputs/people_detection/intelligence.db \\",
+            "    --tracks --min-duration 5.0",
+            "```",
+            "",
+            f"**Returned `{len(q4)}` tracks:**",
+            "",
+            "| `track_id` | `start_frame` | `end_frame` | `duration_frames` | `duration_seconds` | `path_length_px` | `event_count` |",
+            "| ---: | ---: | ---: | ---: | ---: | ---: | ---: |",
+        ]
+    )
+    for t in q4:
+        lines.append(
+            f"| `{t.track_id}` | `{t.start_frame}` | `{t.end_frame}` | `{t.duration_frames}` | "
+            f"`{t.duration_seconds:.4f}` | `{t.path_length_px:.2f}` | `{t.event_count}` |"
+        )
+
+    if ev_lookup is not None:
+        lines.extend(
+            [
+                "",
+                "---",
+                "",
+                f"## Query 5 — Visual Evidence Lookup for `{ev_lookup.event.event_id}`",
+                "",
+                "```bash",
+                "uv run --locked python cv_projects/10_searchable_outputs/scripts/search_events.py \\",
+                "    --db cv_projects/10_searchable_outputs/outputs/people_detection/intelligence.db \\",
+                f"    --evidence-event-id {ev_lookup.event.event_id}",
+                "```",
+                "",
+                f"- **Event:** `{ev_lookup.event.event_id}` (`{ev_lookup.event.event_type}`, "
+                f"`track_id={ev_lookup.event.track_id}`, `zone_id={ev_lookup.event.zone_id}`, "
+                f"`duration={ev_lookup.event.duration_seconds:.4f}s`)",
+                f"- **Relative Snapshot Path:** `{ev_lookup.event.snapshot_path}` "
+                f"(`exists={ev_lookup.snapshot_exists}`, `{ev_lookup.snapshot_size_bytes}` bytes)",
+                f"- **Relative Crop Path:** `{ev_lookup.event.crop_path}` "
+                f"(`exists={ev_lookup.crop_exists}`, `{ev_lookup.crop_size_bytes}` bytes)",
+                f"- **Evidence Valid:** `{ev_lookup.is_valid}`",
+            ]
+        )
+
+    return "\n".join(lines)
