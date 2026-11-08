@@ -4,7 +4,9 @@ programmatic queries for events, tracks, and visual evidence, and worked example
 
 from __future__ import annotations
 
+import argparse
 import csv
+import json
 import math
 import sqlite3
 from contextlib import closing
@@ -1014,3 +1016,282 @@ def generate_search_examples_markdown(
         )
 
     return "\n".join(lines)
+
+
+def run_searchable_outputs(
+    config: SearchConfig,
+    output_dir: Path | str,
+    *,
+    project_root: Path | None = None,
+) -> DatabaseSummary:
+    """Ingest upstream CSVs into intelligence.db and write schema, examples, and JSON summary."""
+    out_dir = Path(output_dir)
+    out_dir.mkdir(parents=True, exist_ok=True)
+    root = project_root if project_root is not None else _PROJECT_ROOT
+
+    db_path = out_dir / "intelligence.db"
+    summary = ingest_intelligence_db(db_path, config, project_root=root)
+
+    ev_root = _resolve_optional_path(config.evidence_root, root)
+    schema_md = generate_schema_markdown(summary)
+    examples_md = generate_search_examples_markdown(db_path, evidence_root=ev_root)
+
+    (out_dir / "schema.md").write_text(schema_md + "\n", encoding="utf-8")
+    (out_dir / "search_examples.md").write_text(examples_md + "\n", encoding="utf-8")
+    save_search_config(config, out_dir / "search.yaml")
+
+    if config.write_subproject_docs:
+        subproject_dir = root / "cv_projects" / "10_searchable_outputs"
+        if subproject_dir.is_dir():
+            (subproject_dir / "schema.md").write_text(
+                schema_md + "\n", encoding="utf-8"
+            )
+            (subproject_dir / "search_examples.md").write_text(
+                examples_md + "\n",
+                encoding="utf-8",
+            )
+
+    all_events = query_events(db_path, limit=5000)
+    valid_evidence_count = 0
+    for ev in all_events:
+        lookup = lookup_event_evidence(db_path, ev.event_id, evidence_root=ev_root)
+        if lookup.is_valid:
+            valid_evidence_count += 1
+
+    summary_payload = {
+        **summary.to_dict(),
+        "valid_evidence_events": valid_evidence_count,
+        "all_evidence_valid": valid_evidence_count == len(all_events),
+    }
+    (out_dir / "search_summary.json").write_text(
+        json.dumps(summary_payload, indent=2) + "\n",
+        encoding="utf-8",
+    )
+    return summary
+
+
+def build_parser() -> argparse.ArgumentParser:
+    """Build the CLI argument parser for Phase 10 searchable outputs."""
+    parser = argparse.ArgumentParser(
+        description=(
+            "Ingest upstream CV artifacts into SQLite (intelligence.db) and query "
+            "events, tracks, and visual evidence."
+        )
+    )
+    parser.add_argument(
+        "--config",
+        type=Path,
+        default=None,
+        help="Optional YAML config path for --build ingestion.",
+    )
+    parser.add_argument(
+        "--output-dir",
+        type=Path,
+        default=Path("cv_projects/10_searchable_outputs/outputs/people_detection"),
+        help="Output directory for intelligence.db, schema.md, and search_examples.md.",
+    )
+    parser.add_argument(
+        "--db",
+        type=Path,
+        default=None,
+        help="Path to an existing intelligence.db (defaults to <output-dir>/intelligence.db).",
+    )
+    parser.add_argument(
+        "--build",
+        action="store_true",
+        help="Ingest upstream CSVs into intelligence.db and generate schema/examples docs.",
+    )
+    parser.add_argument(
+        "--event-type",
+        type=str,
+        default=None,
+        help="Filter events by event_type (e.g. zone_entry, dwell_time_event, line_crossing).",
+    )
+    parser.add_argument(
+        "--zone",
+        type=str,
+        default=None,
+        help="Filter events by zone_id (exact or prefix match for directed lines).",
+    )
+    parser.add_argument(
+        "--track-id",
+        type=int,
+        default=None,
+        help="Filter events by integer track_id.",
+    )
+    parser.add_argument(
+        "--min-time",
+        type=float,
+        default=None,
+        help="Minimum timestamp in seconds for overlapping events.",
+    )
+    parser.add_argument(
+        "--max-time",
+        type=float,
+        default=None,
+        help="Maximum timestamp in seconds for overlapping events.",
+    )
+    parser.add_argument(
+        "--min-duration",
+        type=float,
+        default=None,
+        help="Minimum duration in seconds for events or tracks.",
+    )
+    parser.add_argument(
+        "--max-duration",
+        type=float,
+        default=None,
+        help="Maximum duration in seconds for tracks.",
+    )
+    parser.add_argument(
+        "--min-path-length",
+        type=float,
+        default=None,
+        help="Minimum ground-plane path length in pixels for tracks.",
+    )
+    parser.add_argument(
+        "--tracks",
+        action="store_true",
+        help="Query tracks table instead of events table.",
+    )
+    parser.add_argument(
+        "--evidence-event-id",
+        type=str,
+        default=None,
+        help="Look up visual evidence (snapshot_path and crop_path) for an event_id.",
+    )
+    parser.add_argument(
+        "--evidence-root",
+        type=Path,
+        default=None,
+        help="Optional root directory to resolve relative snapshot_path and crop_path.",
+    )
+    parser.add_argument(
+        "--limit",
+        type=int,
+        default=100,
+        help="Maximum number of rows to return (default: 100).",
+    )
+    parser.add_argument(
+        "--json",
+        action="store_true",
+        help="Format query results as JSON.",
+    )
+    return parser
+
+
+def main(argv: list[str] | None = None) -> int:
+    """CLI entrypoint for Phase 10 searchable outputs."""
+    parser = build_parser()
+    args = parser.parse_args(argv)
+
+    config = (
+        load_search_config(args.config) if args.config is not None else SearchConfig()
+    )
+    if args.build:
+        summary = run_searchable_outputs(config, args.output_dir)
+        if args.json and not (
+            args.tracks
+            or args.evidence_event_id
+            or args.event_type
+            or args.zone
+            or args.track_id is not None
+            or args.min_time is not None
+            or args.max_time is not None
+            or args.min_duration is not None
+        ):
+            print(json.dumps(summary.to_dict(), indent=2))
+            return 0
+        if not (
+            args.tracks
+            or args.evidence_event_id
+            or args.event_type
+            or args.zone
+            or args.track_id is not None
+            or args.min_time is not None
+            or args.max_time is not None
+            or args.min_duration is not None
+        ):
+            print(
+                f"Ingested intelligence.db ({summary.source_name}): "
+                f"detections={summary.detections_count}, "
+                f"track_obs={summary.track_observations_count}, "
+                f"tracks={summary.tracks_count}, "
+                f"trajectories={summary.trajectories_count}, "
+                f"events={summary.events_count}, "
+                f"zones={summary.zone_counts_rows}, "
+                f"lines={summary.line_counts_rows}"
+            )
+            return 0
+
+    db_path = args.db if args.db is not None else (args.output_dir / "intelligence.db")
+
+    if args.evidence_event_id is not None:
+        ev_root = (
+            args.evidence_root
+            if args.evidence_root is not None
+            else _resolve_optional_path(config.evidence_root, _PROJECT_ROOT)
+        )
+        result = lookup_event_evidence(
+            db_path,
+            args.evidence_event_id,
+            evidence_root=ev_root,
+        )
+        if args.json:
+            print(json.dumps(result.to_dict(), indent=2))
+        else:
+            print(
+                f"Event {result.event.event_id} ({result.event.event_type}, "
+                f"track={result.event.track_id}, zone={result.event.zone_id}): "
+                f"snapshot={result.event.snapshot_path} (exists={result.snapshot_exists}, "
+                f"{result.snapshot_size_bytes}B), "
+                f"crop={result.event.crop_path} (exists={result.crop_exists}, "
+                f"{result.crop_size_bytes}B)"
+            )
+        return 0
+
+    if args.tracks:
+        tracks = query_tracks(
+            db_path,
+            min_duration=args.min_duration,
+            max_duration=args.max_duration,
+            min_path_length_px=args.min_path_length,
+            limit=args.limit,
+        )
+        if args.json:
+            print(json.dumps([t.to_dict() for t in tracks], indent=2))
+        else:
+            print(f"Matched {len(tracks)} track(s):")
+            for t in tracks:
+                print(
+                    f"  track_id={t.track_id} frames={t.start_frame}..{t.end_frame} "
+                    f"duration={t.duration_seconds:.4f}s "
+                    f"path_length={t.path_length_px:.2f}px events={t.event_count}"
+                )
+        return 0
+
+    events = query_events(
+        db_path,
+        event_type=args.event_type,
+        zone_id=args.zone,
+        track_id=args.track_id,
+        min_time=args.min_time,
+        max_time=args.max_time,
+        min_duration=args.min_duration,
+        limit=args.limit,
+    )
+    if args.json:
+        print(json.dumps([e.to_dict() for e in events], indent=2))
+    else:
+        print(f"Matched {len(events)} event(s):")
+        for e in events:
+            print(
+                f"  {e.event_id} [{e.event_type}] track={e.track_id} zone={e.zone_id} "
+                f"time={e.start_time:.4f}..{e.end_time:.4f}s "
+                f"(dur={e.duration_seconds:.4f}s) snap={e.snapshot_path}"
+            )
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())
