@@ -605,3 +605,77 @@ def ingest_intelligence_db(
         zone_counts_rows=len(zc_rows),
         line_counts_rows=len(lc_rows),
     )
+
+
+def query_events(
+    db_path: Path | str,
+    *,
+    event_type: str | None = None,
+    zone_id: str | None = None,
+    track_id: int | None = None,
+    min_time: float | None = None,
+    max_time: float | None = None,
+    min_duration: float | None = None,
+    limit: int = 50,
+) -> list[EventSearchResult]:
+    """Query events from intelligence.db by type, zone/line, track_id, time range, or duration."""
+    if limit <= 0:
+        raise ValueError("limit must be positive")
+    path = Path(db_path)
+    if not path.is_file():
+        raise FileNotFoundError(f"SQLite database not found: {path}")
+
+    clauses: list[str] = []
+    params: list[Any] = []
+
+    if event_type is not None and event_type.strip():
+        clauses.append("event_type = ?")
+        params.append(event_type.strip())
+
+    if zone_id is not None and zone_id.strip():
+        z = zone_id.strip()
+        clauses.append("(zone_id = ? OR zone_id LIKE ?)")
+        params.extend([z, f"{z}:%"])
+
+    if track_id is not None:
+        clauses.append("track_id = ?")
+        params.append(int(track_id))
+
+    if min_time is not None:
+        clauses.append("end_time >= ?")
+        params.append(float(min_time))
+
+    if max_time is not None:
+        clauses.append("start_time <= ?")
+        params.append(float(max_time))
+
+    if min_duration is not None:
+        clauses.append("duration_seconds >= ?")
+        params.append(float(min_duration))
+
+    where_sql = f"WHERE {' AND '.join(clauses)}" if clauses else ""
+    sql = (
+        "SELECT event_id, event_type, track_id, zone_id, start_time, end_time, "
+        "duration_seconds, snapshot_path, crop_path "
+        f"FROM events {where_sql} "
+        "ORDER BY start_time ASC, event_id ASC LIMIT ?"
+    )
+    params.append(int(limit))
+
+    results: list[EventSearchResult] = []
+    with closing(sqlite3.connect(path)) as conn:
+        for row in conn.execute(sql, params).fetchall():
+            results.append(
+                EventSearchResult(
+                    event_id=str(row[0]),
+                    event_type=str(row[1]),
+                    track_id=int(row[2]),
+                    zone_id=str(row[3]),
+                    start_time=float(row[4]),
+                    end_time=float(row[5]),
+                    duration_seconds=float(row[6]),
+                    snapshot_path=str(row[7]),
+                    crop_path=str(row[8]),
+                )
+            )
+    return results
