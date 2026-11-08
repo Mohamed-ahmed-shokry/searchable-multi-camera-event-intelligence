@@ -14,6 +14,8 @@ from search_events import (
     EvidenceLookupResult,
     SearchConfig,
     TrackSearchResult,
+    generate_schema_markdown,
+    generate_search_examples_markdown,
     ingest_intelligence_db,
     init_intelligence_db,
     load_search_config,
@@ -334,6 +336,47 @@ class TestLookupEventEvidence(unittest.TestCase):
 
             with self.assertRaises(KeyError):
                 lookup_event_evidence(db_path, "evt_9999", evidence_root=root)
+
+
+class TestGenerateMarkdownDocs(unittest.TestCase):
+    """Test generate_schema_markdown and generate_search_examples_markdown."""
+
+    def test_generate_schema_and_search_examples_markdown(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            snap_dir = root / "snapshots"
+            crop_dir = root / "crops"
+            snap_dir.mkdir(parents=True, exist_ok=True)
+            crop_dir.mkdir(parents=True, exist_ok=True)
+            (snap_dir / "evt_0001_1.jpg").write_bytes(b"\xff\xd8\xff\xd9")
+            (crop_dir / "evt_0001_1.jpg").write_bytes(b"\xff\xd8\xff\xd9")
+
+            (root / "events.csv").write_text(
+                "event_id,event_type,track_id,zone_id,start_time,end_time,duration_seconds,snapshot_path,crop_path\n"
+                "evt_0001,dwell_time_event,1,right_aisle,3.9,6.2,2.3,snapshots/evt_0001_1.jpg,crops/evt_0001_1.jpg\n",
+                encoding="utf-8",
+            )
+            cfg = SearchConfig(
+                detections_csv="missing.csv",
+                tracks_csv="missing.csv",
+                tracking_summary_csv="missing.csv",
+                trajectories_csv="missing.csv",
+                trajectory_summary_csv="missing.csv",
+                events_csv="events.csv",
+                evidence_root=str(root),
+                zone_counts_csv="missing.csv",
+                line_counts_csv="missing.csv",
+            )
+            db_path = root / "intelligence.db"
+            summary = ingest_intelligence_db(db_path, cfg, project_root=root)
+
+            schema_md = generate_schema_markdown(summary)
+            self.assertIn("CREATE TABLE IF NOT EXISTS events", schema_md)
+
+            examples_md = generate_search_examples_markdown(db_path, evidence_root=root)
+            self.assertIn("## Query 1", examples_md)
+            self.assertIn("`evt_0001`", examples_md)
+            self.assertIn("**Evidence Valid:** `True`", examples_md)
 
 
 if __name__ == "__main__":
