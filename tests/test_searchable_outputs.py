@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
+import tempfile
 import unittest
+from pathlib import Path
 
 from search_events import (
     DatabaseSummary,
@@ -10,6 +12,8 @@ from search_events import (
     EvidenceLookupResult,
     SearchConfig,
     TrackSearchResult,
+    load_search_config,
+    save_search_config,
 )
 
 
@@ -79,6 +83,31 @@ class TestSearchDataclasses(unittest.TestCase):
             line_counts_rows=2,
         )
         self.assertEqual(summary.to_dict()["events_count"], 48)
+
+
+class TestSearchConfigYaml(unittest.TestCase):
+    """Test load_search_config and save_search_config YAML serialization."""
+
+    def test_search_yaml_round_trip_and_errors(self) -> None:
+        self.assertEqual(load_search_config(None), SearchConfig())
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            cfg = SearchConfig(source_name="custom.mp4", default_query_limit=25)
+            yaml_path = save_search_config(cfg, root / "search.yaml")
+            loaded = load_search_config(yaml_path)
+            self.assertEqual(loaded, cfg)
+
+            empty = root / "empty.yaml"
+            empty.write_text("", encoding="utf-8")
+            self.assertEqual(load_search_config(empty), SearchConfig())
+
+            bad = root / "bad.yaml"
+            bad.write_text("- item\n", encoding="utf-8")
+            with self.assertRaises(TypeError):
+                load_search_config(bad)
+
+            with self.assertRaises(FileNotFoundError):
+                load_search_config(root / "missing.yaml")
 
 
 if __name__ == "__main__":
