@@ -679,3 +679,69 @@ def query_events(
                 )
             )
     return results
+
+
+def query_tracks(
+    db_path: Path | str,
+    *,
+    min_duration: float | None = None,
+    max_duration: float | None = None,
+    min_path_length_px: float | None = None,
+    track_id: int | None = None,
+    limit: int = 50,
+) -> list[TrackSearchResult]:
+    """Query tracks from intelligence.db by duration range, path length, or track_id."""
+    if limit <= 0:
+        raise ValueError("limit must be positive")
+    path = Path(db_path)
+    if not path.is_file():
+        raise FileNotFoundError(f"SQLite database not found: {path}")
+
+    clauses: list[str] = []
+    params: list[Any] = []
+
+    if min_duration is not None:
+        clauses.append("t.duration_seconds >= ?")
+        params.append(float(min_duration))
+
+    if max_duration is not None:
+        clauses.append("t.duration_seconds <= ?")
+        params.append(float(max_duration))
+
+    if min_path_length_px is not None:
+        clauses.append("t.path_length_px >= ?")
+        params.append(float(min_path_length_px))
+
+    if track_id is not None:
+        clauses.append("t.track_id = ?")
+        params.append(int(track_id))
+
+    where_sql = f"WHERE {' AND '.join(clauses)}" if clauses else ""
+    sql = (
+        "SELECT t.track_id, t.start_frame, t.end_frame, t.duration_frames, "
+        "t.duration_seconds, t.observed_frames, t.path_length_px, "
+        "COUNT(e.event_id) AS event_count "
+        "FROM tracks t "
+        "LEFT JOIN events e ON e.track_id = t.track_id "
+        f"{where_sql} "
+        "GROUP BY t.track_id "
+        "ORDER BY t.duration_seconds DESC, t.track_id ASC LIMIT ?"
+    )
+    params.append(int(limit))
+
+    results: list[TrackSearchResult] = []
+    with closing(sqlite3.connect(path)) as conn:
+        for row in conn.execute(sql, params).fetchall():
+            results.append(
+                TrackSearchResult(
+                    track_id=int(row[0]),
+                    start_frame=int(row[1]),
+                    end_frame=int(row[2]),
+                    duration_frames=int(row[3]),
+                    duration_seconds=float(row[4]),
+                    observed_frames=int(row[5]),
+                    path_length_px=float(row[6]),
+                    event_count=int(row[7]),
+                )
+            )
+    return results
