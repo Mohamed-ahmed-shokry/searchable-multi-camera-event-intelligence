@@ -2,10 +2,12 @@
 
 from __future__ import annotations
 
+import io
+import json
 import sqlite3
 import tempfile
 import unittest
-from contextlib import closing
+from contextlib import closing, redirect_stdout
 from pathlib import Path
 
 from search_events import (
@@ -20,8 +22,10 @@ from search_events import (
     init_intelligence_db,
     load_search_config,
     lookup_event_evidence,
+    main,
     query_events,
     query_tracks,
+    run_searchable_outputs,
     save_search_config,
 )
 
@@ -377,6 +381,129 @@ class TestGenerateMarkdownDocs(unittest.TestCase):
             self.assertIn("## Query 1", examples_md)
             self.assertIn("`evt_0001`", examples_md)
             self.assertIn("**Evidence Valid:** `True`", examples_md)
+
+
+class TestRunSearchableOutputsAndCli(unittest.TestCase):
+    """Test run_searchable_outputs pipeline and CLI main() modes."""
+
+    def test_run_searchable_outputs_and_cli_queries(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            snap_dir = root / "snapshots"
+            crop_dir = root / "crops"
+            snap_dir.mkdir(parents=True, exist_ok=True)
+            crop_dir.mkdir(parents=True, exist_ok=True)
+            (snap_dir / "evt_0001_1.jpg").write_bytes(b"\xff\xd8\xff\xd9")
+            (crop_dir / "evt_0001_1.jpg").write_bytes(b"\xff\xd8\xff\xd9")
+
+            (root / "trajectories.csv").write_text(
+                "track_id,frame_id,timestamp,x,y\n"
+                "1,0,0.0,100.0,100.0\n"
+                "1,10,6.0,160.0,180.0\n",
+                encoding="utf-8",
+            )
+            (root / "events.csv").write_text(
+                "event_id,event_type,track_id,zone_id,start_time,end_time,duration_seconds,snapshot_path,crop_path\n"
+                "evt_0001,dwell_time_event,1,right_aisle,3.9,6.2,2.3,snapshots/evt_0001_1.jpg,crops/evt_0001_1.jpg\n",
+                encoding="utf-8",
+            )
+
+            cfg = SearchConfig(
+                detections_csv=str(root / "missing.csv"),
+                tracks_csv=str(root / "missing.csv"),
+                tracking_summary_csv=str(root / "missing.csv"),
+                trajectories_csv=str(root / "trajectories.csv"),
+                trajectory_summary_csv=str(root / "missing.csv"),
+                events_csv=str(root / "events.csv"),
+                evidence_root=str(root),
+                zone_counts_csv=str(root / "missing.csv"),
+                line_counts_csv=str(root / "missing.csv"),
+                write_subproject_docs=False,
+            )
+            cfg_path = root / "search.yaml"
+            save_search_config(cfg, cfg_path)
+
+            out_dir = root / "out"
+            summary = run_searchable_outputs(cfg, out_dir, project_root=root)
+            self.assertEqual(summary.events_count, 1)
+            self.assertEqual(summary.tracks_count, 1)
+            self.assertTrue((out_dir / "intelligence.db").is_file())
+            self.assertTrue((out_dir / "schema.md").is_file())
+            self.assertTrue((out_dir / "search_examples.md").is_file())
+            self.assertTrue((out_dir / "search_summary.json").is_file())
+
+            # Test CLI --build --json
+            buf = io.StringIO()
+            with redirect_stdout(buf):
+                rc = main(
+                    [
+                        "--config",
+                        str(cfg_path),
+                        "--output-dir",
+                        str(out_dir),
+                        "--build",
+                        "--json",
+                    ]
+                )
+            self.assertEqual(rc, 0)
+            parsed_build = json.loads(buf.getvalue())
+            self.assertEqual(parsed_build["events_count"], 1)
+
+            # Test CLI event query --json
+            db_path = out_dir / "intelligence.db"
+            buf = io.StringIO()
+            with redirect_stdout(buf):
+                rc = main(
+                    [
+                        "--db",
+                        str(db_path),
+                        "--event-type",
+                        "dwell_time_event",
+                        "--zone",
+                        "right_aisle",
+                        "--json",
+                    ]
+                )
+            self.assertEqual(rc, 0)
+            parsed_events = json.loads(buf.getvalue())
+            self.assertEqual(len(parsed_events), 1)
+            self.assertEqual(parsed_events[0]["event_id"], "evt_0001")
+
+            # Test CLI track query --json
+            buf = io.StringIO()
+            with redirect_stdout(buf):
+                rc = main(
+                    [
+                        "--db",
+                        str(db_path),
+                        "--tracks",
+                        "--min-duration",
+                        "5.0",
+                        "--json",
+                    ]
+                )
+            self.assertEqual(rc, 0)
+            parsed_tracks = json.loads(buf.getvalue())
+            self.assertEqual(len(parsed_tracks), 1)
+            self.assertEqual(parsed_tracks[0]["track_id"], 1)
+
+            # Test CLI evidence lookup --json
+            buf = io.StringIO()
+            with redirect_stdout(buf):
+                rc = main(
+                    [
+                        "--db",
+                        str(db_path),
+                        "--evidence-event-id",
+                        "evt_0001",
+                        "--evidence-root",
+                        str(root),
+                        "--json",
+                    ]
+                )
+            self.assertEqual(rc, 0)
+            parsed_ev = json.loads(buf.getvalue())
+            self.assertTrue(parsed_ev["is_valid"])
 
 
 if __name__ == "__main__":
