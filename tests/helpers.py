@@ -20,6 +20,7 @@ EVENTS_SCRIPTS = PROJECT_ROOT / "cv_projects" / "06_dwell_time_events" / "script
 EVIDENCE_SCRIPTS = PROJECT_ROOT / "cv_projects" / "07_visual_evidence" / "scripts"
 ANALYTICS_SCRIPTS = PROJECT_ROOT / "cv_projects" / "08_heatmaps_analytics" / "scripts"
 EVALUATION_SCRIPTS = PROJECT_ROOT / "cv_projects" / "09_cv_evaluation" / "scripts"
+SEARCH_SCRIPTS = PROJECT_ROOT / "cv_projects" / "10_searchable_outputs" / "scripts"
 sys.path.insert(0, str(INSPECTION_SCRIPTS))
 sys.path.insert(0, str(DETECTION_SCRIPTS))
 sys.path.insert(0, str(TRACKING_SCRIPTS))
@@ -29,6 +30,7 @@ sys.path.insert(0, str(EVENTS_SCRIPTS))
 sys.path.insert(0, str(EVIDENCE_SCRIPTS))
 sys.path.insert(0, str(ANALYTICS_SCRIPTS))
 sys.path.insert(0, str(EVALUATION_SCRIPTS))
+sys.path.insert(0, str(SEARCH_SCRIPTS))
 
 
 def make_sequence(root: Path, *, name: str = "sequence", count: int = 5) -> Path:
