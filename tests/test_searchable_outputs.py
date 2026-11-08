@@ -17,6 +17,7 @@ from search_events import (
     ingest_intelligence_db,
     init_intelligence_db,
     load_search_config,
+    query_events,
     save_search_config,
 )
 
@@ -199,6 +200,50 @@ class TestIngestIntelligenceDb(unittest.TestCase):
             # Re-ingest should replace rows idempotently without duplicating
             summary2 = ingest_intelligence_db(db_path, cfg, project_root=root)
             self.assertEqual(summary2, summary1)
+
+
+class TestQueryEvents(unittest.TestCase):
+    """Test query_events filtering by type, zone, track_id, time range, and duration."""
+
+    def test_query_events_filters_and_combinations(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            (root / "events.csv").write_text(
+                "event_id,event_type,track_id,zone_id,start_time,end_time,duration_seconds,snapshot_path,crop_path\n"
+                "evt_0001,zone_entry,1,entrance_area,1.5,1.5,0.0,s1.jpg,c1.jpg\n"
+                "evt_0002,dwell_time_event,1,entrance_area,1.5,3.0,1.5,s2.jpg,c2.jpg\n"
+                "evt_0003,line_crossing,1,doorway_line:B->A,3.0,3.0,0.0,s3.jpg,c3.jpg\n"
+                "evt_0004,dwell_time_event,2,right_aisle,10.0,13.2,3.2,s4.jpg,c4.jpg\n",
+                encoding="utf-8",
+            )
+            cfg = SearchConfig(
+                detections_csv="missing.csv",
+                tracks_csv="missing.csv",
+                tracking_summary_csv="missing.csv",
+                trajectories_csv="missing.csv",
+                trajectory_summary_csv="missing.csv",
+                events_csv="events.csv",
+                zone_counts_csv="missing.csv",
+                line_counts_csv="missing.csv",
+            )
+            db_path = root / "intelligence.db"
+            ingest_intelligence_db(db_path, cfg, project_root=root)
+
+            dwells = query_events(db_path, event_type="dwell_time_event")
+            self.assertEqual([e.event_id for e in dwells], ["evt_0002", "evt_0004"])
+
+            # Prefix match on directed line "doorway_line" -> matches "doorway_line:B->A"
+            crossings = query_events(db_path, zone_id="doorway_line")
+            self.assertEqual([e.event_id for e in crossings], ["evt_0003"])
+
+            by_track = query_events(db_path, track_id=2)
+            self.assertEqual([e.event_id for e in by_track], ["evt_0004"])
+
+            by_time = query_events(db_path, min_time=2.0, max_time=5.0)
+            self.assertEqual([e.event_id for e in by_time], ["evt_0002", "evt_0003"])
+
+            by_dur = query_events(db_path, min_duration=2.0)
+            self.assertEqual([e.event_id for e in by_dur], ["evt_0004"])
 
 
 if __name__ == "__main__":
