@@ -745,3 +745,77 @@ def query_tracks(
                 )
             )
     return results
+
+
+def lookup_event_evidence(
+    db_path: Path | str,
+    event_id: str,
+    *,
+    evidence_root: Path | str | None = None,
+) -> EvidenceLookupResult:
+    """Look up an event by event_id and resolve/verify its snapshot_path and crop_path on disk."""
+    if not event_id.strip():
+        raise ValueError("event_id must be non-empty")
+    path = Path(db_path)
+    if not path.is_file():
+        raise FileNotFoundError(f"SQLite database not found: {path}")
+
+    with closing(sqlite3.connect(path)) as conn:
+        row = conn.execute(
+            "SELECT event_id, event_type, track_id, zone_id, start_time, end_time, "
+            "duration_seconds, snapshot_path, crop_path "
+            "FROM events WHERE event_id = ?",
+            (event_id.strip(),),
+        ).fetchone()
+
+    if row is None:
+        raise KeyError(f"Event ID not found in intelligence.db: {event_id!r}")
+
+    ev = EventSearchResult(
+        event_id=str(row[0]),
+        event_type=str(row[1]),
+        track_id=int(row[2]),
+        zone_id=str(row[3]),
+        start_time=float(row[4]),
+        end_time=float(row[5]),
+        duration_seconds=float(row[6]),
+        snapshot_path=str(row[7]),
+        crop_path=str(row[8]),
+    )
+
+    root = (
+        Path(evidence_root)
+        if evidence_root is not None
+        else (
+            _PROJECT_ROOT
+            / "cv_projects"
+            / "07_visual_evidence"
+            / "outputs"
+            / "people_detection"
+        )
+    )
+    snap_file = (
+        Path(ev.snapshot_path)
+        if Path(ev.snapshot_path).is_absolute()
+        else (root / ev.snapshot_path)
+    )
+    crop_file = (
+        Path(ev.crop_path)
+        if Path(ev.crop_path).is_absolute()
+        else (root / ev.crop_path)
+    )
+
+    snap_exists = snap_file.is_file()
+    crop_exists = crop_file.is_file()
+    snap_size = snap_file.stat().st_size if snap_exists else 0
+    crop_size = crop_file.stat().st_size if crop_exists else 0
+
+    return EvidenceLookupResult(
+        event=ev,
+        resolved_snapshot_path=str(snap_file),
+        resolved_crop_path=str(crop_file),
+        snapshot_exists=snap_exists,
+        crop_exists=crop_exists,
+        snapshot_size_bytes=snap_size,
+        crop_size_bytes=crop_size,
+    )
