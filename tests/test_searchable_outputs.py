@@ -17,6 +17,7 @@ from search_events import (
     ingest_intelligence_db,
     init_intelligence_db,
     load_search_config,
+    lookup_event_evidence,
     query_events,
     query_tracks,
     save_search_config,
@@ -292,6 +293,47 @@ class TestQueryTracks(unittest.TestCase):
 
             far_tracks = query_tracks(db_path, min_path_length_px=540.0)
             self.assertEqual([t.track_id for t in far_tracks], [1])
+
+
+class TestLookupEventEvidence(unittest.TestCase):
+    """Test lookup_event_evidence resolution and on-disk verification."""
+
+    def test_lookup_event_evidence_resolves_and_checks_files(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            snap_dir = root / "snapshots"
+            crop_dir = root / "crops"
+            snap_dir.mkdir(parents=True, exist_ok=True)
+            crop_dir.mkdir(parents=True, exist_ok=True)
+            (snap_dir / "evt_0001_1.jpg").write_bytes(b"\xff\xd8\xff\xd9")
+            (crop_dir / "evt_0001_1.jpg").write_bytes(b"\xff\xd8\xff\xd9")
+
+            (root / "events.csv").write_text(
+                "event_id,event_type,track_id,zone_id,start_time,end_time,duration_seconds,snapshot_path,crop_path\n"
+                "evt_0001,zone_entry,1,entrance_area,1.5,1.5,0.0,snapshots/evt_0001_1.jpg,crops/evt_0001_1.jpg\n",
+                encoding="utf-8",
+            )
+            cfg = SearchConfig(
+                detections_csv="missing.csv",
+                tracks_csv="missing.csv",
+                tracking_summary_csv="missing.csv",
+                trajectories_csv="missing.csv",
+                trajectory_summary_csv="missing.csv",
+                events_csv="events.csv",
+                evidence_root=str(root),
+                zone_counts_csv="missing.csv",
+                line_counts_csv="missing.csv",
+            )
+            db_path = root / "intelligence.db"
+            ingest_intelligence_db(db_path, cfg, project_root=root)
+
+            res = lookup_event_evidence(db_path, "evt_0001", evidence_root=root)
+            self.assertTrue(res.is_valid)
+            self.assertEqual(res.snapshot_size_bytes, 4)
+            self.assertEqual(res.crop_size_bytes, 4)
+
+            with self.assertRaises(KeyError):
+                lookup_event_evidence(db_path, "evt_9999", evidence_root=root)
 
 
 if __name__ == "__main__":
