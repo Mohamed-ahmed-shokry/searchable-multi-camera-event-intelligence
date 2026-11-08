@@ -1208,7 +1208,7 @@ uv run --locked python cv_projects/09_cv_evaluation/scripts/evaluate_pipeline.py
 
 ---
 
-## Current Phase: 10 — Searchable Outputs (2026-11-08)
+## Completed Phase: 10 — Searchable Outputs (2026-11-08)
 
 ### Objective
 
@@ -1266,11 +1266,11 @@ Query every structured CV output (`events`, `tracks`, `trajectories`, `detection
 
 | # | Criterion | Status | Evidence |
 |---|-----------|--------|----------|
-| 1 | `intelligence.db` loads events, tracks, trajectories, detections, and zone/line counts with a documented schema (`schema.md`) | ⏳ | Pending implementation |
-| 2 | `search_events.py` CLI and query functions support events by type / zone / track / time range, tracks by duration, and evidence lookup by event ID | ⏳ | Pending implementation |
-| 3 | Every documented query in `search_examples.md` runs against `intelligence.db` and returns exact, verified results | ⏳ | Pending implementation |
-| 4 | All evidence paths (`snapshot_path`, `crop_path`) returned by queries resolve to real, non-empty JPEG files on disk | ⏳ | Pending implementation |
-| 5 | All local CI-parity checks (`ruff check`, `ruff format --check`, `pytest`) and remote GitHub Actions CI pass 100% | ⏳ | Pending implementation |
+| 1 | `intelligence.db` loads events, tracks, trajectories, detections, and zone/line counts with a documented schema (`schema.md`) | ✅ | `intelligence.db` ingested `418` detections, `409` track observations, `7` tracks, `409` trajectories, `48` events, `3` zones, `2` lines (`ab59d74`) |
+| 2 | `search_events.py` CLI and query functions support events by type / zone / track / time range, tracks by duration, and evidence lookup by event ID | ✅ | `query_events`, `query_tracks`, `lookup_event_evidence`, and CLI verified in `tests/test_searchable_outputs.py` (`837ab8b`) |
+| 3 | Every documented query in `search_examples.md` runs against `intelligence.db` and returns exact, verified results | ✅ | `cv_projects/10_searchable_outputs/search_examples.md` generated directly from live queries (`ab59d74`) |
+| 4 | All evidence paths (`snapshot_path`, `crop_path`) returned by queries resolve to real, non-empty JPEG files on disk | ✅ | `valid_evidence_events = 48 / 48` (`all_evidence_valid = true`) in `search_summary.json` |
+| 5 | All local CI-parity checks (`ruff check`, `ruff format --check`, `pytest`) and remote GitHub Actions CI pass 100% | ✅ | `171 passed, 56 subtests passed`; `ruff check` and `ruff format --check` exit `0` |
 
 ### Validation & CI Plan
 
@@ -1293,31 +1293,49 @@ uv run --locked python cv_projects/10_searchable_outputs/scripts/search_events.p
 
 ### Micro-Task Breakdown
 
-- [ ] 1. `docs(roadmap): define Phase 10 searchable outputs scope and micro-task checklist`
-- [ ] 2. `docs(search): scaffold cv_projects/10_searchable_outputs README, schema.md, and notes.md`
-- [ ] 3. `feat(search): add default configs/search.yaml for SQLite ingestion and evidence resolution`
-- [ ] 4. `test(helpers): expose Phase 10 searchable outputs scripts directory to test suite`
-- [ ] 5. `types(search): define SearchConfig, EventSearchResult, TrackSearchResult, EvidenceLookupResult, and DatabaseSummary dataclasses`
-- [ ] 6. `test(search): add unit tests for search dataclasses and validation`
-- [ ] 7. `feat(search): implement load_search_config and save_search_config YAML helpers`
-- [ ] 8. `test(search): add unit tests for search.yaml round-trip serialization`
-- [ ] 9. `feat(search): implement SQLite schema DDL and init_intelligence_db`
-- [ ] 10. `test(search): add unit tests for init_intelligence_db schema tables and indexes`
-- [ ] 11. `feat(search): implement ingest_intelligence_db loading detections, tracks, trajectories, events, and counts`
-- [ ] 12. `test(search): add unit tests for ingest_intelligence_db row counts and idempotency`
-- [ ] 13. `feat(search): implement query_events by event_type, zone_id, track_id, time range, and min_duration`
-- [ ] 14. `test(search): add unit tests for query_events filters and combinations`
-- [ ] 15. `feat(search): implement query_tracks by duration range and path length`
-- [ ] 16. `test(search): add unit tests for query_tracks filters and ordering`
-- [ ] 17. `feat(search): implement lookup_event_evidence with on-disk snapshot and crop verification`
-- [ ] 18. `test(search): add unit tests for lookup_event_evidence path resolution`
-- [ ] 19. `feat(search): implement generate_schema_markdown and generate_search_examples_markdown`
-- [ ] 20. `test(search): add unit tests for schema and worked examples markdown generation`
-- [ ] 21. `feat(search): implement run_searchable_outputs pipeline and CLI entrypoint in search_events.py`
-- [ ] 22. `test(search): add end-to-end pipeline and CLI query tests in test_searchable_outputs.py`
-- [ ] 23. `feat(search): add exploratory notebook 01_explore_searchable_outputs.ipynb`
-- [ ] 24. `docs(search): generate real intelligence.db, schema.md, search_examples.md, and document in notes and READMEs`
-- [ ] 25. `docs(roadmap): mark Phase 10 searchable outputs completed in docs/ROADMAP.md`
+- [x] 1. `docs(roadmap): define Phase 10 searchable outputs scope and micro-task checklist` (`597e01f`)
+- [x] 2. `docs(search): scaffold cv_projects/10_searchable_outputs README, schema.md, and notes.md` (`97c81ca`)
+- [x] 3. `feat(search): add default configs/search.yaml for SQLite ingestion and evidence resolution` (`c7e9c10`)
+- [x] 4. `test(helpers): expose Phase 10 searchable outputs scripts directory to test suite` (`f53da20`)
+- [x] 5. `types(search): define SearchConfig, EventSearchResult, TrackSearchResult, EvidenceLookupResult, and DatabaseSummary dataclasses` (`188ebf3`, `82ed35a`)
+- [x] 6. `test(search): add unit tests for search dataclasses and validation` (`2709b69`)
+- [x] 7. `feat(search): implement load_search_config and save_search_config YAML helpers` (`791ff25`)
+- [x] 8. `test(search): add unit tests for search.yaml round-trip serialization` (`54336b5`)
+- [x] 9. `feat(search): implement SQLite schema DDL and init_intelligence_db` (`25b1869`, `e9180b5`)
+- [x] 10. `test(search): add unit tests for init_intelligence_db schema tables and indexes` (`b23f4aa`, `e9180b5`)
+- [x] 11. `feat(search): implement ingest_intelligence_db loading detections, tracks, trajectories, events, and counts` (`6dc2405`, `acaa97a`)
+- [x] 12. `test(search): add unit tests for ingest_intelligence_db row counts and idempotency` (`065e5ce`)
+- [x] 13. `feat(search): implement query_events by event_type, zone_id, track_id, time range, and min_duration` (`c8991a7`)
+- [x] 14. `test(search): add unit tests for query_events filters and combinations` (`0572b92`)
+- [x] 15. `feat(search): implement query_tracks by duration range and path length` (`b1c64e8`)
+- [x] 16. `test(search): add unit tests for query_tracks filters and ordering` (`998e596`)
+- [x] 17. `feat(search): implement lookup_event_evidence with on-disk snapshot and crop verification` (`e53ee09`)
+- [x] 18. `test(search): add unit tests for lookup_event_evidence path resolution` (`bd265d5`)
+- [x] 19. `feat(search): implement generate_schema_markdown and generate_search_examples_markdown` (`ab38f80`, `6791ae5`)
+- [x] 20. `test(search): add unit tests for schema and worked examples markdown generation` (`4cca3ba`)
+- [x] 21. `feat(search): implement run_searchable_outputs pipeline and CLI entrypoint in search_events.py` (`821d3ad`, `89772c4`)
+- [x] 22. `test(search): add end-to-end pipeline and CLI query tests in test_searchable_outputs.py` (`837ab8b`)
+- [x] 23. `feat(search): add exploratory notebook 01_explore_searchable_outputs.ipynb` (`14bd082`)
+- [x] 24. `docs(search): generate real intelligence.db, schema.md, search_examples.md, and document in notes and READMEs` (`ab59d74`, `5059292`, `8060650`, `c5ea2f0`)
+- [x] 25. `docs(roadmap): mark Phase 10 searchable outputs completed in docs/ROADMAP.md`
+
+### Decision Log (Phase 10)
+
+| Decision | Options Considered | Chosen & Rationale |
+|----------|-------------------|--------------------|
+| Unifying Phase 3 and Phase 4 `track_summary.csv` | (a) Ingest only one `track_summary.csv`; (b) Join Phase 3 lifespan fields (`start_frame`, `end_frame`, `duration_frames`, `observed_frames`) with Phase 4 displacement (`path_length_px`) and fall back to computing from `trajectories.csv` | **(b) Joined `tracks` table with trajectory fallback** — enables querying tracks simultaneously by duration (`[min_duration, max_duration]`) and `min_path_length_px`. |
+| Directed line-crossing `zone_id` matching | (a) Require exact `doorway_line:B->A` string in `--zone`; (b) Match `(zone_id = ? OR zone_id LIKE ?)` (`f"{zone_id}:%"`) when `--zone` has no `:` | **(b) Exact + prefix match** — allows `--zone doorway_line` to return all crossings of `doorway_line` regardless of direction while still supporting exact `--zone "doorway_line:B->A"` filters. |
+| SQLite connection management on Windows | (a) Standard `with sqlite3.connect(path) as conn:`; (b) Wrap in `contextlib.closing(sqlite3.connect(path))` | **(b) `contextlib.closing(sqlite3.connect(path))`** — `sqlite3.Connection.__exit__` does not close the file handle on Windows, which otherwise causes `PermissionError: [WinError 32]` during temporary directory cleanup. |
+
+### CI & Validation Log (Phase 10)
+
+| Command | Result | Notes |
+|---------|--------|-------|
+| `uv sync --locked` | ✅ exit 0 | clean default locked environment |
+| `uv run --locked ruff check .` | ✅ `All checks passed!` | repo-wide lint gate (67 files including notebooks) |
+| `uv run --locked ruff format --check .` | ✅ `67 files already formatted` | repo-wide format gate |
+| `uv run --locked pytest -v` | ✅ `171 passed, 56 subtests passed` | full unit + integration test suite (`test_searchable_outputs.py` + prior suites) |
+| `search_events.py --config cv_projects/10_searchable_outputs/configs/search.yaml --build` | ✅ `detections=418, track_obs=409, tracks=7, trajectories=409, events=48, zones=3, lines=2` | verified `48 / 48` event snapshots and crops on disk (`all_evidence_valid = true`) |
 
 
 
