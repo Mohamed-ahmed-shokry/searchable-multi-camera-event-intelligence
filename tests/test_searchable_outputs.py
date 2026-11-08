@@ -14,6 +14,7 @@ from search_events import (
     EvidenceLookupResult,
     SearchConfig,
     TrackSearchResult,
+    ingest_intelligence_db,
     init_intelligence_db,
     load_search_config,
     save_search_config,
@@ -137,6 +138,67 @@ class TestInitIntelligenceDb(unittest.TestCase):
                     "line_counts",
                 ):
                     self.assertIn(expected, tables)
+
+
+class TestIngestIntelligenceDb(unittest.TestCase):
+    """Test ingest_intelligence_db row counts and re-ingest idempotency."""
+
+    def test_ingest_intelligence_db_loads_all_tables_idempotently(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            (root / "detections.csv").write_text(
+                "frame_id,x1,y1,x2,y2,confidence,class\n"
+                "0,,,,,,\n"
+                "1,10.0,10.0,50.0,80.0,0.9,person\n",
+                encoding="utf-8",
+            )
+            (root / "tracks.csv").write_text(
+                "frame_id,track_id,x1,y1,x2,y2,confidence\n"
+                "1,1,10.0,10.0,50.0,80.0,0.9\n"
+                "2,1,12.0,12.0,52.0,82.0,0.92\n",
+                encoding="utf-8",
+            )
+            (root / "trajectories.csv").write_text(
+                "track_id,frame_id,timestamp,x,y\n1,1,0.1,30.0,80.0\n1,2,0.2,33.0,84.0\n",
+                encoding="utf-8",
+            )
+            (root / "events.csv").write_text(
+                "event_id,event_type,track_id,zone_id,start_time,end_time,duration_seconds,snapshot_path,crop_path\n"
+                "evt_0001,zone_entry,1,z1,0.1,0.1,0.0,snapshots/evt_0001_1.jpg,crops/evt_0001_1.jpg\n",
+                encoding="utf-8",
+            )
+            (root / "zone_counts.csv").write_text(
+                "zone_id,entry_count,exit_count,total_dwell_seconds,peak_occupancy\n"
+                "z1,1,0,2.5,1\n",
+                encoding="utf-8",
+            )
+            (root / "line_counts.csv").write_text(
+                "line_id,crossings_ab,crossings_ba,total\nl1,0,1,1\n",
+                encoding="utf-8",
+            )
+            cfg = SearchConfig(
+                detections_csv="detections.csv",
+                tracks_csv="tracks.csv",
+                tracking_summary_csv="missing_trk_sum.csv",
+                trajectories_csv="trajectories.csv",
+                trajectory_summary_csv="missing_traj_sum.csv",
+                events_csv="events.csv",
+                zone_counts_csv="zone_counts.csv",
+                line_counts_csv="line_counts.csv",
+            )
+            db_path = root / "intelligence.db"
+            summary1 = ingest_intelligence_db(db_path, cfg, project_root=root)
+            self.assertEqual(summary1.detections_count, 1)
+            self.assertEqual(summary1.track_observations_count, 2)
+            self.assertEqual(summary1.tracks_count, 1)
+            self.assertEqual(summary1.trajectories_count, 2)
+            self.assertEqual(summary1.events_count, 1)
+            self.assertEqual(summary1.zone_counts_rows, 1)
+            self.assertEqual(summary1.line_counts_rows, 1)
+
+            # Re-ingest should replace rows idempotently without duplicating
+            summary2 = ingest_intelligence_db(db_path, cfg, project_root=root)
+            self.assertEqual(summary2, summary1)
 
 
 if __name__ == "__main__":
