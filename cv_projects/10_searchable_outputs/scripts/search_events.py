@@ -130,6 +130,7 @@ class SearchConfig:
         "cv_projects/08_heatmaps_analytics/outputs/people_detection/line_counts.csv"
     )
     default_query_limit: int = 50
+    write_subproject_docs: bool = True
 
     def __post_init__(self) -> None:
         if not self.source_name.strip():
@@ -318,6 +319,9 @@ def load_search_config(path: Path | str | None = None) -> SearchConfig:
         default_query_limit=int(
             raw.get("default_query_limit", defaults.default_query_limit)
         ),
+        write_subproject_docs=bool(
+            raw.get("write_subproject_docs", defaults.write_subproject_docs)
+        ),
     )
 
 
@@ -337,6 +341,7 @@ def save_search_config(config: SearchConfig, path: Path | str) -> Path:
         "zone_counts_csv": config.zone_counts_csv,
         "line_counts_csv": config.line_counts_csv,
         "default_query_limit": config.default_query_limit,
+        "write_subproject_docs": config.write_subproject_docs,
     }
     out_path.write_text(
         yaml.safe_dump(payload, sort_keys=False),
