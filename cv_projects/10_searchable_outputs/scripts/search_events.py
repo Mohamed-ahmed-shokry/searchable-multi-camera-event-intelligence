@@ -5,7 +5,10 @@ programmatic queries for events, tracks, and visual evidence, and worked example
 from __future__ import annotations
 
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Any
+
+import yaml
 
 
 @dataclass(frozen=True, slots=True)
@@ -194,3 +197,63 @@ class DatabaseSummary:
             "zone_counts_rows": self.zone_counts_rows,
             "line_counts_rows": self.line_counts_rows,
         }
+
+
+def load_search_config(path: Path | str | None = None) -> SearchConfig:
+    """Load a SearchConfig from a YAML file, or return defaults if None."""
+    if path is None:
+        return SearchConfig()
+    config_path = Path(path)
+    if not config_path.is_file():
+        raise FileNotFoundError(f"Search config file not found: {config_path}")
+
+    raw = yaml.safe_load(config_path.read_text(encoding="utf-8"))
+    if raw is None:
+        return SearchConfig()
+    if not isinstance(raw, dict):
+        raise TypeError("Search config YAML root must be a mapping")
+
+    defaults = SearchConfig()
+    return SearchConfig(
+        source_name=str(raw.get("source_name", defaults.source_name)),
+        detections_csv=str(raw.get("detections_csv", defaults.detections_csv)),
+        tracks_csv=str(raw.get("tracks_csv", defaults.tracks_csv)),
+        tracking_summary_csv=str(
+            raw.get("tracking_summary_csv", defaults.tracking_summary_csv)
+        ),
+        trajectories_csv=str(raw.get("trajectories_csv", defaults.trajectories_csv)),
+        trajectory_summary_csv=str(
+            raw.get("trajectory_summary_csv", defaults.trajectory_summary_csv)
+        ),
+        events_csv=str(raw.get("events_csv", defaults.events_csv)),
+        evidence_root=str(raw.get("evidence_root", defaults.evidence_root)),
+        zone_counts_csv=str(raw.get("zone_counts_csv", defaults.zone_counts_csv)),
+        line_counts_csv=str(raw.get("line_counts_csv", defaults.line_counts_csv)),
+        default_query_limit=int(
+            raw.get("default_query_limit", defaults.default_query_limit)
+        ),
+    )
+
+
+def save_search_config(config: SearchConfig, path: Path | str) -> Path:
+    """Serialize a SearchConfig to YAML."""
+    out_path = Path(path)
+    out_path.parent.mkdir(parents=True, exist_ok=True)
+    payload = {
+        "source_name": config.source_name,
+        "detections_csv": config.detections_csv,
+        "tracks_csv": config.tracks_csv,
+        "tracking_summary_csv": config.tracking_summary_csv,
+        "trajectories_csv": config.trajectories_csv,
+        "trajectory_summary_csv": config.trajectory_summary_csv,
+        "events_csv": config.events_csv,
+        "evidence_root": config.evidence_root,
+        "zone_counts_csv": config.zone_counts_csv,
+        "line_counts_csv": config.line_counts_csv,
+        "default_query_limit": config.default_query_limit,
+    }
+    out_path.write_text(
+        yaml.safe_dump(payload, sort_keys=False),
+        encoding="utf-8",
+    )
+    return out_path
