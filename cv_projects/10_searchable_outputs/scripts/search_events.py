@@ -554,7 +554,7 @@ def ingest_intelligence_db(
             "zone_counts",
             "line_counts",
         ):
-            conn.execute(f"DELETE FROM {tbl}")  # noqa: S608
+            conn.execute(f"DELETE FROM {tbl}")
 
         conn.executemany(
             "INSERT INTO detections (frame_id, x1, y1, x2, y2, confidence, class_name) "
