@@ -4,13 +4,18 @@ programmatic queries for events, tracks, and visual evidence, and worked example
 
 from __future__ import annotations
 
+import csv
+import math
 import sqlite3
 from contextlib import closing
 from dataclasses import dataclass
+from itertools import pairwise
 from pathlib import Path
 from typing import Any
 
 import yaml
+
+_PROJECT_ROOT = Path(__file__).resolve().parents[3]
 
 SCHEMA_DDL = """
 CREATE TABLE IF NOT EXISTS detections (
@@ -346,3 +351,257 @@ def init_intelligence_db(db_path: Path | str) -> Path:
         conn.executescript(SCHEMA_DDL)
         conn.commit()
     return out_db
+
+
+def _resolve_optional_path(rel_or_abs: str, project_root: Path) -> Path:
+    p = Path(rel_or_abs)
+    return p if p.is_absolute() else (project_root / p)
+
+
+def ingest_intelligence_db(
+    db_path: Path | str,
+    config: SearchConfig,
+    *,
+    project_root: Path | str | None = None,
+) -> DatabaseSummary:
+    """Load detections, tracks, trajectories, events, and zone/line counts into intelligence.db."""
+    root = Path(project_root) if project_root is not None else _PROJECT_ROOT
+    out_db = init_intelligence_db(db_path)
+
+    det_path = _resolve_optional_path(config.detections_csv, root)
+    trk_path = _resolve_optional_path(config.tracks_csv, root)
+    trk_sum_path = _resolve_optional_path(config.tracking_summary_csv, root)
+    traj_path = _resolve_optional_path(config.trajectories_csv, root)
+    traj_sum_path = _resolve_optional_path(config.trajectory_summary_csv, root)
+    ev_path = _resolve_optional_path(config.events_csv, root)
+    zc_path = _resolve_optional_path(config.zone_counts_csv, root)
+    lc_path = _resolve_optional_path(config.line_counts_csv, root)
+
+    det_rows: list[tuple[int, float, float, float, float, float, str]] = []
+    if det_path.is_file():
+        with det_path.open("r", encoding="utf-8", newline="") as handle:
+            reader = csv.DictReader(handle)
+            for row in reader:
+                if not row.get("x1") or not str(row["x1"]).strip():
+                    continue
+                det_rows.append(
+                    (
+                        int(row["frame_id"]),
+                        float(row["x1"]),
+                        float(row["y1"]),
+                        float(row["x2"]),
+                        float(row["y2"]),
+                        float(row["confidence"]),
+                        str(row.get("class") or "person").strip(),
+                    )
+                )
+
+    obs_rows: list[tuple[int, int, float, float, float, float, float]] = []
+    if trk_path.is_file():
+        with trk_path.open("r", encoding="utf-8", newline="") as handle:
+            reader = csv.DictReader(handle)
+            for row in reader:
+                if not row.get("track_id") or not str(row["track_id"]).strip():
+                    continue
+                obs_rows.append(
+                    (
+                        int(row["frame_id"]),
+                        int(row["track_id"]),
+                        float(row["x1"]),
+                        float(row["y1"]),
+                        float(row["x2"]),
+                        float(row["y2"]),
+                        float(row["confidence"]),
+                    )
+                )
+
+    traj_rows: list[tuple[int, int, float, float, float]] = []
+    traj_points_by_track: dict[int, list[tuple[int, float, float, float]]] = {}
+    if traj_path.is_file():
+        with traj_path.open("r", encoding="utf-8", newline="") as handle:
+            reader = csv.DictReader(handle)
+            for row in reader:
+                if not row.get("track_id") or not str(row["track_id"]).strip():
+                    continue
+                tid = int(row["track_id"])
+                fid = int(row["frame_id"])
+                ts = float(row["timestamp"])
+                x = float(row["x"])
+                y = float(row["y"])
+                traj_rows.append((tid, fid, ts, x, y))
+                traj_points_by_track.setdefault(tid, []).append((fid, ts, x, y))
+
+    path_len_by_track: dict[int, float] = {}
+    if traj_sum_path.is_file():
+        with traj_sum_path.open("r", encoding="utf-8", newline="") as handle:
+            reader = csv.DictReader(handle)
+            for row in reader:
+                if not row.get("track_id") or not str(row["track_id"]).strip():
+                    continue
+                path_len_by_track[int(row["track_id"])] = float(row["path_length_px"])
+    else:
+        for tid, pts in traj_points_by_track.items():
+            ordered = sorted(pts, key=lambda item: item[0])
+            dist = sum(
+                math.hypot(b[2] - a[2], b[3] - a[3]) for a, b in pairwise(ordered)
+            )
+            path_len_by_track[tid] = round(dist, 2)
+
+    track_rows: list[tuple[int, int, int, int, float, int, float]] = []
+    if trk_sum_path.is_file():
+        with trk_sum_path.open("r", encoding="utf-8", newline="") as handle:
+            reader = csv.DictReader(handle)
+            for row in reader:
+                if not row.get("track_id") or not str(row["track_id"]).strip():
+                    continue
+                tid = int(row["track_id"])
+                track_rows.append(
+                    (
+                        tid,
+                        int(row["start_frame"]),
+                        int(row["end_frame"]),
+                        int(row["duration_frames"]),
+                        float(row["duration_seconds"]),
+                        int(row["observed_frames"]),
+                        float(path_len_by_track.get(tid, 0.0)),
+                    )
+                )
+    else:
+        for tid in sorted(traj_points_by_track):
+            ordered = sorted(traj_points_by_track[tid], key=lambda item: item[0])
+            sf = ordered[0][0]
+            ef = ordered[-1][0]
+            dur_f = max(1, ef - sf + 1)
+            dur_s = max(0.0, ordered[-1][1] - ordered[0][1])
+            track_rows.append(
+                (
+                    tid,
+                    sf,
+                    ef,
+                    dur_f,
+                    round(dur_s, 4),
+                    len(ordered),
+                    float(path_len_by_track.get(tid, 0.0)),
+                )
+            )
+
+    event_rows: list[tuple[str, str, int, str, float, float, float, str, str]] = []
+    if ev_path.is_file():
+        with ev_path.open("r", encoding="utf-8", newline="") as handle:
+            reader = csv.DictReader(handle)
+            for row in reader:
+                if not row.get("event_id") or not str(row["event_id"]).strip():
+                    continue
+                zid = str(
+                    row.get("zone_id") or row.get("zone_or_line_id") or ""
+                ).strip()
+                snap = str(row.get("snapshot_path") or "").strip()
+                crop = str(row.get("crop_path") or "").strip()
+                event_rows.append(
+                    (
+                        str(row["event_id"]).strip(),
+                        str(row["event_type"]).strip(),
+                        int(row["track_id"]),
+                        zid,
+                        float(row["start_time"]),
+                        float(row["end_time"]),
+                        float(row["duration_seconds"]),
+                        snap,
+                        crop,
+                    )
+                )
+
+    zc_rows: list[tuple[str, int, int, float, int]] = []
+    if zc_path.is_file():
+        with zc_path.open("r", encoding="utf-8", newline="") as handle:
+            reader = csv.DictReader(handle)
+            for row in reader:
+                if not row.get("zone_id") or not str(row["zone_id"]).strip():
+                    continue
+                zc_rows.append(
+                    (
+                        str(row["zone_id"]).strip(),
+                        int(row["entry_count"]),
+                        int(row["exit_count"]),
+                        float(row["total_dwell_seconds"]),
+                        int(row["peak_occupancy"]),
+                    )
+                )
+
+    lc_rows: list[tuple[str, int, int, int]] = []
+    if lc_path.is_file():
+        with lc_path.open("r", encoding="utf-8", newline="") as handle:
+            reader = csv.DictReader(handle)
+            for row in reader:
+                if not row.get("line_id") or not str(row["line_id"]).strip():
+                    continue
+                lc_rows.append(
+                    (
+                        str(row["line_id"]).strip(),
+                        int(row["crossings_ab"]),
+                        int(row["crossings_ba"]),
+                        int(row["total"]),
+                    )
+                )
+
+    with closing(sqlite3.connect(out_db)) as conn:
+        for tbl in (
+            "detections",
+            "track_observations",
+            "tracks",
+            "trajectories",
+            "events",
+            "zone_counts",
+            "line_counts",
+        ):
+            conn.execute(f"DELETE FROM {tbl}")  # noqa: S608
+
+        conn.executemany(
+            "INSERT INTO detections (frame_id, x1, y1, x2, y2, confidence, class_name) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?)",
+            det_rows,
+        )
+        conn.executemany(
+            "INSERT INTO track_observations (frame_id, track_id, x1, y1, x2, y2, confidence) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?)",
+            obs_rows,
+        )
+        conn.executemany(
+            "INSERT INTO tracks (track_id, start_frame, end_frame, duration_frames, "
+            "duration_seconds, observed_frames, path_length_px) VALUES (?, ?, ?, ?, ?, ?, ?)",
+            track_rows,
+        )
+        conn.executemany(
+            "INSERT INTO trajectories (track_id, frame_id, timestamp, x, y) "
+            "VALUES (?, ?, ?, ?, ?)",
+            traj_rows,
+        )
+        conn.executemany(
+            "INSERT INTO events (event_id, event_type, track_id, zone_id, start_time, "
+            "end_time, duration_seconds, snapshot_path, crop_path) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            event_rows,
+        )
+        conn.executemany(
+            "INSERT INTO zone_counts (zone_id, entry_count, exit_count, "
+            "total_dwell_seconds, peak_occupancy) VALUES (?, ?, ?, ?, ?)",
+            zc_rows,
+        )
+        conn.executemany(
+            "INSERT INTO line_counts (line_id, crossings_ab, crossings_ba, total) "
+            "VALUES (?, ?, ?, ?)",
+            lc_rows,
+        )
+        conn.commit()
+
+    return DatabaseSummary(
+        db_path=str(out_db),
+        source_name=config.source_name,
+        detections_count=len(det_rows),
+        track_observations_count=len(obs_rows),
+        tracks_count=len(track_rows),
+        trajectories_count=len(traj_rows),
+        events_count=len(event_rows),
+        zone_counts_rows=len(zc_rows),
+        line_counts_rows=len(lc_rows),
+    )
