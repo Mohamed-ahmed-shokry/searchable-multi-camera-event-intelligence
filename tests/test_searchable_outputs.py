@@ -18,6 +18,7 @@ from search_events import (
     init_intelligence_db,
     load_search_config,
     query_events,
+    query_tracks,
     save_search_config,
 )
 
@@ -244,6 +245,53 @@ class TestQueryEvents(unittest.TestCase):
 
             by_dur = query_events(db_path, min_duration=2.0)
             self.assertEqual([e.event_id for e in by_dur], ["evt_0004"])
+
+
+class TestQueryTracks(unittest.TestCase):
+    """Test query_tracks filtering by duration range, path length, and event counts."""
+
+    def test_query_tracks_filters_and_ordering(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            (root / "track_summary.csv").write_text(
+                "track_id,start_frame,end_frame,duration_frames,duration_seconds,observed_frames\n"
+                "1,19,75,57,4.7500,57\n"
+                "3,180,249,70,5.8333,70\n"
+                "9,523,559,37,3.0833,37\n",
+                encoding="utf-8",
+            )
+            (root / "traj_summary.csv").write_text(
+                "track_id,path_length_px,duration_seconds,frame_count\n"
+                "1,553.84,4.750,57\n"
+                "3,538.99,5.833,70\n"
+                "9,470.64,3.083,37\n",
+                encoding="utf-8",
+            )
+            (root / "events.csv").write_text(
+                "event_id,event_type,track_id,zone_id,start_time,end_time,duration_seconds,snapshot_path,crop_path\n"
+                "evt_0001,zone_entry,1,entrance_area,1.5,1.5,0.0,s1.jpg,c1.jpg\n"
+                "evt_0002,dwell_time_event,1,entrance_area,1.5,3.0,1.5,s2.jpg,c2.jpg\n",
+                encoding="utf-8",
+            )
+            cfg = SearchConfig(
+                detections_csv="missing.csv",
+                tracks_csv="missing.csv",
+                tracking_summary_csv="track_summary.csv",
+                trajectories_csv="missing.csv",
+                trajectory_summary_csv="traj_summary.csv",
+                events_csv="events.csv",
+                zone_counts_csv="missing.csv",
+                line_counts_csv="missing.csv",
+            )
+            db_path = root / "intelligence.db"
+            ingest_intelligence_db(db_path, cfg, project_root=root)
+
+            long_tracks = query_tracks(db_path, min_duration=4.5)
+            self.assertEqual([t.track_id for t in long_tracks], [3, 1])
+            self.assertEqual(long_tracks[1].event_count, 2)
+
+            far_tracks = query_tracks(db_path, min_path_length_px=540.0)
+            self.assertEqual([t.track_id for t in far_tracks], [1])
 
 
 if __name__ == "__main__":
