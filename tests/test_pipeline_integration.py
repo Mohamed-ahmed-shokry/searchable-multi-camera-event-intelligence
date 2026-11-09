@@ -15,6 +15,14 @@ from event_intelligence.detection import (
     read_detections_csv,
     write_detections_csv,
 )
+from event_intelligence.tracking import (
+    FrameTracks,
+    TrackDetection,
+    compute_track_summaries,
+    evaluate_tracking,
+    read_tracks_csv,
+    write_tracks_csv,
+)
 from event_intelligence.video import (
     VideoSource,
     inspect_source,
@@ -65,6 +73,33 @@ class TestPromotedDetectionPackage(unittest.TestCase):
             self.assertEqual(list(rows[0].keys()), DETECTIONS_CSV_HEADER)
             self.assertAlmostEqual(rows[0]["confidence"], 0.91)
             self.assertIsNone(rows[1]["x1"])
+
+
+class TestPromotedTrackingPackage(unittest.TestCase):
+    """Test event_intelligence.tracking CSV round-trip, summaries, and CLEAR-MOT evaluation."""
+
+    def test_tracks_csv_summaries_and_evaluate_tracking(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            csv_path = Path(tmp) / "tracks.csv"
+            ft0 = FrameTracks(0, [TrackDetection(0, 1, 10.0, 20.0, 40.0, 80.0, 0.95)])
+            ft1 = FrameTracks(1, [TrackDetection(1, 1, 12.0, 20.0, 42.0, 80.0, 0.92)])
+            write_tracks_csv(csv_path, [ft0, ft1])
+            loaded = read_tracks_csv(csv_path)
+            self.assertEqual(len(loaded), 2)
+
+            summaries = compute_track_summaries(loaded, fps=10.0)
+            self.assertEqual(len(summaries), 1)
+            self.assertEqual(summaries[0].duration_frames, 2)
+            self.assertAlmostEqual(summaries[0].duration_seconds, 0.2)
+
+            gt = {
+                0: [TrackDetection(0, 10, 10.0, 20.0, 40.0, 80.0, 1.0)],
+                1: [TrackDetection(1, 10, 12.0, 20.0, 42.0, 80.0, 1.0)],
+            }
+            metrics = evaluate_tracking(gt, loaded)
+            self.assertEqual(metrics["mota"], 1.0)
+            self.assertEqual(metrics["idf1"], 1.0)
+            self.assertEqual(metrics["id_switches"], 0)
 
 
 if __name__ == "__main__":
