@@ -1337,6 +1337,127 @@ uv run --locked python cv_projects/10_searchable_outputs/scripts/search_events.p
 | `uv run --locked pytest -v` | ✅ `171 passed, 56 subtests passed` | full unit + integration test suite (`test_searchable_outputs.py` + prior suites) |
 | `search_events.py --config cv_projects/10_searchable_outputs/configs/search.yaml --build` | ✅ `detections=418, track_obs=409, tracks=7, trajectories=409, events=48, zones=3, lines=2` | verified `48 / 48` event snapshots and crops on disk (`all_evidence_valid = true`) |
 
+---
+
+## Current Phase: 11 — CV Pipeline Integration (`src/event_intelligence/`) (2026-11-09)
+
+### Objective
+
+Consolidate the ten proven experiments from `cv_projects/01..10` into one coherent, reusable CV
+package in `src/event_intelligence/`, runnable end-to-end with a single command:
+
+```bash
+uv run --locked python -m event_intelligence.pipeline --video <source> --config configs/pipeline.yaml
+```
+
+while leaving `cv_projects/` experiments completely intact as the historical record.
+
+### Scope
+
+1. Configure `pythonpath = ["src"]` in `pyproject.toml` and expose `src/event_intelligence/` in
+   `tests/helpers.py` and `tests/conftest.py` without modifying `uv.lock`.
+2. Promote each subproject's proven logic into `src/event_intelligence/` via dedicated,
+   self-contained subpackages (`Promote, don't rewrite`):
+   - `01_video_inspection` → `src/event_intelligence/video/`
+   - `02_person_detection` → `src/event_intelligence/detection/`
+   - `03_person_tracking` → `src/event_intelligence/tracking/`
+   - `04_trajectory_extraction` → `src/event_intelligence/trajectories/`
+   - `05_zone_line_reasoning` → `src/event_intelligence/spatial/`
+   - `06_dwell_time_events` → `src/event_intelligence/events/`
+   - `07_visual_evidence` → `src/event_intelligence/evidence/`
+   - `08_heatmaps_analytics` → `src/event_intelligence/analytics/`
+   - `09_cv_evaluation` → `src/event_intelligence/evaluation/`
+   - `10_searchable_outputs` → `src/event_intelligence/storage/`
+3. Implement `src/event_intelligence/pipeline.py` and `src/event_intelligence/__main__.py` plus
+   `configs/pipeline.yaml` so a single command (`python -m event_intelligence.pipeline --video
+   <source> --config configs/pipeline.yaml`) executes the full pipeline (supporting both live
+   inference and precomputed `detections.csv` / `tracks.csv` in the default locked environment)
+   and writes the complete artifact bundle into `outputs/runs/<run_id>/`:
+   - `video_info.json`
+   - `detections.csv`
+   - `tracks.csv` and `track_summary.csv`
+   - `trajectories.csv`
+   - `zone_line_events.csv`
+   - `events.csv` (enriched 9-column schema with `snapshot_path` and `crop_path`)
+   - `snapshots/` and `crops/`
+   - `heatmap.png`, `analytics_summary.json`, `zone_counts.csv`, and `line_counts.csv`
+   - `annotated_video.mp4`
+   - `intelligence.db`
+   - `run_config.yaml` (frozen copy of the pipeline configuration used)
+4. Add unit and integration tests in `tests/test_pipeline_integration.py` covering module
+   promotions, geometry/trajectory/event/CSV schema invariants, frozen `run_config.yaml`, and
+   end-to-end execution of `event_intelligence.pipeline` on both sequence and video sources.
+5. Verify real end-to-end execution of `python -m event_intelligence.pipeline` on both test
+   sources (`data/raw/mot17/MOT17-11-FRCNN` and `data/raw/surveillance/people-detection.mp4`) and
+   document results in `README.md` and `docs/ROADMAP.md`.
+
+### Acceptance Criteria
+
+| # | Criterion | Status | Evidence |
+|---|-----------|--------|----------|
+| 1 | All 10 `cv_projects/` capabilities are promoted to `src/event_intelligence/` (`video`, `detection`, `tracking`, `trajectories`, `spatial`, `events`, `evidence`, `analytics`, `evaluation`, `storage`) with `cv_projects/` experiments left intact | ⏳ | Pending implementation |
+| 2 | Single pipeline config (`configs/pipeline.yaml`) and entry point (`python -m event_intelligence.pipeline --video <source> --config configs/pipeline.yaml`) produce the complete artifact set including frozen `run_config.yaml` and `intelligence.db` | ⏳ | Pending implementation |
+| 3 | Full pipeline runs end-to-end on both test sources (`MOT17-11-FRCNN` sequence and `people-detection.mp4` surveillance clip) producing verified artifacts matching experiment outputs | ⏳ | Pending implementation |
+| 4 | `pytest` passes on promoted package modules, geometry, trajectory math, event state machine, CSV schemas, and end-to-end pipeline runs (`tests/test_pipeline_integration.py`) | ⏳ | Pending implementation |
+| 5 | All local CI-parity checks (`ruff check`, `ruff format --check`, `pytest`) and remote GitHub Actions CI pass 100% | ⏳ | Pending implementation |
+
+### Validation & CI Plan
+
+```bash
+uv sync --locked
+uv run --locked ruff check .
+uv run --locked ruff format --check .
+uv run --locked pytest -v
+# phase-specific end-to-end execution on both sources:
+uv run --locked python -m event_intelligence.pipeline \
+    --video data/raw/surveillance/people-detection.mp4 \
+    --config configs/pipeline.yaml \
+    --run-id people_detection
+uv run --locked python -m event_intelligence.pipeline \
+    --video data/raw/mot17/MOT17-11-FRCNN \
+    --config configs/pipeline_mot17.yaml \
+    --run-id mot17_11_frcnn
+```
+
+### Exclusions
+
+- **Productization (`Phase 12` — FastAPI backend, React dashboard, auth, job queue, RTSP):**
+  Explicitly deferred to Track C (Phase 12) per `docs/project_phases.md`.
+
+### Micro-Task Breakdown
+
+- [ ] 1. `docs(roadmap): define Phase 11 CV pipeline integration scope and micro-task checklist`
+- [ ] 2. `build(pyproject): add src to pytest pythonpath and expose src in test helpers`
+- [ ] 3. `feat(core): create src/event_intelligence package root`
+- [ ] 4. `refactor(video): promote Phase 1 video inspection and VideoSource to src/event_intelligence/video`
+- [ ] 5. `test(video): add unit tests for promoted event_intelligence.video package`
+- [ ] 6. `refactor(detection): promote Phase 2 person detection logic to src/event_intelligence/detection`
+- [ ] 7. `test(detection): add unit tests for promoted event_intelligence.detection package`
+- [ ] 8. `refactor(tracking): promote Phase 3 person tracking and MOT evaluation to src/event_intelligence/tracking`
+- [ ] 9. `test(tracking): add unit tests for promoted event_intelligence.tracking package`
+- [ ] 10. `refactor(trajectories): promote Phase 4 trajectory extraction to src/event_intelligence/trajectories`
+- [ ] 11. `test(trajectories): add unit tests for promoted event_intelligence.trajectories package`
+- [ ] 12. `refactor(spatial): promote Phase 5 zone and line reasoning to src/event_intelligence/spatial`
+- [ ] 13. `test(spatial): add unit tests for promoted event_intelligence.spatial package`
+- [ ] 14. `refactor(events): promote Phase 6 dwell-time state machine to src/event_intelligence/events`
+- [ ] 15. `test(events): add unit tests for promoted event_intelligence.events package`
+- [ ] 16. `refactor(evidence): promote Phase 7 visual evidence extraction to src/event_intelligence/evidence`
+- [ ] 17. `test(evidence): add unit tests for promoted event_intelligence.evidence package`
+- [ ] 18. `refactor(analytics): promote Phase 8 heatmaps and analytics to src/event_intelligence/analytics`
+- [ ] 19. `test(analytics): add unit tests for promoted event_intelligence.analytics package`
+- [ ] 20. `refactor(evaluation): promote Phase 9 CV evaluation to src/event_intelligence/evaluation`
+- [ ] 21. `test(evaluation): add unit tests for promoted event_intelligence.evaluation package`
+- [ ] 22. `refactor(storage): promote Phase 10 SQLite searchable outputs to src/event_intelligence/storage`
+- [ ] 23. `test(storage): add unit tests for promoted event_intelligence.storage package`
+- [ ] 24. `feat(config): add configs/pipeline.yaml and configs/pipeline_mot17.yaml for end-to-end runs`
+- [ ] 25. `types(pipeline): define PipelineConfig and PipelineRunResult dataclasses in event_intelligence.pipeline`
+- [ ] 26. `feat(pipeline): implement load_pipeline_config and save_pipeline_config YAML helpers`
+- [ ] 27. `feat(pipeline): implement run_pipeline orchestrating video -> vision -> behavior -> events -> storage`
+- [ ] 28. `feat(pipeline): implement CLI entrypoint in event_intelligence.pipeline and __main__.py`
+- [ ] 29. `test(pipeline): add end-to-end pipeline and CLI tests on video and MOT sequence fixtures`
+- [ ] 30. `docs(readme): execute pipeline on people-detection.mp4 and MOT17-11-FRCNN and document Phase 11`
+- [ ] 31. `docs(roadmap): mark Phase 11 CV pipeline integration completed in docs/ROADMAP.md`
+
 
 
 
