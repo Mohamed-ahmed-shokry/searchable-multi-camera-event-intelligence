@@ -124,6 +124,10 @@ uv run --locked python cv_projects/09_cv_evaluation/scripts/evaluate_pipeline.py
 # Run Phase 10 SQLite ingestion and CLI event/track/evidence search
 uv run --locked python cv_projects/10_searchable_outputs/scripts/search_events.py --config cv_projects/10_searchable_outputs/configs/search.yaml --output-dir cv_projects/10_searchable_outputs/outputs/people_detection --build
 uv run --locked python cv_projects/10_searchable_outputs/scripts/search_events.py --db cv_projects/10_searchable_outputs/outputs/people_detection/intelligence.db --event-type dwell_time_event --zone right_aisle
+
+# Run Phase 11 unified end-to-end CV pipeline (video -> vision -> behavior -> events -> storage)
+uv run --locked python -m event_intelligence.pipeline --video data/fallback_clips/people-detection.mp4 --config configs/pipeline.yaml
+uv run --locked python -m event_intelligence.pipeline --video data/mot17/MOT17-11-FRCNN --config configs/pipeline_mot17.yaml
 ```
 
 The two detection extras conflict intentionally; do not use `--all-extras`.
@@ -350,7 +354,7 @@ These can be valuable later, but the first priority is a working CV intelligence
 
 ## Repository Status
 
-The repository has completed **Phase 0 (Foundation)**, **Phase 1 (Video Inspection & Dataset Validation)**, **Phase 2 (Person Detection)**, **Phase 3 (Person Tracking & Early Quantitative MOT17 Checkpoint)**, **Phase 4 (Trajectory Extraction)**, **Phase 5 (Zone and Line Reasoning)**, **Phase 6 (Dwell-Time Events)**, **Phase 7 (Visual Evidence)**, **Phase 8 (Heatmaps and Analytics)**, **Phase 9 (CV Evaluation)**, and **Phase 10 (Searchable Outputs)**.
+The repository has completed **Phase 0 (Foundation)**, **Phase 1 (Video Inspection & Dataset Validation)**, **Phase 2 (Person Detection)**, **Phase 3 (Person Tracking & Early Quantitative MOT17 Checkpoint)**, **Phase 4 (Trajectory Extraction)**, **Phase 5 (Zone and Line Reasoning)**, **Phase 6 (Dwell-Time Events)**, **Phase 7 (Visual Evidence)**, **Phase 8 (Heatmaps and Analytics)**, **Phase 9 (CV Evaluation)**, **Phase 10 (Searchable Outputs)**, and **Phase 11 (CV Pipeline Integration)**.
 
 Completed capabilities:
 
@@ -364,11 +368,12 @@ Completed capabilities:
 - `cv_projects/08_heatmaps_analytics/` — 2D spatial trajectory density accumulation with per-track-cell stationary capping, Gaussian smoothing, reference-frame heatmap overlay (`heatmap.png`), per-zone counts (`zone_counts.csv`), per-line directional counts (`line_counts.csv`), track duration distributions, and `analytics_summary.json`
 - `cv_projects/09_cv_evaluation/` — quantitative MOT17 evaluation (`Precision`, `Recall`, `F1`, `MOTA`, `IDF1`, `IDSW`), runtime FPS benchmark, qualitative surveillance clip error taxonomy (`false_positive`, `false_negative`, `id_switch`, `boundary_jitter`, `event_rule_edge_case`), annotated failure examples (`failure_examples/`), and structured `evaluation_report.md`
 - `cv_projects/10_searchable_outputs/` — normalized 7-table SQLite database (`intelligence.db`), CLI and programmatic query engine (`search_events.py`), schema documentation (`schema.md`), and worked query examples (`search_examples.md`)
+- `src/event_intelligence/` — consolidated end-to-end CV pipeline (`video`, `detection`, `tracking`, `trajectories`, `spatial`, `events`, `evidence`, `analytics`, `evaluation`, `storage`, `pipeline`) runnable via `uv run --locked python -m event_intelligence.pipeline --video <source> --config configs/pipeline.yaml`
 
 Next recommended step:
 
 ```text
-Start Phase 11 — CV Pipeline Integration (src/event_intelligence/)
+Phase 12 — Productization later (deferred until explicitly requested)
 ```
 
 ## License
