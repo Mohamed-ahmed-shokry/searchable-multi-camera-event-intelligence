@@ -15,6 +15,14 @@ from event_intelligence.detection import (
     read_detections_csv,
     write_detections_csv,
 )
+from event_intelligence.spatial import (
+    LineSpec,
+    SceneConfig,
+    ZoneSpec,
+    check_line_crossing,
+    evaluate_scene_signals,
+    point_in_zone,
+)
 from event_intelligence.tracking import (
     FrameTracks,
     TrackDetection,
@@ -24,6 +32,7 @@ from event_intelligence.tracking import (
     write_tracks_csv,
 )
 from event_intelligence.trajectories import (
+    TrajectoryPoint,
     compute_anchor_point,
     compute_trajectory_summaries,
     read_trajectories_csv,
@@ -130,6 +139,34 @@ class TestPromotedTrajectoriesPackage(unittest.TestCase):
             write_trajectories_csv(csv_path, smoothed)
             reloaded = read_trajectories_csv(csv_path)
             self.assertEqual(len(reloaded[1]), 2)
+
+
+class TestPromotedSpatialPackage(unittest.TestCase):
+    """Test event_intelligence.spatial point-in-polygon and directional line crossings."""
+
+    def test_point_in_zone_and_line_crossing(self) -> None:
+        zone = ZoneSpec(
+            id="lobby",
+            polygon=((0.0, 0.0), (100.0, 0.0), (100.0, 100.0), (0.0, 100.0)),
+        )
+        line = LineSpec(id="gate", points=((0.0, 50.0), (100.0, 50.0)))
+        self.assertTrue(point_in_zone(50.0, 50.0, zone))
+        self.assertFalse(point_in_zone(150.0, 50.0, zone))
+        self.assertEqual(check_line_crossing((50.0, 20.0), (50.0, 80.0), line), "A->B")
+        self.assertEqual(check_line_crossing((50.0, 80.0), (50.0, 20.0), line), "B->A")
+
+        scene = SceneConfig(zones=(zone,), lines=(line,))
+        trajs = {
+            1: [
+                TrajectoryPoint(1, 0, 0.0, 50.0, 20.0),
+                TrajectoryPoint(1, 1, 0.1, 50.0, 80.0),
+                TrajectoryPoint(1, 2, 0.2, 150.0, 80.0),
+            ]
+        }
+        sigs = evaluate_scene_signals(trajs, scene)
+        self.assertEqual(
+            [s.signal_type for s in sigs], ["zone_enter", "line_cross", "zone_exit"]
+        )
 
 
 if __name__ == "__main__":
