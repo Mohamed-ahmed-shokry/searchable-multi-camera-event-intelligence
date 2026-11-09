@@ -264,6 +264,7 @@ class TestPromotedAnalyticsPackage(unittest.TestCase):
             frame_height=48,
             grid_bin_size_px=16,
         )
+        self.assertEqual(raw_grid.shape, (3, 4))
         self.assertEqual(full_res.shape, (48, 64))
         norm = smooth_and_normalize_heatmap(full_res, gaussian_sigma_px=4.0)
         self.assertAlmostEqual(float(norm.max()), 1.0, places=4)
