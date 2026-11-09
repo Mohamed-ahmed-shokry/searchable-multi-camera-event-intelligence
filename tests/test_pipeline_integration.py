@@ -9,6 +9,12 @@ from pathlib import Path
 import numpy as np
 from helpers import make_sequence, make_video
 
+from event_intelligence.analytics import (
+    accumulate_trajectory_grid,
+    compute_line_counts,
+    compute_zone_counts,
+    smooth_and_normalize_heatmap,
+)
 from event_intelligence.detection import (
     DETECTIONS_CSV_HEADER,
     Detection,
@@ -242,6 +248,35 @@ class TestPromotedEvidencePackage(unittest.TestCase):
             loaded = read_evidence_events_csv(csv_path)
             self.assertEqual(len(loaded), 1)
             self.assertEqual(loaded[0].snapshot_path, "snapshots/evt_0001_1.jpg")
+
+
+class TestPromotedAnalyticsPackage(unittest.TestCase):
+    """Test event_intelligence.analytics heatmap accumulation and zone/line counts."""
+
+    def test_heatmap_grid_and_zone_line_counts(self) -> None:
+        pts = [
+            TrajectoryPoint(1, 0, 0.0, 20.0, 20.0),
+            TrajectoryPoint(1, 1, 0.1, 22.0, 22.0),
+        ]
+        raw_grid, full_res = accumulate_trajectory_grid(
+            pts,
+            frame_width=64,
+            frame_height=48,
+            grid_bin_size_px=16,
+        )
+        self.assertEqual(full_res.shape, (48, 64))
+        norm = smooth_and_normalize_heatmap(full_res, gaussian_sigma_px=4.0)
+        self.assertAlmostEqual(float(norm.max()), 1.0, places=4)
+
+        events = [
+            EventRecord("evt_1", "zone_entry", 1, "lobby", 0.0, 0.0, 0.0),
+            EventRecord("evt_2", "dwell_time_event", 1, "lobby", 0.0, 2.0, 2.0),
+            EventRecord("evt_3", "line_crossing", 1, "gate:A->B", 1.0, 1.0, 0.0),
+        ]
+        z_counts = compute_zone_counts(events, trajectory_points=pts)
+        l_counts = compute_line_counts(events)
+        self.assertEqual(z_counts[0].entry_count, 1)
+        self.assertEqual(l_counts[0].crossings_ab, 1)
 
 
 if __name__ == "__main__":
