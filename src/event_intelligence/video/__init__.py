@@ -14,7 +14,7 @@ _SCRIPTS = (
 if str(_SCRIPTS) not in sys.path:
     sys.path.insert(0, str(_SCRIPTS))
 
-from inspect_video import (  # noqa: E402
+from inspect_video import (
     CONTACT_SHEET_COLS,
     MAX_SAMPLE_COUNT,
     SAMPLE_COUNT,
@@ -28,14 +28,14 @@ from inspect_video import (  # noqa: E402
     write_image,
     write_json,
 )
-from validate_dataset import (  # noqa: E402
+from validate_dataset import (
     MOT17_SPECS,
     check_clip_entry,
     check_mot17_entry,
     mot17_base_sequence,
     validate_video_info,
 )
-from video_source import VideoMetadata, VideoSource  # noqa: E402
+from video_source import VideoMetadata, VideoSource
 
 __all__ = [
     "CONTACT_SHEET_COLS",
