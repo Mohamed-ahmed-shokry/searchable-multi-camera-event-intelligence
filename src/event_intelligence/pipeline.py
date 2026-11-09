@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import argparse
 import json
 import time
 from collections.abc import Mapping
@@ -643,3 +644,123 @@ def run_pipeline(
         run_config_path=str(run_config_path),
         elapsed_seconds=elapsed,
     )
+
+
+def build_parser() -> argparse.ArgumentParser:
+    """Build the CLI argument parser for python -m event_intelligence.pipeline."""
+    parser = argparse.ArgumentParser(
+        description=(
+            "Run the complete Searchable Multi-Camera Event Intelligence CV pipeline "
+            "end-to-end into outputs/runs/<run_id>/."
+        )
+    )
+    parser.add_argument(
+        "--video",
+        type=Path,
+        required=True,
+        help="Path to the input video file or MOT17 frame-sequence directory.",
+    )
+    parser.add_argument(
+        "--config",
+        type=Path,
+        default=Path("configs/pipeline.yaml"),
+        help="Path to pipeline YAML configuration (default: configs/pipeline.yaml).",
+    )
+    parser.add_argument(
+        "--output-root",
+        type=Path,
+        default=None,
+        help="Base directory for run outputs (default: outputs/runs).",
+    )
+    parser.add_argument(
+        "--run-id",
+        type=str,
+        default=None,
+        help="Optional explicit run identifier (writes into <output-root>/<run-id>/).",
+    )
+    parser.add_argument(
+        "--max-frames",
+        type=int,
+        default=None,
+        help="Optional cap on the number of frames to process.",
+    )
+    parser.add_argument(
+        "--no-video",
+        action="store_true",
+        help="Skip writing annotated_video.mp4.",
+    )
+    parser.add_argument(
+        "--json",
+        action="store_true",
+        help="Print PipelineRunResult as JSON.",
+    )
+    return parser
+
+
+def main(argv: list[str] | None = None) -> int:
+    """CLI entrypoint for python -m event_intelligence.pipeline."""
+    parser = build_parser()
+    args = parser.parse_args(argv)
+
+    base_cfg = (
+        load_pipeline_config(args.config)
+        if args.config is not None and args.config.is_file()
+        else PipelineConfig()
+    )
+    cfg = PipelineConfig(
+        model_name=base_cfg.model_name,
+        confidence_threshold=base_cfg.confidence_threshold,
+        iou_threshold=base_cfg.iou_threshold,
+        tracker_config=base_cfg.tracker_config,
+        device=base_cfg.device,
+        precomputed_detections_csv=base_cfg.precomputed_detections_csv,
+        precomputed_tracks_csv=base_cfg.precomputed_tracks_csv,
+        scene_config_path=base_cfg.scene_config_path,
+        anchor=base_cfg.anchor,
+        smoothing_window=base_cfg.smoothing_window,
+        max_trail_length=base_cfg.max_trail_length,
+        min_dwell_seconds=base_cfg.min_dwell_seconds,
+        min_entry_frames=base_cfg.min_entry_frames,
+        grace_frames=base_cfg.grace_frames,
+        line_cooldown_frames=base_cfg.line_cooldown_frames,
+        include_line_crossings=base_cfg.include_line_crossings,
+        per_zone_min_dwell_seconds=base_cfg.per_zone_min_dwell_seconds,
+        best_frame_strategy=base_cfg.best_frame_strategy,
+        crop_padding_ratio=base_cfg.crop_padding_ratio,
+        min_padding_px=base_cfg.min_padding_px,
+        jpeg_quality=base_cfg.jpeg_quality,
+        grid_bin_size_px=base_cfg.grid_bin_size_px,
+        gaussian_sigma_px=base_cfg.gaussian_sigma_px,
+        normalization_mode=base_cfg.normalization_mode,
+        max_points_per_track_cell=base_cfg.max_points_per_track_cell,
+        colormap=base_cfg.colormap,
+        reference_frame_index=base_cfg.reference_frame_index,
+        inspection_sample_count=base_cfg.inspection_sample_count,
+        save_annotated_video=(
+            False if args.no_video else base_cfg.save_annotated_video
+        ),
+        max_frames=(
+            args.max_frames if args.max_frames is not None else base_cfg.max_frames
+        ),
+    )
+
+    result = run_pipeline(
+        args.video,
+        cfg,
+        output_root=args.output_root,
+        run_id=args.run_id,
+    )
+    if args.json:
+        print(json.dumps(result.to_dict(), indent=2))
+    else:
+        print(
+            f"Completed pipeline run '{result.run_id}' -> {result.run_dir} "
+            f"(frames={result.processed_frames}, detections={result.detections_count}, "
+            f"tracks={result.tracks_count}, events={result.events_count}, "
+            f"elapsed={result.elapsed_seconds:.2f}s)"
+        )
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())
