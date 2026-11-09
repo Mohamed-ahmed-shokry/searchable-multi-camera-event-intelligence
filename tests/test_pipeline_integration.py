@@ -2,8 +2,11 @@
 
 from __future__ import annotations
 
+import io
+import json
 import tempfile
 import unittest
+from contextlib import redirect_stdout
 from pathlib import Path
 
 import numpy as np
@@ -41,6 +44,15 @@ from event_intelligence.evidence import (
     select_best_frame_for_event,
     write_evidence_events_csv,
 )
+from event_intelligence.pipeline import (
+    PipelineConfig,
+    load_pipeline_config,
+    run_pipeline,
+    save_pipeline_config,
+)
+from event_intelligence.pipeline import (
+    main as pipeline_main,
+)
 from event_intelligence.spatial import (
     LineSpec,
     SceneConfig,
@@ -48,6 +60,7 @@ from event_intelligence.spatial import (
     check_line_crossing,
     evaluate_scene_signals,
     point_in_zone,
+    save_scene_config,
 )
 from event_intelligence.storage import (
     SearchConfig,
@@ -339,6 +352,115 @@ class TestPromotedStoragePackage(unittest.TestCase):
             self.assertEqual(summary.events_count, 1)
             self.assertEqual(len(query_events(db_path, zone_id="lobby")), 1)
             self.assertEqual(len(query_tracks(db_path, min_duration=5.0)), 1)
+
+
+class TestEndToEndPipelineAndCli(unittest.TestCase):
+    """Test PipelineConfig, run_pipeline, and CLI main() on video and MOT17 sequence fixtures."""
+
+    def test_pipeline_config_round_trip_and_validation(self) -> None:
+        cfg = PipelineConfig(min_dwell_seconds=0.1, smoothing_window=2)
+        with self.assertRaises(ValueError):
+            PipelineConfig(confidence_threshold=0.0)
+        with self.assertRaises(ValueError):
+            PipelineConfig(anchor="invalid")
+        with self.assertRaises(ValueError):
+            PipelineConfig(best_frame_strategy="invalid")
+
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "pipeline.yaml"
+            save_pipeline_config(cfg, path)
+            reloaded = load_pipeline_config(path)
+            self.assertEqual(reloaded.min_dwell_seconds, 0.1)
+            self.assertEqual(reloaded.smoothing_window, 2)
+
+    def test_run_pipeline_and_cli_on_video_and_mot_sequence(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            vid_path = make_video(root, name="clip.avi", count=5)
+            seq_path = make_sequence(root, name="MOT17-11-FRCNN", count=5)
+
+            scene = SceneConfig(
+                zones=(
+                    ZoneSpec(
+                        id="plaza",
+                        polygon=((0.0, 0.0), (60.0, 0.0), (60.0, 45.0), (0.0, 45.0)),
+                    ),
+                ),
+                lines=(LineSpec(id="gate", points=((0.0, 25.0), (60.0, 25.0))),),
+            )
+            scene_yaml = save_scene_config(root / "scene.yaml", scene)
+
+            tracks_csv = write_tracks_csv(
+                root / "tracks.csv",
+                [
+                    FrameTracks(
+                        0, [TrackDetection(0, 1, 10.0, 10.0, 20.0, 20.0, 0.92)]
+                    ),
+                    FrameTracks(
+                        1, [TrackDetection(1, 1, 10.0, 15.0, 20.0, 30.0, 0.94)]
+                    ),
+                    FrameTracks(
+                        2, [TrackDetection(2, 1, 10.0, 15.0, 20.0, 32.0, 0.95)]
+                    ),
+                ],
+            )
+
+            cfg = PipelineConfig(
+                precomputed_tracks_csv=str(tracks_csv),
+                scene_config_path=str(scene_yaml),
+                min_dwell_seconds=0.1,
+                smoothing_window=1,
+            )
+            cfg_yaml = save_pipeline_config(cfg, root / "pipeline.yaml")
+            out_root = root / "runs"
+
+            res_vid = run_pipeline(
+                vid_path,
+                cfg,
+                output_root=out_root,
+                run_id="vid_run",
+                project_root=root,
+            )
+            vid_dir = Path(res_vid.run_dir)
+            for fname in (
+                "video_info.json",
+                "detections.csv",
+                "tracks.csv",
+                "track_summary.csv",
+                "trajectories.csv",
+                "zone_line_events.csv",
+                "events.csv",
+                "heatmap.png",
+                "analytics_summary.json",
+                "zone_counts.csv",
+                "line_counts.csv",
+                "annotated_video.mp4",
+                "intelligence.db",
+                "run_config.yaml",
+            ):
+                self.assertTrue((vid_dir / fname).is_file(), f"Missing {fname}")
+            self.assertGreaterEqual(res_vid.events_count, 2)
+
+            # Run via CLI on MOT sequence
+            buf = io.StringIO()
+            with redirect_stdout(buf):
+                rc = pipeline_main(
+                    [
+                        "--video",
+                        str(seq_path),
+                        "--config",
+                        str(cfg_yaml),
+                        "--output-root",
+                        str(out_root),
+                        "--run-id",
+                        "seq_run",
+                        "--json",
+                    ]
+                )
+            self.assertEqual(rc, 0)
+            payload = json.loads(buf.getvalue())
+            self.assertEqual(payload["run_id"], "seq_run")
+            self.assertTrue((out_root / "seq_run" / "intelligence.db").is_file())
 
 
 if __name__ == "__main__":
