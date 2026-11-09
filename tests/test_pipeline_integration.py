@@ -15,6 +15,11 @@ from event_intelligence.detection import (
     read_detections_csv,
     write_detections_csv,
 )
+from event_intelligence.events import (
+    EventConfig,
+    ZoneDwellStateMachine,
+    evaluate_dwell_events,
+)
 from event_intelligence.spatial import (
     LineSpec,
     SceneConfig,
@@ -167,6 +172,35 @@ class TestPromotedSpatialPackage(unittest.TestCase):
         self.assertEqual(
             [s.signal_type for s in sigs], ["zone_enter", "line_cross", "zone_exit"]
         )
+
+
+class TestPromotedEventsPackage(unittest.TestCase):
+    """Test event_intelligence.events ZoneDwellStateMachine and evaluate_dwell_events."""
+
+    def test_zone_dwell_state_machine_and_evaluate(self) -> None:
+        cfg = EventConfig(min_dwell_seconds=1.0, min_entry_frames=1, grace_frames=2)
+        sm = ZoneDwellStateMachine(track_id=1, zone_id="lobby", config=cfg)
+        e0 = sm.step(0, 0.0, is_inside=True)
+        self.assertEqual([e.event_type for e in e0], ["zone_entry"])
+        self.assertEqual(sm.step(1, 0.5, is_inside=False), [])  # grace absorbed
+        self.assertEqual(sm.step(2, 1.2, is_inside=True), [])
+        resolved = sm.finish_track()
+        self.assertEqual([e.event_type for e in resolved], ["dwell_time_event"])
+
+        zone = ZoneSpec(
+            id="lobby",
+            polygon=((0.0, 0.0), (100.0, 0.0), (100.0, 100.0), (0.0, 100.0)),
+        )
+        scene = SceneConfig(zones=(zone,))
+        trajs = {
+            1: [
+                TrajectoryPoint(1, 0, 0.0, 50.0, 50.0),
+                TrajectoryPoint(1, 1, 1.5, 50.0, 50.0),
+            ]
+        }
+        events, traces = evaluate_dwell_events(trajs, scene, cfg)
+        self.assertEqual(len(events), 2)
+        self.assertEqual(len(traces), 1)
 
 
 if __name__ == "__main__":
