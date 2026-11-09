@@ -1,0 +1,20 @@
+# Phase 11: Scene geometry configuration for MOT17-11-FRCNN (1920x1080)
+zones:
+  - id: central_walkway
+    polygon:
+      - [350, 1070]
+      - [1550, 1070]
+      - [1400, 480]
+      - [500, 480]
+  - id: foreground_plaza
+    polygon:
+      - [250, 1075]
+      - [1650, 1075]
+      - [1600, 760]
+      - [300, 760]
+
+lines:
+  - id: mid_corridor_line
+    points:
+      - [300, 760]
+      - [1600, 760]

@@ -1,0 +1,33 @@
+# Phase 11: Unified CV Pipeline Configuration (MOT17-11-FRCNN, 1920x1080, first 300 frames)
+model_name: yolo11m.pt
+confidence_threshold: 0.4
+iou_threshold: 0.45
+tracker_config: bytetrack.yaml
+device: null
+precomputed_detections_csv: null
+precomputed_tracks_csv: cv_projects/03_person_tracking/outputs/mot17_11_comparison/bytetrack/tracks.csv
+scene_config_path: configs/scene_mot17.yaml
+anchor: bottom_center
+smoothing_window: 3
+max_trail_length: 60
+min_dwell_seconds: 1.0
+min_entry_frames: 1
+grace_frames: 5
+line_cooldown_frames: 5
+include_line_crossings: true
+per_zone_min_dwell_seconds:
+  central_walkway: 1.0
+  foreground_plaza: 0.8
+best_frame_strategy: highest_confidence
+crop_padding_ratio: 0.1
+min_padding_px: 8
+jpeg_quality: 92
+grid_bin_size_px: 16
+gaussian_sigma_px: 24.0
+normalization_mode: log
+max_points_per_track_cell: 6
+colormap: jet
+reference_frame_index: 25
+inspection_sample_count: 12
+save_annotated_video: true
+max_frames: 300
