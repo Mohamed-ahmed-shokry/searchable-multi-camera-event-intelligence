@@ -9,6 +9,7 @@ import cv2
 import numpy as np
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
+SRC_ROOT = PROJECT_ROOT / "src"
 INSPECTION_SCRIPTS = PROJECT_ROOT / "cv_projects" / "01_video_inspection" / "scripts"
 DETECTION_SCRIPTS = PROJECT_ROOT / "cv_projects" / "02_person_detection" / "scripts"
 TRACKING_SCRIPTS = PROJECT_ROOT / "cv_projects" / "03_person_tracking" / "scripts"
@@ -21,6 +22,7 @@ EVIDENCE_SCRIPTS = PROJECT_ROOT / "cv_projects" / "07_visual_evidence" / "script
 ANALYTICS_SCRIPTS = PROJECT_ROOT / "cv_projects" / "08_heatmaps_analytics" / "scripts"
 EVALUATION_SCRIPTS = PROJECT_ROOT / "cv_projects" / "09_cv_evaluation" / "scripts"
 SEARCH_SCRIPTS = PROJECT_ROOT / "cv_projects" / "10_searchable_outputs" / "scripts"
+sys.path.insert(0, str(SRC_ROOT))
 sys.path.insert(0, str(INSPECTION_SCRIPTS))
 sys.path.insert(0, str(DETECTION_SCRIPTS))
 sys.path.insert(0, str(TRACKING_SCRIPTS))
