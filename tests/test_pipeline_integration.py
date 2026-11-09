@@ -6,6 +6,7 @@ import tempfile
 import unittest
 from pathlib import Path
 
+import numpy as np
 from helpers import make_sequence, make_video
 
 from event_intelligence.detection import (
@@ -17,8 +18,17 @@ from event_intelligence.detection import (
 )
 from event_intelligence.events import (
     EventConfig,
+    EventRecord,
     ZoneDwellStateMachine,
     evaluate_dwell_events,
+)
+from event_intelligence.evidence import (
+    EvidenceEventRecord,
+    extract_person_crop,
+    index_track_detections,
+    read_evidence_events_csv,
+    select_best_frame_for_event,
+    write_evidence_events_csv,
 )
 from event_intelligence.spatial import (
     LineSpec,
@@ -201,6 +211,37 @@ class TestPromotedEventsPackage(unittest.TestCase):
         events, traces = evaluate_dwell_events(trajs, scene, cfg)
         self.assertEqual(len(events), 2)
         self.assertEqual(len(traces), 1)
+
+
+class TestPromotedEvidencePackage(unittest.TestCase):
+    """Test event_intelligence.evidence best-frame selection, cropping, and 9-col CSV."""
+
+    def test_best_frame_crop_and_evidence_csv(self) -> None:
+        ev = EventRecord("evt_0001", "dwell_time_event", 1, "lobby", 0.0, 0.2, 0.2)
+        ft0 = FrameTracks(0, [TrackDetection(0, 1, 10.0, 10.0, 30.0, 40.0, 0.8)])
+        ft1 = FrameTracks(1, [TrackDetection(1, 1, 10.0, 10.0, 30.0, 40.0, 0.95)])
+        indexed = index_track_detections([ft0, ft1])
+        sel = select_best_frame_for_event(ev, indexed, fps=10.0)
+        self.assertEqual(sel.frame_id, 1)
+
+        frame = np.zeros((64, 64, 3), dtype=np.uint8)
+        crop, clipped = extract_person_crop(frame, sel)
+        self.assertFalse(clipped)
+        self.assertGreater(crop.size, 0)
+
+        with tempfile.TemporaryDirectory() as tmp:
+            csv_path = Path(tmp) / "events.csv"
+            rec = EvidenceEventRecord.from_event(
+                ev,
+                snapshot_path="snapshots/evt_0001_1.jpg",
+                crop_path="crops/evt_0001_1.jpg",
+                best_frame_id=sel.frame_id,
+                best_confidence=sel.confidence,
+            )
+            write_evidence_events_csv([rec], csv_path)
+            loaded = read_evidence_events_csv(csv_path)
+            self.assertEqual(len(loaded), 1)
+            self.assertEqual(loaded[0].snapshot_path, "snapshots/evt_0001_1.jpg")
 
 
 if __name__ == "__main__":
