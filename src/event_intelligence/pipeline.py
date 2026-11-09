@@ -2,15 +2,79 @@
 
 from __future__ import annotations
 
+import json
+import time
 from collections.abc import Mapping
-from dataclasses import dataclass, field
+from dataclasses import asdict, dataclass, field
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
+from uuid import uuid4
 
+import cv2
+import numpy as np
 import yaml
 
-from event_intelligence.evidence import VALID_BEST_FRAME_STRATEGIES
-from event_intelligence.trajectories import VALID_ANCHORS
+from event_intelligence.analytics import (
+    accumulate_trajectory_grid,
+    compute_line_counts,
+    compute_track_duration_stats,
+    compute_zone_counts,
+    render_heatmap_overlay,
+    smooth_and_normalize_heatmap,
+    write_line_counts_csv,
+    write_zone_counts_csv,
+)
+from event_intelligence.detection import (
+    Detection,
+    FrameDetections,
+    PersonDetector,
+    create_video_writer,
+    read_detections_csv,
+    write_detections_csv,
+)
+from event_intelligence.events import (
+    EventConfig,
+    draw_dwell_events_overlay,
+    evaluate_dwell_events,
+    write_events_csv,
+)
+from event_intelligence.evidence import (
+    VALID_BEST_FRAME_STRATEGIES,
+    run_visual_evidence,
+)
+from event_intelligence.spatial import (
+    SceneConfig,
+    evaluate_scene_signals,
+    load_scene_config,
+    write_zone_line_events_csv,
+)
+from event_intelligence.storage import (
+    SearchConfig,
+    ingest_intelligence_db,
+)
+from event_intelligence.tracking import (
+    FrameTracks,
+    PersonTracker,
+    compute_track_summaries,
+    read_tracks_csv,
+    write_track_summary_csv,
+    write_tracks_csv,
+)
+from event_intelligence.trajectories import (
+    VALID_ANCHORS,
+    compute_trajectory_summaries,
+    smooth_trajectories,
+    tracks_to_trajectories,
+    write_trajectories_csv,
+)
+from event_intelligence.video import (
+    VideoSource,
+    sample_frame_indices,
+    source_name,
+)
+
+_PROJECT_ROOT = Path(__file__).resolve().parents[2]
 
 
 @dataclass(frozen=True, slots=True)
@@ -238,3 +302,344 @@ def save_pipeline_config(config: PipelineConfig, path: Path | str) -> Path:
         encoding="utf-8",
     )
     return out_path
+
+
+def _resolve_optional_path(path_str: str | None, project_root: Path) -> Path | None:
+    if not path_str:
+        return None
+    p = Path(path_str)
+    return p if p.is_absolute() else (project_root / p)
+
+
+def _detections_from_tracks(frame_tracks: list[FrameTracks]) -> list[FrameDetections]:
+    return [
+        FrameDetections(
+            frame_id=ft.frame_id,
+            detections=[
+                Detection(
+                    x1=trk.x1,
+                    y1=trk.y1,
+                    x2=trk.x2,
+                    y2=trk.y2,
+                    confidence=trk.confidence,
+                    class_name="person",
+                )
+                for trk in ft.tracks
+            ],
+        )
+        for ft in frame_tracks
+    ]
+
+
+def _load_detections_as_frame_records(
+    csv_path: Path, max_frames: int | None
+) -> list[FrameDetections]:
+    rows = read_detections_csv(csv_path)
+    by_frame: dict[int, FrameDetections] = {}
+    for row in rows:
+        fid = int(row["frame_id"])
+        if max_frames is not None and fid >= max_frames:
+            continue
+        rec = by_frame.setdefault(fid, FrameDetections(frame_id=fid))
+        if row["x1"] is not None:
+            rec.detections.append(
+                Detection(
+                    x1=float(row["x1"]),
+                    y1=float(row["y1"]),
+                    x2=float(row["x2"]),
+                    y2=float(row["y2"]),
+                    confidence=float(row["confidence"]),
+                    class_name=str(row["class"] or "person"),
+                )
+            )
+    return [by_frame[k] for k in sorted(by_frame)]
+
+
+def run_pipeline(
+    video_path: Path | str,
+    config: PipelineConfig | None = None,
+    *,
+    output_root: Path | str | None = None,
+    run_id: str | None = None,
+    project_root: Path | None = None,
+    detector: PersonDetector | None = None,
+    tracker: PersonTracker | None = None,
+) -> PipelineRunResult:
+    """Execute the full Phase 1..10 CV pipeline into outputs/runs/<run_id>/."""
+    t0 = time.perf_counter()
+    cfg = config if config is not None else PipelineConfig()
+    root = project_root if project_root is not None else _PROJECT_ROOT
+
+    resolved_run_id = (
+        run_id.strip()
+        if run_id and run_id.strip()
+        else datetime.now(UTC).strftime("run_%Y%m%dT%H%M%S_") + uuid4().hex[:6]
+    )
+    runs_base = (
+        Path(output_root) if output_root is not None else (root / "outputs" / "runs")
+    )
+    run_dir = runs_base / resolved_run_id
+    run_dir.mkdir(parents=True, exist_ok=True)
+
+    run_config_path = save_pipeline_config(cfg, run_dir / "run_config.yaml")
+
+    src_path = Path(video_path)
+    if not src_path.is_absolute() and not src_path.exists():
+        candidate = root / src_path
+        if candidate.exists():
+            src_path = candidate
+    src_path = src_path.resolve()
+
+    with VideoSource(src_path) as vs:
+        meta = vs.metadata
+        fps = float(meta.fps) if meta.fps > 0 else 30.0
+        width = int(meta.width)
+        height = int(meta.height)
+        total_frames = (
+            min(meta.frame_count, cfg.max_frames)
+            if cfg.max_frames is not None
+            else meta.frame_count
+        )
+        sampled_indices = sample_frame_indices(
+            meta.frame_count, cfg.inspection_sample_count
+        )
+        ref_idx = min(cfg.reference_frame_index, max(0, total_frames - 1))
+        reference_frame = vs.read_frame(ref_idx)
+
+    video_info_entry = {
+        "name": source_name(src_path),
+        **asdict(meta),
+        "sampled_frame_indices": sampled_indices,
+        "sampled_timestamps_seconds": [idx / fps for idx in sampled_indices],
+    }
+    (run_dir / "video_info.json").write_text(
+        json.dumps([video_info_entry], indent=2) + "\n",
+        encoding="utf-8",
+    )
+
+    # Resolve tracks & detections (either precomputed CSV or live inference)
+    trk_csv_in = _resolve_optional_path(cfg.precomputed_tracks_csv, root)
+    det_csv_in = _resolve_optional_path(cfg.precomputed_detections_csv, root)
+
+    if trk_csv_in is not None and trk_csv_in.is_file():
+        frame_tracks = read_tracks_csv(trk_csv_in)
+        if cfg.max_frames is not None:
+            frame_tracks = [ft for ft in frame_tracks if ft.frame_id < cfg.max_frames]
+    else:
+        active_tracker = (
+            tracker
+            if tracker is not None
+            else PersonTracker(
+                model_name=cfg.model_name,
+                tracker_config=cfg.tracker_config,
+                confidence_threshold=cfg.confidence_threshold,
+                iou_threshold=cfg.iou_threshold,
+                device=cfg.device,
+            )
+        )
+        frame_tracks = []
+        with VideoSource(src_path) as vs:
+            for fid, frame in vs.iter_frames(stop=total_frames):
+                trks = active_tracker.track(frame, frame_id=fid)
+                frame_tracks.append(FrameTracks(frame_id=fid, tracks=trks))
+
+    if det_csv_in is not None and det_csv_in.is_file():
+        frame_detections = _load_detections_as_frame_records(det_csv_in, cfg.max_frames)
+    elif detector is not None:
+        frame_detections = []
+        with VideoSource(src_path) as vs:
+            for fid, frame in vs.iter_frames(stop=total_frames):
+                dets = detector.detect(frame)
+                frame_detections.append(FrameDetections(frame_id=fid, detections=dets))
+    else:
+        frame_detections = _detections_from_tracks(frame_tracks)
+
+    detections_csv_path = run_dir / "detections.csv"
+    detections_count = write_detections_csv(frame_detections, detections_csv_path)
+
+    tracks_csv_path = write_tracks_csv(run_dir / "tracks.csv", frame_tracks)
+    track_summaries = compute_track_summaries(frame_tracks, fps=fps)
+    track_summary_csv_path = write_track_summary_csv(
+        run_dir / "track_summary.csv", track_summaries
+    )
+
+    # Phase 4: Trajectory extraction & smoothing
+    raw_trajs = tracks_to_trajectories(frame_tracks, fps=fps, anchor=cfg.anchor)
+    trajectories = smooth_trajectories(raw_trajs, window=cfg.smoothing_window)
+    trajectories_csv_path = write_trajectories_csv(
+        run_dir / "trajectories.csv", trajectories
+    )
+    traj_summaries = compute_trajectory_summaries(trajectories, fps=fps)
+
+    # Phase 5: Zone & line spatial reasoning
+    scene_cfg_file = _resolve_optional_path(cfg.scene_config_path, root)
+    scene_cfg = (
+        load_scene_config(scene_cfg_file)
+        if scene_cfg_file is not None and scene_cfg_file.is_file()
+        else SceneConfig()
+    )
+    signals = evaluate_scene_signals(trajectories, scene_cfg)
+    write_zone_line_events_csv(run_dir / "zone_line_events.csv", signals)
+
+    # Phase 6: Dwell-time state machine events
+    ev_cfg = EventConfig(
+        min_dwell_seconds=cfg.min_dwell_seconds,
+        min_entry_frames=cfg.min_entry_frames,
+        grace_frames=cfg.grace_frames,
+        line_cooldown_frames=cfg.line_cooldown_frames,
+        include_line_crossings=cfg.include_line_crossings,
+        per_zone_min_dwell_seconds=cfg.per_zone_min_dwell_seconds,
+    )
+    raw_events, traces = evaluate_dwell_events(trajectories, scene_cfg, ev_cfg)
+    raw_events_csv = write_events_csv(run_dir / "events.csv", raw_events)
+
+    # Phase 7: Visual evidence (snapshots/, crops/, and enriched 9-column events.csv)
+    run_visual_evidence(
+        source_path=src_path,
+        events_csv_path=raw_events_csv,
+        tracks_csv_path=tracks_csv_path,
+        output_dir=run_dir,
+        scene_config_path=scene_cfg_file,
+        best_frame_strategy_override=cfg.best_frame_strategy,
+        crop_padding_ratio_override=cfg.crop_padding_ratio,
+        min_padding_px_override=cfg.min_padding_px,
+        jpeg_quality_override=cfg.jpeg_quality,
+    )
+
+    # Phase 8: Heatmaps & zone/line analytics
+    flat_points = [pt for tid in sorted(trajectories) for pt in trajectories[tid]]
+    raw_grid, full_res = accumulate_trajectory_grid(
+        flat_points,
+        frame_width=width,
+        frame_height=height,
+        grid_bin_size_px=cfg.grid_bin_size_px,
+        max_points_per_track_cell=cfg.max_points_per_track_cell,
+    )
+    norm_heat = smooth_and_normalize_heatmap(
+        full_res,
+        gaussian_sigma_px=cfg.gaussian_sigma_px,
+        normalization_mode=cfg.normalization_mode,
+    )
+    heatmap_img = render_heatmap_overlay(
+        reference_frame,
+        norm_heat,
+        colormap=cfg.colormap,
+        scene_config=scene_cfg,
+    )
+    heatmap_path = run_dir / "heatmap.png"
+    cv2.imwrite(str(heatmap_path), heatmap_img)
+
+    zone_counts = compute_zone_counts(
+        raw_events,
+        trajectory_points=flat_points,
+        scene_config=scene_cfg,
+    )
+    line_counts = compute_line_counts(raw_events, scene_config=scene_cfg)
+    duration_stats = compute_track_duration_stats(flat_points)
+
+    zone_counts_csv_path = write_zone_counts_csv(
+        zone_counts, run_dir / "zone_counts.csv"
+    )
+    line_counts_csv_path = write_line_counts_csv(
+        line_counts, run_dir / "line_counts.csv"
+    )
+
+    analytics_summary = {
+        "source_path": str(src_path),
+        "video_metadata": {
+            "width": width,
+            "height": height,
+            "fps": fps,
+            "frame_count": total_frames,
+        },
+        "heatmap_stats": {
+            "grid_shape": [int(raw_grid.shape[0]), int(raw_grid.shape[1])],
+            "total_trajectory_points": len(flat_points),
+            "active_grid_cells": int(np.count_nonzero(raw_grid > 0)),
+        },
+        "zone_counts": [
+            {
+                "zone_id": z.zone_id,
+                "entry_count": z.entry_count,
+                "exit_count": z.exit_count,
+                "total_dwell_seconds": z.total_dwell_seconds,
+                "peak_occupancy": z.peak_occupancy,
+            }
+            for z in zone_counts
+        ],
+        "line_counts": [
+            {
+                "line_id": l.line_id,
+                "crossings_ab": l.crossings_ab,
+                "crossings_ba": l.crossings_ba,
+                "total": l.total,
+            }
+            for l in line_counts
+        ],
+        "track_duration_distribution": duration_stats.to_dict(),
+        "total_path_length_px": round(sum(s.path_length_px for s in traj_summaries), 2),
+    }
+    (run_dir / "analytics_summary.json").write_text(
+        json.dumps(analytics_summary, indent=2) + "\n",
+        encoding="utf-8",
+    )
+
+    # Render unified annotated_video.mp4
+    if cfg.save_annotated_video and total_frames > 0:
+        writer = create_video_writer(
+            run_dir / "annotated_video.mp4",
+            fps=fps,
+            width=width,
+            height=height,
+        )
+        try:
+            with VideoSource(src_path) as vs:
+                for fid, frame in vs.iter_frames(stop=total_frames):
+                    rendered = draw_dwell_events_overlay(
+                        frame,
+                        scene_cfg,
+                        trajectories,
+                        current_frame_id=fid,
+                        current_timestamp=fid / fps,
+                        traces=traces,
+                        events=raw_events,
+                        max_trail_length=cfg.max_trail_length,
+                    )
+                    writer.write(rendered)
+        finally:
+            writer.release()
+
+    # Phase 10: Ingest into SQLite intelligence.db
+    search_cfg = SearchConfig(
+        source_name=src_path.name,
+        detections_csv=str(detections_csv_path),
+        tracks_csv=str(tracks_csv_path),
+        tracking_summary_csv=str(track_summary_csv_path),
+        trajectories_csv=str(trajectories_csv_path),
+        trajectory_summary_csv=str(run_dir / "missing_traj_summary.csv"),
+        events_csv=str(run_dir / "events.csv"),
+        evidence_root=str(run_dir),
+        zone_counts_csv=str(zone_counts_csv_path),
+        line_counts_csv=str(line_counts_csv_path),
+        write_subproject_docs=False,
+    )
+    db_path = run_dir / "intelligence.db"
+    db_summary = ingest_intelligence_db(db_path, search_cfg, project_root=root)
+
+    elapsed = time.perf_counter() - t0
+    return PipelineRunResult(
+        run_id=resolved_run_id,
+        run_dir=str(run_dir),
+        source_path=str(src_path),
+        processed_frames=total_frames,
+        detections_count=detections_count,
+        tracks_count=db_summary.tracks_count,
+        trajectories_count=db_summary.trajectories_count,
+        zone_line_signals_count=len(signals),
+        events_count=db_summary.events_count,
+        zones_count=db_summary.zone_counts_rows,
+        lines_count=db_summary.line_counts_rows,
+        db_path=str(db_path),
+        run_config_path=str(run_config_path),
+        elapsed_seconds=elapsed,
+    )
