@@ -22,6 +22,11 @@ from event_intelligence.detection import (
     read_detections_csv,
     write_detections_csv,
 )
+from event_intelligence.evaluation import (
+    EvaluationConfig,
+    evaluate_detection_precision_recall,
+    evaluate_tracking_metrics,
+)
 from event_intelligence.events import (
     EventConfig,
     EventRecord,
@@ -278,6 +283,20 @@ class TestPromotedAnalyticsPackage(unittest.TestCase):
         l_counts = compute_line_counts(events)
         self.assertEqual(z_counts[0].entry_count, 1)
         self.assertEqual(l_counts[0].crossings_ab, 1)
+
+
+class TestPromotedEvaluationPackage(unittest.TestCase):
+    """Test event_intelligence.evaluation detection and tracking evaluators."""
+
+    def test_evaluation_config_and_metrics(self) -> None:
+        cfg = EvaluationConfig()
+        self.assertEqual(cfg.iou_threshold, 0.5)
+        gt = {0: [TrackDetection(0, 1, 10.0, 10.0, 50.0, 50.0, 1.0)]}
+        preds = [FrameTracks(0, [TrackDetection(0, 10, 10.0, 10.0, 50.0, 50.0, 0.9)])]
+        det_m = evaluate_detection_precision_recall(gt, preds)
+        trk_m = evaluate_tracking_metrics("bytetrack", gt, preds)
+        self.assertEqual(det_m.precision, 1.0)
+        self.assertEqual(trk_m.mota, 1.0)
 
 
 if __name__ == "__main__":
