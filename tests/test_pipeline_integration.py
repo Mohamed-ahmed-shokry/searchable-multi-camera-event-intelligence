@@ -49,6 +49,12 @@ from event_intelligence.spatial import (
     evaluate_scene_signals,
     point_in_zone,
 )
+from event_intelligence.storage import (
+    SearchConfig,
+    ingest_intelligence_db,
+    query_events,
+    query_tracks,
+)
 from event_intelligence.tracking import (
     FrameTracks,
     TrackDetection,
@@ -297,6 +303,42 @@ class TestPromotedEvaluationPackage(unittest.TestCase):
         trk_m = evaluate_tracking_metrics("bytetrack", gt, preds)
         self.assertEqual(det_m.precision, 1.0)
         self.assertEqual(trk_m.mota, 1.0)
+
+
+class TestPromotedStoragePackage(unittest.TestCase):
+    """Test event_intelligence.storage SQLite ingestion and queries."""
+
+    def test_storage_ingest_and_query(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            (root / "trajectories.csv").write_text(
+                "track_id,frame_id,timestamp,x,y\n"
+                "1,0,0.0,10.0,10.0\n"
+                "1,10,5.5,40.0,50.0\n",
+                encoding="utf-8",
+            )
+            (root / "events.csv").write_text(
+                "event_id,event_type,track_id,zone_id,start_time,end_time,duration_seconds,snapshot_path,crop_path\n"
+                "evt_0001,dwell_time_event,1,lobby,0.0,5.5,5.5,snapshots/evt_0001_1.jpg,crops/evt_0001_1.jpg\n",
+                encoding="utf-8",
+            )
+            cfg = SearchConfig(
+                detections_csv=str(root / "missing.csv"),
+                tracks_csv=str(root / "missing.csv"),
+                tracking_summary_csv=str(root / "missing.csv"),
+                trajectories_csv=str(root / "trajectories.csv"),
+                trajectory_summary_csv=str(root / "missing.csv"),
+                events_csv=str(root / "events.csv"),
+                evidence_root=str(root),
+                zone_counts_csv=str(root / "missing.csv"),
+                line_counts_csv=str(root / "missing.csv"),
+                write_subproject_docs=False,
+            )
+            db_path = root / "intelligence.db"
+            summary = ingest_intelligence_db(db_path, cfg, project_root=root)
+            self.assertEqual(summary.events_count, 1)
+            self.assertEqual(len(query_events(db_path, zone_id="lobby")), 1)
+            self.assertEqual(len(query_tracks(db_path, min_duration=5.0)), 1)
 
 
 if __name__ == "__main__":
