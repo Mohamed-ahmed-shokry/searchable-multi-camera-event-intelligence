@@ -8,6 +8,13 @@ from pathlib import Path
 
 from helpers import make_sequence, make_video
 
+from event_intelligence.detection import (
+    DETECTIONS_CSV_HEADER,
+    Detection,
+    FrameDetections,
+    read_detections_csv,
+    write_detections_csv,
+)
 from event_intelligence.video import (
     VideoSource,
     inspect_source,
@@ -39,6 +46,25 @@ class TestPromotedVideoPackage(unittest.TestCase):
 
             with VideoSource(seq_path) as seq_vs:
                 self.assertEqual(seq_vs.metadata.source_type, "frame_sequence")
+
+
+class TestPromotedDetectionPackage(unittest.TestCase):
+    """Test event_intelligence.detection CSV schema and round-trip."""
+
+    def test_detections_csv_round_trip(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            csv_path = Path(tmp) / "detections.csv"
+            records = [
+                FrameDetections(0, [Detection(10.0, 20.0, 40.0, 80.0, 0.91)]),
+                FrameDetections(1, []),
+            ]
+            total = write_detections_csv(records, csv_path)
+            self.assertEqual(total, 1)
+            rows = read_detections_csv(csv_path)
+            self.assertEqual(len(rows), 2)
+            self.assertEqual(list(rows[0].keys()), DETECTIONS_CSV_HEADER)
+            self.assertAlmostEqual(rows[0]["confidence"], 0.91)
+            self.assertIsNone(rows[1]["x1"])
 
 
 if __name__ == "__main__":
