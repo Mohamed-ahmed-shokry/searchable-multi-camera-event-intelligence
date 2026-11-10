@@ -2,19 +2,7 @@
 
 from __future__ import annotations
 
-import sys
-from pathlib import Path
-
-_SCRIPTS = (
-    Path(__file__).resolve().parents[3]
-    / "cv_projects"
-    / "01_video_inspection"
-    / "scripts"
-)
-if str(_SCRIPTS) not in sys.path:
-    sys.path.insert(0, str(_SCRIPTS))
-
-from inspect_video import (
+from event_intelligence.video.inspect_video import (
     CONTACT_SHEET_COLS,
     MAX_SAMPLE_COUNT,
     SAMPLE_COUNT,
@@ -28,14 +16,14 @@ from inspect_video import (
     write_image,
     write_json,
 )
-from validate_dataset import (
+from event_intelligence.video.validate_dataset import (
     MOT17_SPECS,
     check_clip_entry,
     check_mot17_entry,
     mot17_base_sequence,
     validate_video_info,
 )
-from video_source import VideoMetadata, VideoSource
+from event_intelligence.video.video_source import VideoMetadata, VideoSource
 
 __all__ = [
     "CONTACT_SHEET_COLS",
