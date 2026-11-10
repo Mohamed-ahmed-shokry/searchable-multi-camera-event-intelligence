@@ -128,6 +128,10 @@ uv run --locked python cv_projects/10_searchable_outputs/scripts/search_events.p
 # Run Phase 11 unified end-to-end CV pipeline (video -> vision -> behavior -> events -> storage)
 uv run --locked python -m event_intelligence.pipeline --video data/fallback_clips/people-detection.mp4 --config configs/pipeline.yaml
 uv run --locked python -m event_intelligence.pipeline --video data/mot17/MOT17-11-FRCNN --config configs/pipeline_mot17.yaml
+
+# Query a pipeline run's SQLite database directly via event_intelligence.search
+uv run --locked python -m event_intelligence.search --db outputs/runs/people_detection/intelligence.db --event-type dwell_time_event --zone right_aisle --json
+uv run --locked python -m event_intelligence.search --db outputs/runs/people_detection/intelligence.db --tracks --min-duration 5.0 --json
 ```
 
 The two detection extras conflict intentionally; do not use `--all-extras`.
