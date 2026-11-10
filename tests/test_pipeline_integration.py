@@ -279,6 +279,14 @@ class TestPromotedEventsPackage(unittest.TestCase):
         events, traces = evaluate_dwell_events(trajs, scene, cfg)
         self.assertEqual(len(events), 2)
         self.assertEqual(len(traces), 1)
+        self.assertEqual(
+            ZoneDwellStateMachine.__module__,
+            "event_intelligence.events.generate_dwell_events",
+        )
+        self.assertEqual(
+            evaluate_dwell_events.__module__,
+            "event_intelligence.events.generate_dwell_events",
+        )
 
 
 class TestPromotedEvidencePackage(unittest.TestCase):
