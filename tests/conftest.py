@@ -16,6 +16,7 @@ from helpers import (  # noqa: F401
     PROJECT_ROOT,
     SEARCH_SCRIPTS,
     SPATIAL_SCRIPTS,
+    SRC_ROOT,
     TRACKING_SCRIPTS,
     TRAJECTORY_SCRIPTS,
 )
