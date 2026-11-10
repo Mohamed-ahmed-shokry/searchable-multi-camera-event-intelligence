@@ -378,6 +378,14 @@ class TestPromotedEvaluationPackage(unittest.TestCase):
         trk_m = evaluate_tracking_metrics("bytetrack", gt, preds)
         self.assertEqual(det_m.precision, 1.0)
         self.assertEqual(trk_m.mota, 1.0)
+        self.assertEqual(
+            EvaluationConfig.__module__,
+            "event_intelligence.evaluation.evaluate_pipeline",
+        )
+        self.assertEqual(
+            evaluate_detection_precision_recall.__module__,
+            "event_intelligence.evaluation.evaluate_pipeline",
+        )
 
 
 class TestPromotedStoragePackage(unittest.TestCase):
