@@ -318,6 +318,14 @@ class TestPromotedEvidencePackage(unittest.TestCase):
             loaded = read_evidence_events_csv(csv_path)
             self.assertEqual(len(loaded), 1)
             self.assertEqual(loaded[0].snapshot_path, "snapshots/evt_0001_1.jpg")
+            self.assertEqual(
+                EvidenceEventRecord.__module__,
+                "event_intelligence.evidence.extract_visual_evidence",
+            )
+            self.assertEqual(
+                select_best_frame_for_event.__module__,
+                "event_intelligence.evidence.extract_visual_evidence",
+            )
 
 
 class TestPromotedAnalyticsPackage(unittest.TestCase):
