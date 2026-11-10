@@ -2,25 +2,17 @@
 
 from __future__ import annotations
 
-import sys
-from pathlib import Path
-
-_SCRIPTS = (
-    Path(__file__).resolve().parents[3]
-    / "cv_projects"
-    / "03_person_tracking"
-    / "scripts"
+from event_intelligence.tracking.compare_trackers import (
+    DEFAULT_TRACKERS,
+    compare_trackers,
 )
-if str(_SCRIPTS) not in sys.path:
-    sys.path.insert(0, str(_SCRIPTS))
-
-from evaluate_mot import (
+from event_intelligence.tracking.evaluate_mot import (
     box_iou,
     compute_iou_matrix,
     evaluate_tracking,
     load_mot17_gt,
 )
-from track_people import (
+from event_intelligence.tracking.track_people import (
     TRACK_COLOR_PALETTE,
     TRACK_SUMMARY_CSV_HEADER,
     TRACKS_CSV_HEADER,
@@ -41,6 +33,7 @@ from track_people import (
 )
 
 __all__ = [
+    "DEFAULT_TRACKERS",
     "TRACKS_CSV_HEADER",
     "TRACK_COLOR_PALETTE",
     "TRACK_SUMMARY_CSV_HEADER",
@@ -50,6 +43,7 @@ __all__ = [
     "TrackSummary",
     "analyze_track_anomalies",
     "box_iou",
+    "compare_trackers",
     "compute_iou_matrix",
     "compute_track_summaries",
     "create_video_writer",
