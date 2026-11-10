@@ -146,6 +146,13 @@ class TestPromotedDetectionPackage(unittest.TestCase):
             self.assertEqual(list(rows[0].keys()), DETECTIONS_CSV_HEADER)
             self.assertAlmostEqual(rows[0]["confidence"], 0.91)
             self.assertIsNone(rows[1]["x1"])
+            self.assertEqual(
+                Detection.__module__, "event_intelligence.detection.detect_people"
+            )
+            self.assertEqual(
+                write_detections_csv.__module__,
+                "event_intelligence.detection.detect_people",
+            )
 
 
 class TestPromotedTrackingPackage(unittest.TestCase):
