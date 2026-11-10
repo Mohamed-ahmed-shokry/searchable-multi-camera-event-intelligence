@@ -2,19 +2,13 @@
 
 from __future__ import annotations
 
-import sys
-from pathlib import Path
-
-_SCRIPTS = (
-    Path(__file__).resolve().parents[3]
-    / "cv_projects"
-    / "05_zone_line_reasoning"
-    / "scripts"
+from event_intelligence.spatial.define_scene_geometry import (
+    collect_geometry_interactively,
+    extract_reference_frame,
+    render_coordinate_grid,
+    render_scene_preview,
 )
-if str(_SCRIPTS) not in sys.path:
-    sys.path.insert(0, str(_SCRIPTS))
-
-from reason_zones_lines import (
+from event_intelligence.spatial.reason_zones_lines import (
     LINE_PALETTE_BGR,
     VALID_DIRECTIONS,
     VALID_SIGNAL_TYPES,
@@ -50,13 +44,17 @@ __all__ = [
     "ZoneSpec",
     "analyze_boundary_flicker",
     "check_line_crossing",
+    "collect_geometry_interactively",
     "detect_line_signals",
     "detect_zone_signals",
     "draw_zones_and_lines",
     "evaluate_scene_signals",
+    "extract_reference_frame",
     "load_scene_config",
     "point_in_zone",
     "read_zone_line_events_csv",
+    "render_coordinate_grid",
+    "render_scene_preview",
     "run_zone_line_reasoning",
     "save_scene_config",
     "write_zone_line_events_csv",
