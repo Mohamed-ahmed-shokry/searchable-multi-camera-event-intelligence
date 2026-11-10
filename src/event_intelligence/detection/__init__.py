@@ -2,19 +2,13 @@
 
 from __future__ import annotations
 
-import sys
-from pathlib import Path
-
-_SCRIPTS = (
-    Path(__file__).resolve().parents[3]
-    / "cv_projects"
-    / "02_person_detection"
-    / "scripts"
+from event_intelligence.detection.compare_models import (
+    DEFAULT_MODELS,
+    benchmark_model,
+    compare_models,
+    print_comparison_table,
 )
-if str(_SCRIPTS) not in sys.path:
-    sys.path.insert(0, str(_SCRIPTS))
-
-from detect_people import (
+from event_intelligence.detection.detect_people import (
     DETECTIONS_CSV_HEADER,
     Detection,
     FrameDetections,
@@ -29,13 +23,17 @@ from detect_people import (
 )
 
 __all__ = [
+    "DEFAULT_MODELS",
     "DETECTIONS_CSV_HEADER",
     "Detection",
     "FrameDetections",
     "PersonDetector",
+    "benchmark_model",
+    "compare_models",
     "create_video_writer",
     "draw_detections",
     "load_config",
+    "print_comparison_table",
     "read_detections_csv",
     "run_detection",
     "select_default_device",
