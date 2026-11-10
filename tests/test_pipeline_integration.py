@@ -180,6 +180,12 @@ class TestPromotedTrackingPackage(unittest.TestCase):
             self.assertEqual(metrics["mota"], 1.0)
             self.assertEqual(metrics["idf1"], 1.0)
             self.assertEqual(metrics["id_switches"], 0)
+            self.assertEqual(
+                TrackDetection.__module__, "event_intelligence.tracking.track_people"
+            )
+            self.assertEqual(
+                evaluate_tracking.__module__, "event_intelligence.tracking.evaluate_mot"
+            )
 
 
 class TestPromotedTrajectoriesPackage(unittest.TestCase):
