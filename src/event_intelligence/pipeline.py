@@ -68,6 +68,7 @@ from event_intelligence.trajectories import (
     smooth_trajectories,
     tracks_to_trajectories,
     write_trajectories_csv,
+    write_trajectory_summary_csv,
 )
 from event_intelligence.video import (
     VideoSource,
@@ -471,6 +472,9 @@ def run_pipeline(
         run_dir / "trajectories.csv", trajectories
     )
     traj_summaries = compute_trajectory_summaries(trajectories, fps=fps)
+    trajectory_summary_csv_path = write_trajectory_summary_csv(
+        run_dir / "trajectory_summary.csv", traj_summaries
+    )
 
     # Phase 5: Zone & line spatial reasoning
     scene_cfg_file = _resolve_optional_path(cfg.scene_config_path, root)
@@ -617,7 +621,7 @@ def run_pipeline(
         tracks_csv=str(tracks_csv_path),
         tracking_summary_csv=str(track_summary_csv_path),
         trajectories_csv=str(trajectories_csv_path),
-        trajectory_summary_csv=str(run_dir / "missing_traj_summary.csv"),
+        trajectory_summary_csv=str(trajectory_summary_csv_path),
         events_csv=str(run_dir / "events.csv"),
         evidence_root=str(run_dir),
         zone_counts_csv=str(zone_counts_csv_path),
