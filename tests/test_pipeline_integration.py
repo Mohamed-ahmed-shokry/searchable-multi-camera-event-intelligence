@@ -117,6 +117,17 @@ class TestPromotedVideoPackage(unittest.TestCase):
             with VideoSource(seq_path) as seq_vs:
                 self.assertEqual(seq_vs.metadata.source_type, "frame_sequence")
 
+            self.assertEqual(
+                VideoSource.__module__, "event_intelligence.video.video_source"
+            )
+            self.assertEqual(
+                inspect_source.__module__, "event_intelligence.video.inspect_video"
+            )
+            self.assertEqual(
+                validate_video_info.__module__,
+                "event_intelligence.video.validate_dataset",
+            )
+
 
 class TestPromotedDetectionPackage(unittest.TestCase):
     """Test event_intelligence.detection CSV schema and round-trip."""
