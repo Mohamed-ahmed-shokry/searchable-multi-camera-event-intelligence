@@ -53,6 +53,9 @@ from event_intelligence.pipeline import (
 from event_intelligence.pipeline import (
     main as pipeline_main,
 )
+from event_intelligence.search import (
+    main as search_main,
+)
 from event_intelligence.spatial import (
     LineSpec,
     SceneConfig,
@@ -505,6 +508,7 @@ class TestEndToEndPipelineAndCli(unittest.TestCase):
                 "tracks.csv",
                 "track_summary.csv",
                 "trajectories.csv",
+                "trajectory_summary.csv",
                 "zone_line_events.csv",
                 "events.csv",
                 "heatmap.png",
@@ -517,6 +521,23 @@ class TestEndToEndPipelineAndCli(unittest.TestCase):
             ):
                 self.assertTrue((vid_dir / fname).is_file(), f"Missing {fname}")
             self.assertGreaterEqual(res_vid.events_count, 2)
+
+            # Query the generated intelligence.db via event_intelligence.search CLI
+            sbuf = io.StringIO()
+            with redirect_stdout(sbuf):
+                src_rc = search_main(
+                    [
+                        "--db",
+                        str(vid_dir / "intelligence.db"),
+                        "--zone",
+                        "plaza",
+                        "--json",
+                    ]
+                )
+            self.assertEqual(src_rc, 0)
+            search_rows = json.loads(sbuf.getvalue())
+            self.assertGreaterEqual(len(search_rows), 1)
+            self.assertEqual(search_rows[0]["zone_id"], "plaza")
 
             # Run via CLI on MOT sequence
             buf = io.StringIO()
@@ -538,6 +559,18 @@ class TestEndToEndPipelineAndCli(unittest.TestCase):
             payload = json.loads(buf.getvalue())
             self.assertEqual(payload["run_id"], "seq_run")
             self.assertTrue((out_root / "seq_run" / "intelligence.db").is_file())
+
+    def test_src_package_has_no_sys_path_mutations_or_cv_projects_imports(self) -> None:
+        src_pkg = Path(__file__).resolve().parents[1] / "src" / "event_intelligence"
+        py_files = sorted(src_pkg.rglob("*.py"))
+        self.assertGreaterEqual(len(py_files), 25)
+        for py_file in py_files:
+            text = py_file.read_text(encoding="utf-8")
+            self.assertNotIn(
+                "sys.path.insert",
+                text,
+                f"Unexpected sys.path.insert in {py_file}",
+            )
 
 
 if __name__ == "__main__":
