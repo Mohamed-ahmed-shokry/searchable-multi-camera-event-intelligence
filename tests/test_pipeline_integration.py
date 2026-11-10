@@ -244,6 +244,12 @@ class TestPromotedSpatialPackage(unittest.TestCase):
         self.assertEqual(
             [s.signal_type for s in sigs], ["zone_enter", "line_cross", "zone_exit"]
         )
+        self.assertEqual(
+            ZoneSpec.__module__, "event_intelligence.spatial.reason_zones_lines"
+        )
+        self.assertEqual(
+            point_in_zone.__module__, "event_intelligence.spatial.reason_zones_lines"
+        )
 
 
 class TestPromotedEventsPackage(unittest.TestCase):
