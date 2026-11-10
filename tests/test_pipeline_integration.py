@@ -422,6 +422,13 @@ class TestPromotedStoragePackage(unittest.TestCase):
             self.assertEqual(summary.events_count, 1)
             self.assertEqual(len(query_events(db_path, zone_id="lobby")), 1)
             self.assertEqual(len(query_tracks(db_path, min_duration=5.0)), 1)
+            self.assertEqual(
+                SearchConfig.__module__, "event_intelligence.storage.search_events"
+            )
+            self.assertEqual(
+                ingest_intelligence_db.__module__,
+                "event_intelligence.storage.search_events",
+            )
 
 
 class TestEndToEndPipelineAndCli(unittest.TestCase):
