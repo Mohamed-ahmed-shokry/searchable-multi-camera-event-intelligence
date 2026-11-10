@@ -1478,6 +1478,130 @@ uv run --locked python -m event_intelligence.pipeline \
 | `uv run --locked python -m event_intelligence.pipeline --video data/fallback_clips/people-detection.mp4 --config configs/pipeline.yaml --run-id people_detection --json` | ✅ `596` frames in `6.29s` | generated all 19 artifact files/dirs in `outputs/runs/people_detection/` including `intelligence.db` and `run_config.yaml` |
 | `uv run --locked python -m event_intelligence.pipeline --video data/mot17/MOT17-11-FRCNN --config configs/pipeline_mot17.yaml --run-id mot17_11_frcnn --json` | ✅ `300` frames in `36.13s` | generated all 19 artifact files/dirs in `outputs/runs/mot17_11_frcnn/` (`2,435` dets, `43` tracks, `94` events) |
 
+---
+
+## Current Phase: 11b — Standalone `src/event_intelligence` Implementation & Search CLI (`event_intelligence.search`) (2026-11-10)
+
+### Objective
+
+Complete the Track B (`src/event_intelligence/`) engineering milestone so the package is 100%
+self-contained and zero-coupled to `cv_projects/` at runtime:
+1. Replace the `sys.path` re-export shims in all 10 `src/event_intelligence/<domain>/` subpackages
+   with standalone implementation modules (`video`, `detection`, `tracking`, `trajectories`,
+   `spatial`, `events`, `evidence`, `analytics`, `evaluation`, `storage`) that use clean
+   package-internal imports (`from event_intelligence.video import ...`) while leaving
+   `cv_projects/` completely untouched as the historical Track A record.
+2. Add a first-class package search CLI entrypoint (`uv run --locked python -m
+   event_intelligence.search`) and console scripts (`event-intelligence-pipeline`,
+   `event-intelligence-search`) so users can both run the end-to-end CV pipeline and query any
+   resulting `outputs/runs/<run_id>/intelligence.db` directly from the `event_intelligence` package.
+3. Fix `run_pipeline()` in `src/event_intelligence/pipeline.py` to also write
+   `trajectory_summary.csv` (`track_id, path_length_px, duration_seconds, frame_count`) and pass it
+   into `SearchConfig` so `intelligence.db` receives precomputed path lengths directly.
+
+### Scope
+
+1. Promote standalone implementation modules into each `src/event_intelligence/<domain>/` subpackage
+   and remove all `cv_projects` `sys.path` manipulation from `src/event_intelligence/`:
+   - `src/event_intelligence/video/` (`video_source.py`, `inspect_video.py`, `validate_dataset.py`, `fetch_mot17_sequence.py`)
+   - `src/event_intelligence/detection/` (`detect_people.py`, `compare_models.py`)
+   - `src/event_intelligence/tracking/` (`track_people.py`, `evaluate_mot.py`, `compare_trackers.py`)
+   - `src/event_intelligence/trajectories/` (`extract_trajectories.py`, `compare_smoothing.py`)
+   - `src/event_intelligence/spatial/` (`reason_zones_lines.py`, `define_scene_geometry.py`)
+   - `src/event_intelligence/events/` (`generate_dwell_events.py`)
+   - `src/event_intelligence/evidence/` (`extract_visual_evidence.py`)
+   - `src/event_intelligence/analytics/` (`generate_heatmaps_analytics.py`)
+   - `src/event_intelligence/evaluation/` (`evaluate_pipeline.py`)
+   - `src/event_intelligence/storage/` (`search_events.py`)
+2. Update `src/event_intelligence/pipeline.py` to write `trajectory_summary.csv` and wire it into
+   `SearchConfig`.
+3. Add `src/event_intelligence/search.py` enabling `uv run --locked python -m
+   event_intelligence.search --db outputs/runs/<run_id>/intelligence.db ...` and register
+   `[project.scripts]` in `pyproject.toml`.
+4. Extend `tests/test_pipeline_integration.py` with tests verifying:
+   - Zero `cv_projects` references or `sys.path` mutations anywhere in `src/event_intelligence/`.
+   - Module origin paths (`__file__`) for all promoted classes/functions reside inside
+     `src/event_intelligence/`.
+   - End-to-end execution of `python -m event_intelligence.search` against a pipeline-generated
+     `intelligence.db`.
+
+### Acceptance Criteria
+
+| # | Criterion | Status | Evidence |
+|---|-----------|--------|----------|
+| 1 | All 10 `src/event_intelligence/<domain>/` subpackages contain standalone implementation modules with zero `sys.path` manipulation or imports from `cv_projects/` | ⏳ | Pending implementation |
+| 2 | `cv_projects/` remains 100% untouched (`git diff origin/main -- cv_projects/` is empty) | ⏳ | Pending implementation |
+| 3 | `run_pipeline()` writes `trajectory_summary.csv` and populates `intelligence.db` with complete track lifespan + path-length metrics | ⏳ | Pending implementation |
+| 4 | `uv run --locked python -m event_intelligence.search --db <run_dir>/intelligence.db` queries events, tracks, evidence, and database summaries end-to-end | ⏳ | Pending implementation |
+| 5 | All local CI-parity checks (`uv sync --locked`, `ruff check .`, `ruff format --check .`, `pytest -v`) and remote GitHub Actions CI pass 100% | ⏳ | Pending implementation |
+
+### Validation & CI Plan
+
+```bash
+uv sync --locked
+uv run --locked ruff check .
+uv run --locked ruff format --check .
+uv run --locked pytest -v
+# End-to-end pipeline + search CLI verification:
+uv run --locked python -m event_intelligence.pipeline \
+    --video data/fallback_clips/people-detection.mp4 \
+    --config configs/pipeline.yaml \
+    --run-id people_detection --json
+uv run --locked python -m event_intelligence.search \
+    --db outputs/runs/people_detection/intelligence.db \
+    --summary --json
+uv run --locked python -m event_intelligence.search \
+    --db outputs/runs/people_detection/intelligence.db \
+    --event-type dwell_time_event --json
+```
+
+### Exclusions
+
+- **Track C Productization (`Phase 12` — FastAPI, React UI, auth, RTSP):** Explicitly deferred per
+  `AGENTS.md` and `docs/project_phases.md`.
+
+### Micro-Task Breakdown
+
+- [ ] 1. `docs(roadmap): define Phase 11b standalone src/event_intelligence and search CLI scope`
+- [ ] 2. `refactor(video): promote standalone video_source.py into src/event_intelligence/video/`
+- [ ] 3. `refactor(video): promote standalone inspect_video.py into src/event_intelligence/video/`
+- [ ] 4. `refactor(video): promote standalone validate_dataset.py and fetch_mot17_sequence.py into src/event_intelligence/video/`
+- [ ] 5. `refactor(video): wire src/event_intelligence/video/__init__.py to local package modules`
+- [ ] 6. `test(video): verify event_intelligence.video objects originate from src/event_intelligence/video`
+- [ ] 7. `refactor(detection): promote standalone detect_people.py and compare_models.py into src/event_intelligence/detection/`
+- [ ] 8. `refactor(detection): wire src/event_intelligence/detection/__init__.py to local package modules`
+- [ ] 9. `test(detection): verify event_intelligence.detection objects originate from src/event_intelligence/detection`
+- [ ] 10. `refactor(tracking): promote standalone track_people.py, evaluate_mot.py, and compare_trackers.py into src/event_intelligence/tracking/`
+- [ ] 11. `refactor(tracking): wire src/event_intelligence/tracking/__init__.py to local package modules`
+- [ ] 12. `test(tracking): verify event_intelligence.tracking objects originate from src/event_intelligence/tracking`
+- [ ] 13. `refactor(trajectories): promote standalone extract_trajectories.py and compare_smoothing.py into src/event_intelligence/trajectories/`
+- [ ] 14. `refactor(trajectories): wire src/event_intelligence/trajectories/__init__.py to local package modules`
+- [ ] 15. `test(trajectories): verify event_intelligence.trajectories objects originate from src/event_intelligence/trajectories`
+- [ ] 16. `refactor(spatial): promote standalone reason_zones_lines.py and define_scene_geometry.py into src/event_intelligence/spatial/`
+- [ ] 17. `refactor(spatial): wire src/event_intelligence/spatial/__init__.py to local package modules`
+- [ ] 18. `test(spatial): verify event_intelligence.spatial objects originate from src/event_intelligence/spatial`
+- [ ] 19. `refactor(events): promote standalone generate_dwell_events.py into src/event_intelligence/events/`
+- [ ] 20. `refactor(events): wire src/event_intelligence/events/__init__.py to local package modules`
+- [ ] 21. `test(events): verify event_intelligence.events objects originate from src/event_intelligence/events`
+- [ ] 22. `refactor(evidence): promote standalone extract_visual_evidence.py into src/event_intelligence/evidence/`
+- [ ] 23. `refactor(evidence): wire src/event_intelligence/evidence/__init__.py to local package modules`
+- [ ] 24. `test(evidence): verify event_intelligence.evidence objects originate from src/event_intelligence/evidence`
+- [ ] 25. `refactor(analytics): promote standalone generate_heatmaps_analytics.py into src/event_intelligence/analytics/`
+- [ ] 26. `refactor(analytics): wire src/event_intelligence/analytics/__init__.py to local package modules`
+- [ ] 27. `test(analytics): verify event_intelligence.analytics objects originate from src/event_intelligence/analytics`
+- [ ] 28. `refactor(evaluation): promote standalone evaluate_pipeline.py into src/event_intelligence/evaluation/`
+- [ ] 29. `refactor(evaluation): wire src/event_intelligence/evaluation/__init__.py to local package modules`
+- [ ] 30. `test(evaluation): verify event_intelligence.evaluation objects originate from src/event_intelligence/evaluation`
+- [ ] 31. `refactor(storage): promote standalone search_events.py into src/event_intelligence/storage/`
+- [ ] 32. `refactor(storage): wire src/event_intelligence/storage/__init__.py to local package modules`
+- [ ] 33. `test(storage): verify event_intelligence.storage objects originate from src/event_intelligence/storage`
+- [ ] 34. `feat(pipeline): write trajectory_summary.csv in run_pipeline and wire into SearchConfig`
+- [ ] 35. `feat(search): add event_intelligence.search CLI entrypoint module`
+- [ ] 36. `test(search): add integration tests for event_intelligence.search CLI and standalone package isolation`
+- [ ] 37. `docs(readme): document event_intelligence.search CLI usage in README.md`
+- [ ] 38. `docs(roadmap): mark Phase 11b completed in docs/ROADMAP.md`
+
+
 
 
 
