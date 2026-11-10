@@ -2,19 +2,7 @@
 
 from __future__ import annotations
 
-import sys
-from pathlib import Path
-
-_SCRIPTS = (
-    Path(__file__).resolve().parents[3]
-    / "cv_projects"
-    / "06_dwell_time_events"
-    / "scripts"
-)
-if str(_SCRIPTS) not in sys.path:
-    sys.path.insert(0, str(_SCRIPTS))
-
-from generate_dwell_events import (
+from event_intelligence.events.generate_dwell_events import (
     EVENTS_CSV_HEADER,
     VALID_EVENT_TYPES,
     VALID_STAY_STATES,
