@@ -356,6 +356,14 @@ class TestPromotedAnalyticsPackage(unittest.TestCase):
         l_counts = compute_line_counts(events)
         self.assertEqual(z_counts[0].entry_count, 1)
         self.assertEqual(l_counts[0].crossings_ab, 1)
+        self.assertEqual(
+            accumulate_trajectory_grid.__module__,
+            "event_intelligence.analytics.generate_heatmaps_analytics",
+        )
+        self.assertEqual(
+            compute_zone_counts.__module__,
+            "event_intelligence.analytics.generate_heatmaps_analytics",
+        )
 
 
 class TestPromotedEvaluationPackage(unittest.TestCase):
