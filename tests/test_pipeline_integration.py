@@ -208,6 +208,14 @@ class TestPromotedTrajectoriesPackage(unittest.TestCase):
             write_trajectories_csv(csv_path, smoothed)
             reloaded = read_trajectories_csv(csv_path)
             self.assertEqual(len(reloaded[1]), 2)
+            self.assertEqual(
+                TrajectoryPoint.__module__,
+                "event_intelligence.trajectories.extract_trajectories",
+            )
+            self.assertEqual(
+                smooth_trajectories.__module__,
+                "event_intelligence.trajectories.extract_trajectories",
+            )
 
 
 class TestPromotedSpatialPackage(unittest.TestCase):
