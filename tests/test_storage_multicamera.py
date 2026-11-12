@@ -2,17 +2,23 @@
 
 from __future__ import annotations
 
+import json
 import tempfile
 import unittest
 from pathlib import Path
 
+from event_intelligence.insights import InsightRecord, InsightType, Severity
 from event_intelligence.storage import (
     CameraMetadata,
+    InsightSearchResult,
     SearchConfig,
     ingest_intelligence_db,
     ingest_multi_camera_intelligence_db,
+    init_intelligence_db,
+    insert_insights,
     query_camera_summary,
     query_events,
+    query_insights,
     query_tracks,
 )
 
@@ -163,6 +169,121 @@ class TestMultiCameraStorage(unittest.TestCase):
             self.assertEqual(summary_by_id["entrance"].total_dwell_seconds, 2.5)
             self.assertEqual(summary_by_id["concourse"].total_events, 1)
             self.assertEqual(summary_by_id["concourse"].total_dwell_seconds, 3.0)
+
+    def test_insights_table_insertion_and_query_filtering(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            db_path = Path(tmpdir) / "intelligence.db"
+            init_intelligence_db(db_path)
+
+            records = [
+                InsightRecord(
+                    insight_id="ins_001",
+                    camera_id="cam_east",
+                    insight_type=InsightType.LOITERING.value,
+                    severity=Severity.HIGH.value,
+                    track_id=1,
+                    zone_id="lobby",
+                    start_time=2.0,
+                    end_time=15.0,
+                    duration=13.0,
+                    description="East lobby loitering",
+                    evidence_snapshot_path="snapshots/s1.jpg",
+                    evidence_crop_path="crops/c1.jpg",
+                    details={"loiter_seconds": 13.0},
+                ),
+                InsightRecord(
+                    insight_id="ins_002",
+                    camera_id="cam_west",
+                    insight_type=InsightType.WRONG_WAY.value,
+                    severity=Severity.MEDIUM.value,
+                    track_id=2,
+                    zone_id="exit_corridor:B->A",
+                    start_time=20.0,
+                    end_time=20.0,
+                    duration=0.0,
+                    description="West wrong way crossing",
+                    evidence_snapshot_path=None,
+                    evidence_crop_path=None,
+                    details={"line": "exit_corridor"},
+                ),
+            ]
+
+            inserted = insert_insights(db_path, records)
+            self.assertEqual(inserted, 2)
+
+            # Query all insights
+            all_ins = query_insights(db_path)
+            self.assertEqual(len(all_ins), 2)
+            self.assertIsInstance(all_ins[0], InsightSearchResult)
+
+            # Filter by camera_id
+            east_ins = query_insights(db_path, camera_id="cam_east")
+            self.assertEqual(len(east_ins), 1)
+            self.assertEqual(east_ins[0].insight_id, "ins_001")
+            self.assertEqual(east_ins[0].details["loiter_seconds"], 13.0)
+
+            # Filter by insight_type
+            ww_ins = query_insights(db_path, insight_type="wrong_way")
+            self.assertEqual(len(ww_ins), 1)
+            self.assertEqual(ww_ins[0].insight_id, "ins_002")
+
+            # Filter by severity
+            high_ins = query_insights(db_path, severity="high")
+            self.assertEqual(len(high_ins), 1)
+            self.assertEqual(high_ins[0].severity, "high")
+
+            # Filter by time range
+            time_ins = query_insights(db_path, min_time=18.0)
+            self.assertEqual(len(time_ins), 1)
+            self.assertEqual(time_ins[0].insight_id, "ins_002")
+
+    def test_ingest_intelligence_db_with_insights_json(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            tmp = Path(tmpdir)
+            db_path = tmp / "intelligence.db"
+            tracks_csv = tmp / "tracks.csv"
+            tracks_csv.write_text(
+                "frame_id,track_id,x1,y1,x2,y2,confidence\n0,1,10.0,10.0,20.0,30.0,0.95\n",
+                encoding="utf-8",
+            )
+            ins_json = tmp / "insights.json"
+            ins_payload = [
+                {
+                    "insight_id": "ins_json_01",
+                    "camera_id": "cam_gate",
+                    "insight_type": "high_speed",
+                    "severity": "critical",
+                    "track_id": 1,
+                    "zone_id": None,
+                    "start_time": 1.0,
+                    "end_time": 3.0,
+                    "duration": 2.0,
+                    "description": "High speed running",
+                    "details": {"max_speed": 250.0},
+                }
+            ]
+            ins_json.write_text(json.dumps(ins_payload), encoding="utf-8")
+
+            cfg = SearchConfig(
+                source_name="gate.mp4",
+                camera_id="cam_gate",
+                tracks_csv=str(tracks_csv),
+                insights_json=str(ins_json),
+                detections_csv="",
+                tracking_summary_csv="",
+                trajectories_csv="",
+                trajectory_summary_csv="",
+                events_csv="",
+                zone_counts_csv="",
+                line_counts_csv="",
+            )
+            summary = ingest_intelligence_db(db_path, cfg, project_root=tmp)
+            self.assertEqual(summary.insights_count, 1)
+
+            res = query_insights(db_path, insight_type="high_speed")
+            self.assertEqual(len(res), 1)
+            self.assertEqual(res[0].insight_id, "ins_json_01")
+            self.assertEqual(res[0].severity, "critical")
 
 
 if __name__ == "__main__":
