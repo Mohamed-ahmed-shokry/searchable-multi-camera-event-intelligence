@@ -9,8 +9,9 @@ import csv
 import json
 import math
 import sqlite3
+from collections.abc import Sequence
 from contextlib import closing
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from itertools import pairwise
 from pathlib import Path
 from typing import Any
@@ -179,6 +180,7 @@ class SearchConfig:
     line_counts_csv: str = (
         "cv_projects/08_heatmaps_analytics/outputs/people_detection/line_counts.csv"
     )
+    insights_json: str | None = None
     default_query_limit: int = 50
     write_subproject_docs: bool = True
 
@@ -356,6 +358,42 @@ class EvidenceLookupResult:
 
 
 @dataclass(frozen=True, slots=True)
+class InsightSearchResult:
+    """Row returned by query_insights."""
+
+    camera_id: str
+    insight_id: str
+    insight_type: str
+    severity: str
+    track_id: int | None
+    zone_id: str | None
+    start_time: float
+    end_time: float
+    duration: float
+    description: str
+    evidence_snapshot_path: str | None = None
+    evidence_crop_path: str | None = None
+    details: dict[str, Any] = field(default_factory=dict)
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "camera_id": self.camera_id,
+            "insight_id": self.insight_id,
+            "insight_type": self.insight_type,
+            "severity": self.severity,
+            "track_id": self.track_id,
+            "zone_id": self.zone_id,
+            "start_time": round(self.start_time, 4),
+            "end_time": round(self.end_time, 4),
+            "duration": round(self.duration, 4),
+            "description": self.description,
+            "evidence_snapshot_path": self.evidence_snapshot_path,
+            "evidence_crop_path": self.evidence_crop_path,
+            "details": self.details,
+        }
+
+
+@dataclass(frozen=True, slots=True)
 class DatabaseSummary:
     """Row counts across all tables in intelligence.db."""
 
@@ -369,6 +407,7 @@ class DatabaseSummary:
     zone_counts_rows: int
     line_counts_rows: int
     cameras_count: int = 1
+    insights_count: int = 0
 
     def __post_init__(self) -> None:
         for name, val in (
@@ -380,6 +419,7 @@ class DatabaseSummary:
             ("zone_counts_rows", self.zone_counts_rows),
             ("line_counts_rows", self.line_counts_rows),
             ("cameras_count", self.cameras_count),
+            ("insights_count", self.insights_count),
         ):
             if val < 0:
                 raise ValueError(f"{name} must be non-negative")
@@ -396,6 +436,7 @@ class DatabaseSummary:
             "events_count": self.events_count,
             "zone_counts_rows": self.zone_counts_rows,
             "line_counts_rows": self.line_counts_rows,
+            "insights_count": self.insights_count,
         }
 
 
@@ -752,11 +793,70 @@ def ingest_intelligence_db(
             "events",
             "zone_counts",
             "line_counts",
+            "insights",
         ):
             if clear_existing:
                 conn.execute(f"DELETE FROM {tbl}")
             else:
                 conn.execute(f"DELETE FROM {tbl} WHERE camera_id = ?", (cam_id,))
+
+        insight_rows: list[tuple[Any, ...]] = []
+        if config.insights_json:
+            ins_p = _resolve_optional_path(config.insights_json, project_root)
+            if ins_p.is_file():
+                try:
+                    raw_items = json.loads(ins_p.read_text(encoding="utf-8"))
+                    if isinstance(raw_items, list):
+                        for item in raw_items:
+                            if isinstance(item, dict):
+                                i_id = str(item.get("insight_id", ""))
+                                c_id = str(item.get("camera_id", cam_id) or cam_id)
+                                i_type = str(item.get("insight_type", ""))
+                                sev = str(item.get("severity", "medium"))
+                                t_id = (
+                                    int(item["track_id"])
+                                    if item.get("track_id") is not None
+                                    else None
+                                )
+                                z_id = (
+                                    str(item["zone_id"])
+                                    if item.get("zone_id") is not None
+                                    else None
+                                )
+                                s_t = float(item.get("start_time", 0.0))
+                                e_t = float(item.get("end_time", 0.0))
+                                dur = float(item.get("duration", e_t - s_t))
+                                desc = str(item.get("description", ""))
+                                snap = (
+                                    str(item["evidence_snapshot_path"])
+                                    if item.get("evidence_snapshot_path")
+                                    else None
+                                )
+                                crop = (
+                                    str(item["evidence_crop_path"])
+                                    if item.get("evidence_crop_path")
+                                    else None
+                                )
+                                det_json = json.dumps(item.get("details", {}))
+                                insight_rows.append(
+                                    (
+                                        i_id,
+                                        c_id,
+                                        i_type,
+                                        sev,
+                                        t_id,
+                                        z_id,
+                                        s_t,
+                                        e_t,
+                                        dur,
+                                        desc,
+                                        snap,
+                                        crop,
+                                        det_json,
+                                    )
+                                )
+                except (json.JSONDecodeError, OSError):
+                    pass
 
         conn.executemany(
             "INSERT INTO detections (camera_id, frame_id, x1, y1, x2, y2, confidence, class_name) "
@@ -794,6 +894,14 @@ def ingest_intelligence_db(
             "VALUES (?, ?, ?, ?, ?)",
             lc_rows,
         )
+        if insight_rows:
+            conn.executemany(
+                "INSERT OR REPLACE INTO insights (insight_id, camera_id, insight_type, severity, "
+                "track_id, zone_id, start_time, end_time, duration, description, "
+                "evidence_snapshot_path, evidence_crop_path, details_json) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                insight_rows,
+            )
         conn.commit()
 
         cam_count = conn.execute("SELECT count(*) FROM cameras").fetchone()[0]
@@ -806,6 +914,7 @@ def ingest_intelligence_db(
         total_evs = conn.execute("SELECT count(*) FROM events").fetchone()[0]
         total_zc = conn.execute("SELECT count(*) FROM zone_counts").fetchone()[0]
         total_lc = conn.execute("SELECT count(*) FROM line_counts").fetchone()[0]
+        total_ins = conn.execute("SELECT count(*) FROM insights").fetchone()[0]
 
     return DatabaseSummary(
         db_path=str(out_db),
@@ -818,6 +927,7 @@ def ingest_intelligence_db(
         zone_counts_rows=total_zc,
         line_counts_rows=total_lc,
         cameras_count=max(1, cam_count),
+        insights_count=total_ins,
     )
 
 
@@ -1059,6 +1169,205 @@ def query_camera_summary(
                 )
             )
     return summaries
+
+
+def insert_insights(
+    db_path: Path | str,
+    insights: Sequence[Any],
+    *,
+    camera_id: str | None = None,
+) -> int:
+    """Insert or replace insight records into the intelligence database."""
+    path = Path(db_path)
+    if not path.is_file():
+        init_intelligence_db(path)
+
+    rows: list[tuple[Any, ...]] = []
+    for ins in insights:
+        if isinstance(ins, dict):
+            i_id = str(ins["insight_id"])
+            c_id = (
+                str(camera_id)
+                if camera_id is not None
+                else str(ins.get("camera_id", ""))
+            )
+            i_type = str(ins["insight_type"])
+            sev = str(ins.get("severity", "medium"))
+            t_id = int(ins["track_id"]) if ins.get("track_id") is not None else None
+            z_id = str(ins["zone_id"]) if ins.get("zone_id") is not None else None
+            t_start = float(ins["start_time"])
+            t_end = float(ins["end_time"])
+            dur = float(ins.get("duration", t_end - t_start))
+            desc = str(ins.get("description", ""))
+            snap = (
+                str(ins["evidence_snapshot_path"])
+                if ins.get("evidence_snapshot_path")
+                else None
+            )
+            crop = (
+                str(ins["evidence_crop_path"])
+                if ins.get("evidence_crop_path")
+                else None
+            )
+            det_json = json.dumps(ins.get("details", {}))
+        else:
+            i_id = str(ins.insight_id)
+            c_id = (
+                str(camera_id)
+                if camera_id is not None
+                else str(getattr(ins, "camera_id", ""))
+            )
+            i_type = str(ins.insight_type)
+            sev = str(getattr(ins, "severity", "medium"))
+            t_id = (
+                int(ins.track_id)
+                if getattr(ins, "track_id", None) is not None
+                else None
+            )
+            z_id = (
+                str(ins.zone_id) if getattr(ins, "zone_id", None) is not None else None
+            )
+            t_start = float(ins.start_time)
+            t_end = float(ins.end_time)
+            dur = float(getattr(ins, "duration", t_end - t_start))
+            desc = str(getattr(ins, "description", ""))
+            snap = (
+                str(ins.evidence_snapshot_path)
+                if getattr(ins, "evidence_snapshot_path", None)
+                else None
+            )
+            crop = (
+                str(ins.evidence_crop_path)
+                if getattr(ins, "evidence_crop_path", None)
+                else None
+            )
+            details_obj = getattr(ins, "details", {})
+            det_json = (
+                json.dumps(details_obj) if isinstance(details_obj, dict) else "{}"
+            )
+
+        rows.append(
+            (
+                i_id,
+                c_id,
+                i_type,
+                sev,
+                t_id,
+                z_id,
+                t_start,
+                t_end,
+                dur,
+                desc,
+                snap,
+                crop,
+                det_json,
+            )
+        )
+
+    if not rows:
+        return 0
+
+    with closing(sqlite3.connect(path)) as conn:
+        conn.executemany(
+            """
+            INSERT OR REPLACE INTO insights (
+                insight_id, camera_id, insight_type, severity, track_id, zone_id,
+                start_time, end_time, duration, description,
+                evidence_snapshot_path, evidence_crop_path, details_json
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            rows,
+        )
+        conn.commit()
+    return len(rows)
+
+
+def query_insights(
+    db_path: Path | str,
+    *,
+    camera_id: str | None = None,
+    insight_type: str | None = None,
+    severity: str | None = None,
+    track_id: int | None = None,
+    zone_id: str | None = None,
+    min_time: float | None = None,
+    max_time: float | None = None,
+    limit: int = 50,
+) -> list[InsightSearchResult]:
+    """Query behavioral insights from intelligence.db by type, severity, camera, zone, track, or time."""
+    if limit <= 0:
+        raise ValueError("limit must be positive")
+    path = Path(db_path)
+    if not path.is_file():
+        raise FileNotFoundError(f"SQLite database not found: {path}")
+
+    clauses: list[str] = []
+    params: list[Any] = []
+
+    if camera_id is not None and camera_id.strip():
+        clauses.append("camera_id = ?")
+        params.append(camera_id.strip())
+
+    if insight_type is not None and insight_type.strip():
+        clauses.append("insight_type = ?")
+        params.append(insight_type.strip())
+
+    if severity is not None and severity.strip():
+        clauses.append("severity = ?")
+        params.append(severity.strip().lower())
+
+    if track_id is not None:
+        clauses.append("track_id = ?")
+        params.append(int(track_id))
+
+    if zone_id is not None and zone_id.strip():
+        z = zone_id.strip()
+        clauses.append("(zone_id = ? OR zone_id LIKE ?)")
+        params.extend([z, f"{z}:%"])
+
+    if min_time is not None:
+        clauses.append("end_time >= ?")
+        params.append(float(min_time))
+
+    if max_time is not None:
+        clauses.append("start_time <= ?")
+        params.append(float(max_time))
+
+    where_sql = f"WHERE {' AND '.join(clauses)}" if clauses else ""
+    sql = (
+        "SELECT camera_id, insight_id, insight_type, severity, track_id, zone_id, "
+        "start_time, end_time, duration, description, evidence_snapshot_path, "
+        "evidence_crop_path, details_json "
+        f"FROM insights {where_sql} "
+        "ORDER BY start_time ASC, insight_id ASC LIMIT ?"
+    )
+    params.append(int(limit))
+
+    results: list[InsightSearchResult] = []
+    with closing(sqlite3.connect(path)) as conn:
+        for row in conn.execute(sql, params):
+            try:
+                details = json.loads(row[12]) if row[12] else {}
+            except (json.JSONDecodeError, TypeError):
+                details = {}
+            results.append(
+                InsightSearchResult(
+                    camera_id=row[0],
+                    insight_id=row[1],
+                    insight_type=row[2],
+                    severity=row[3],
+                    track_id=row[4],
+                    zone_id=row[5],
+                    start_time=row[6],
+                    end_time=row[7],
+                    duration=row[8],
+                    description=row[9],
+                    evidence_snapshot_path=row[10],
+                    evidence_crop_path=row[11],
+                    details=details,
+                )
+            )
+    return results
 
 
 def lookup_event_evidence(
