@@ -1734,6 +1734,106 @@ uv run --locked python -m event_intelligence.search \
 | `uv run --locked pytest -v` | ✅ `193 passed, 56 subtests passed` | full unit + integration test suite |
 | Remote CI (PR #12 & push): run 43231667710 | ✅ completed / success (38s) | GitHub Actions CI green across all jobs on `windows-latest` |
 
+---
+
+## Phase: 11d — Automated Behavior Insight & Anomaly Intelligence (2026-11-13)
+
+### Objective
+
+Elevate the CV pipeline from structured event logging (`search`) to actionable behavioral intelligence (`insight` in `video -> vision -> behavior -> events -> search -> insight`). While Phase 11c unified multi-camera ingestion and storage, surveillance operators still had to manually interpret hundreds of raw tracks and dwell events to discover anomalous or noteworthy patterns.
+
+This phase introduces an automated **Behavioral Insight Engine** (`src/event_intelligence/insights/`) that processes trajectories, zone stays, and multi-camera transitions to detect security and operational anomalies (loitering, wrong-way movements, speed anomalies, stationary entities/track drops in restricted areas, and cross-camera transitions), stores them in an `insights` table in `intelligence.db`, outputs an executive surveillance summary report (`intelligence_report.md` and `insights.json`), and provides rich insight query filters in `event_intelligence.search`. Additionally, it equips `event_intelligence.evaluation` with a runnable CLI module (`python -m event_intelligence.evaluation`).
+
+### Scope
+
+1. **Insight Domain & Rule Detectors (`src/event_intelligence/insights/`):**
+   - Core dataclasses: `InsightType`, `Severity`, `InsightRecord`, `InsightConfig`.
+   - **Loitering Detector**: Flags entities lingering in a zone beyond configured thresholds (or exceeding 2.5x zone median dwell).
+   - **Wrong-Way Movement Detector**: Checks line crossing or trajectory vector against expected flow direction defined in scene configuration.
+   - **Speed Anomaly Detector**: Computes pixel ground-plane velocity along trajectory segments to flag abnormal rapid running/sprinting.
+   - **Stationary / Track Drop in Restricted Zone Detector**: Detects tracks that stall or terminate prematurely inside high-security/restricted zones.
+   - **Cross-Camera Temporal Correlation Detector**: Identifies candidate entity transitions between adjacent camera views based on exit/entry timestamp proximity.
+2. **Executive Intelligence Reporting:**
+   - Generates `intelligence_report.md` and `insights.json` in pipeline run directories containing executive statistics, camera activity, detected anomalies with thumbnail evidence links, and hotspot zones.
+3. **Database Schema & Storage Support (`src/event_intelligence/storage/`):**
+   - New `insights` table in SQLite schema with composite keys `(insight_id, camera_id)` and foreign key references.
+   - Automatic SQLite table migration for backward compatibility.
+   - Storage queries: `insert_insights`, `query_insights` supporting filtering by camera, type, severity, track, and timestamp.
+4. **Search CLI Enhancement (`event_intelligence.search`):**
+   - CLI options `--insights`, `--insight-type`, and `--severity` for cross-camera and per-camera insight queries.
+5. **Evaluation CLI Entrypoint:**
+   - Add `src/event_intelligence/evaluation/__main__.py` allowing direct `python -m event_intelligence.evaluation` invocation.
+6. **Pipeline Integration & Testing:**
+   - Wire insight detection and report generation into `run_pipeline` and `run_multi_camera_pipeline`.
+   - Comprehensive unit and integration test coverage across all detectors, database storage, CLI queries, and end-to-end runs.
+
+### Acceptance Criteria
+
+| # | Criterion | Status | Evidence |
+|---|-----------|--------|----------|
+| 1 | `python -m event_intelligence.evaluation --help` executes cleanly as a runnable package CLI | ⏳ | To be verified |
+| 2 | Insight engine detects loitering, wrong-way, speed anomalies, stationary entities in restricted zones, and cross-camera handoffs | ⏳ | To be verified |
+| 3 | SQLite schema supports `insights` table with composite keys and automated schema migration | ⏳ | To be verified |
+| 4 | `run_pipeline` and `run_multi_camera_pipeline` emit `insights.json` and human-readable `intelligence_report.md` | ⏳ | To be verified |
+| 5 | `event_intelligence.search` supports `--insights`, `--insight-type`, and `--severity` filters | ⏳ | To be verified |
+| 6 | Comprehensive test suite passes with zero regressions | ⏳ | To be verified |
+| 7 | All local CI-parity checks and remote GitHub Actions CI runs pass 100% | ⏳ | To be verified |
+
+### Validation & CI Plan
+
+```bash
+uv sync --locked
+uv run --locked ruff check .
+uv run --locked ruff format --check .
+uv run --locked pytest -v
+# Evaluation CLI check
+uv run --locked python -m event_intelligence.evaluation --help
+# Search CLI with insights
+uv run --locked python -m event_intelligence.search --db outputs/runs/multicam_test/intelligence.db --insights --json
+```
+
+### Exclusions
+
+- Track C Productization (Phase 12): FastAPI HTTP server, React web UI, live RTSP streaming, user auth, and deep appearance Re-ID feature extractors.
+
+### Micro-Task Breakdown
+
+- [ ] 1. `docs(roadmap): define Phase 11d behavior insight and anomaly intelligence scope`
+- [ ] 2. `feat(evaluation): add __main__.py CLI entrypoint to event_intelligence.evaluation`
+- [ ] 3. `test(evaluation): add test for python -m event_intelligence.evaluation CLI entrypoint`
+- [ ] 4. `types(insights): define InsightType, Severity, InsightRecord, and InsightConfig dataclasses`
+- [ ] 5. `feat(insights): implement loitering and prolonged dwell detector`
+- [ ] 6. `feat(insights): implement wrong-way and directional corridor violation detector`
+- [ ] 7. `feat(insights): implement high-velocity and rapid movement detector`
+- [ ] 8. `feat(insights): implement stationary entity and track loss in sensitive zone detector`
+- [ ] 9. `feat(insights): implement cross-camera temporal correlation detector`
+- [ ] 10. `test(insights): add unit tests for behavioral insight detectors`
+- [ ] 11. `feat(storage): add insights table and migration to SQLite schema`
+- [ ] 12. `feat(storage): implement insert_insights and query_insights in storage`
+- [ ] 13. `test(storage): add unit tests for insights table schema, ingestion, and querying`
+- [ ] 14. `feat(insights): implement executive summary and report generator (intelligence_report.md)`
+- [ ] 15. `feat(pipeline): wire insight detection and report generation into run_pipeline and run_multi_camera_pipeline`
+- [ ] 16. `feat(search): add --insights, --insight-type, and --severity query flags to event_intelligence.search`
+- [ ] 17. `test(search): add integration tests for search CLI insights filtering`
+- [ ] 18. `test(pipeline): add end-to-end pipeline tests verifying insights generation and intelligence_report.md`
+- [ ] 19. `docs(readme): document insight intelligence, report generation, and CLI search examples`
+- [ ] 20. `docs(roadmap): complete Phase 11d criteria, decision log, and CI log`
+
+### Decision Log (Phase 11d)
+
+| Decision | Options Considered | Chosen & Rationale |
+|----------|-------------------|--------------------|
+| Insight Engine Architecture | (a) In-place detection during tracking loop; (b) Post-event behavioral analyzer running over enriched tracks, events, and trajectories | **(b) Post-event behavioral analyzer** — allows contextual and statistical reasoning across complete track lifecycles, zone dwell distributions, and cross-camera timings without slowing down video inference. |
+| Report Output Format | (a) Pure JSON `insights.json`; (b) Dual JSON + GitHub Flavored Markdown `intelligence_report.md` | **(b) Dual JSON + Markdown** — JSON provides machine-readable ingestion while Markdown provides immediate human review with clickable links to evidence snapshots and crops. |
+| Evaluation CLI Entrypoint | (a) Standalone script only in `cv_projects/`; (b) First-class package CLI `python -m event_intelligence.evaluation` | **(b) First-class package CLI** — aligns `evaluation` with `pipeline` and `search` under `src/event_intelligence/`. |
+
+### CI & Validation Log (Phase 11d)
+
+| Command | Result | Notes |
+|---------|--------|-------|
+| Baseline parity checks | ✅ all pass | 193 passed, 56 subtests, ruff clean |
+
+
 
 
 
