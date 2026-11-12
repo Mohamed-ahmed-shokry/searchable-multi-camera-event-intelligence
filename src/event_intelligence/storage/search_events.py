@@ -1776,6 +1776,23 @@ def build_parser() -> argparse.ArgumentParser:
         help="Query tracks table instead of events table.",
     )
     parser.add_argument(
+        "--insights",
+        action="store_true",
+        help="Query behavioral insights table instead of events.",
+    )
+    parser.add_argument(
+        "--insight-type",
+        type=str,
+        default=None,
+        help="Filter insights by type (e.g. loitering, wrong_way, high_speed, stationary_in_zone, cross_camera_transition).",
+    )
+    parser.add_argument(
+        "--severity",
+        type=str,
+        default=None,
+        help="Filter insights by severity (e.g. info, low, medium, high, critical).",
+    )
+    parser.add_argument(
         "-c",
         "--camera",
         "--camera-id",
@@ -1919,6 +1936,36 @@ def main(argv: list[str] | None = None) -> int:
                     f"  track_id={t.track_id}{cam_label} frames={t.start_frame}..{t.end_frame} "
                     f"duration={t.duration_seconds:.4f}s "
                     f"path_length={t.path_length_px:.2f}px events={t.event_count}"
+                )
+        return 0
+
+    if args.insights or args.insight_type or args.severity:
+        insights_res = query_insights(
+            db_path,
+            camera_id=args.camera_id,
+            insight_type=args.insight_type,
+            severity=args.severity,
+            track_id=args.track_id,
+            zone_id=args.zone,
+            min_time=args.min_time,
+            max_time=args.max_time,
+            limit=args.limit,
+        )
+        if args.json:
+            print(json.dumps([ins.to_dict() for ins in insights_res], indent=2))
+        else:
+            print(f"Matched {len(insights_res)} insight(s):")
+            for ins in insights_res:
+                cam_label = f" cam={ins.camera_id}" if ins.camera_id else ""
+                track_label = (
+                    f" track={ins.track_id}" if ins.track_id is not None else ""
+                )
+                zone_label = f" zone={ins.zone_id}" if ins.zone_id else ""
+                print(
+                    f"  [{ins.insight_id}]{cam_label} type={ins.insight_type} "
+                    f"sev={ins.severity}{track_label}{zone_label} "
+                    f"time={ins.start_time:.2f}..{ins.end_time:.2f}s "
+                    f"desc='{ins.description}'"
                 )
         return 0
 
