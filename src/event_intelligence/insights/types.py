@@ -117,6 +117,8 @@ class InsightConfig:
     stationary_speed_threshold_px_s: float = 5.0
     stationary_min_seconds: float = 10.0
     restricted_zones: tuple[str, ...] = ()
+    allowed_line_directions: Mapping[str, str] = field(default_factory=dict)
+    disallowed_line_crossings: tuple[str, ...] = ()
     cross_camera_min_seconds: float = 0.5
     cross_camera_max_seconds: float = 60.0
 
@@ -152,6 +154,8 @@ class InsightConfig:
             "stationary_speed_threshold_px_s": self.stationary_speed_threshold_px_s,
             "stationary_min_seconds": self.stationary_min_seconds,
             "restricted_zones": list(self.restricted_zones),
+            "allowed_line_directions": dict(self.allowed_line_directions),
+            "disallowed_line_crossings": list(self.disallowed_line_crossings),
             "cross_camera_min_seconds": self.cross_camera_min_seconds,
             "cross_camera_max_seconds": self.cross_camera_max_seconds,
         }

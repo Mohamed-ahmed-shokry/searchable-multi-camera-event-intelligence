@@ -110,3 +110,89 @@ def detect_loitering_insights(
         idx += 1
 
     return insights
+
+
+def detect_wrong_way_insights(
+    events: Sequence[Any],
+    config: InsightConfig,
+    *,
+    camera_id: str = "default",
+    start_index: int = 1,
+) -> list[InsightRecord]:
+    """Detect directional corridor violations and reverse line crossings."""
+    if not config.allowed_line_directions and not config.disallowed_line_crossings:
+        return []
+
+    line_events = [
+        ev
+        for ev in events
+        if getattr(ev, "event_type", None) == "line_crossing"
+        and getattr(ev, "zone_id", None)
+    ]
+    if not line_events:
+        return []
+
+    insights: list[InsightRecord] = []
+    idx = start_index
+
+    for ev in line_events:
+        full_spec = str(ev.zone_id)
+        line_id, sep, direction = full_spec.partition(":")
+        if not sep:
+            line_id = full_spec
+            direction = ""
+
+        is_disallowed = full_spec in config.disallowed_line_crossings
+        is_wrong_dir = (
+            line_id in config.allowed_line_directions
+            and direction != ""
+            and config.allowed_line_directions[line_id] != direction
+        )
+
+        if not (is_disallowed or is_wrong_dir):
+            continue
+
+        is_restricted = (
+            line_id in config.restricted_zones or full_spec in config.restricted_zones
+        )
+        severity = Severity.HIGH.value if is_restricted else Severity.MEDIUM.value
+
+        snap_path = getattr(ev, "evidence_snapshot_path", None) or getattr(
+            ev, "snapshot_path", None
+        )
+        crop_path = getattr(ev, "evidence_crop_path", None) or getattr(
+            ev, "crop_path", None
+        )
+
+        expected = config.allowed_line_directions.get(line_id, "disallowed")
+        record = InsightRecord(
+            insight_id=f"ins_{camera_id}_{idx:04d}",
+            camera_id=camera_id,
+            insight_type=InsightType.WRONG_WAY.value,
+            severity=severity,
+            track_id=(
+                int(ev.track_id) if getattr(ev, "track_id", None) is not None else None
+            ),
+            zone_id=full_spec,
+            start_time=float(ev.start_time),
+            end_time=float(ev.end_time),
+            duration=float(
+                getattr(ev, "duration", 0.0) or getattr(ev, "duration_seconds", 0.0)
+            ),
+            description=(
+                f"Track {ev.track_id} wrong-way crossing on '{line_id}' "
+                f"in direction '{direction}' (expected '{expected}')"
+            ),
+            evidence_snapshot_path=str(snap_path) if snap_path else None,
+            evidence_crop_path=str(crop_path) if crop_path else None,
+            details={
+                "line_id": line_id,
+                "direction": direction,
+                "expected_direction": expected,
+                "is_restricted": is_restricted,
+            },
+        )
+        insights.append(record)
+        idx += 1
+
+    return insights
