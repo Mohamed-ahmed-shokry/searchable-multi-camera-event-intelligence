@@ -20,8 +20,19 @@ import yaml
 _PROJECT_ROOT = Path(__file__).resolve().parents[3]
 
 SCHEMA_DDL = """
+CREATE TABLE IF NOT EXISTS cameras (
+    camera_id TEXT PRIMARY KEY,
+    source_name TEXT NOT NULL,
+    fps REAL NOT NULL DEFAULT 30.0,
+    width INTEGER NOT NULL DEFAULT 1920,
+    height INTEGER NOT NULL DEFAULT 1080,
+    total_frames INTEGER NOT NULL DEFAULT 0,
+    created_at TEXT NOT NULL DEFAULT ''
+);
+
 CREATE TABLE IF NOT EXISTS detections (
     detection_id INTEGER PRIMARY KEY AUTOINCREMENT,
+    camera_id TEXT NOT NULL DEFAULT '',
     frame_id INTEGER NOT NULL,
     x1 REAL NOT NULL,
     y1 REAL NOT NULL,
@@ -31,9 +42,11 @@ CREATE TABLE IF NOT EXISTS detections (
     class_name TEXT NOT NULL
 );
 CREATE INDEX IF NOT EXISTS idx_detections_frame_id ON detections (frame_id);
+CREATE INDEX IF NOT EXISTS idx_detections_camera_frame ON detections (camera_id, frame_id);
 
 CREATE TABLE IF NOT EXISTS track_observations (
     observation_id INTEGER PRIMARY KEY AUTOINCREMENT,
+    camera_id TEXT NOT NULL DEFAULT '',
     frame_id INTEGER NOT NULL,
     track_id INTEGER NOT NULL,
     x1 REAL NOT NULL,
@@ -43,30 +56,37 @@ CREATE TABLE IF NOT EXISTS track_observations (
     confidence REAL NOT NULL
 );
 CREATE INDEX IF NOT EXISTS idx_track_obs_track_frame ON track_observations (track_id, frame_id);
+CREATE INDEX IF NOT EXISTS idx_track_obs_cam_trk_frame ON track_observations (camera_id, track_id, frame_id);
 
 CREATE TABLE IF NOT EXISTS tracks (
-    track_id INTEGER PRIMARY KEY,
+    track_id INTEGER NOT NULL,
+    camera_id TEXT NOT NULL DEFAULT '',
     start_frame INTEGER NOT NULL,
     end_frame INTEGER NOT NULL,
     duration_frames INTEGER NOT NULL,
     duration_seconds REAL NOT NULL,
     observed_frames INTEGER NOT NULL,
-    path_length_px REAL NOT NULL
+    path_length_px REAL NOT NULL,
+    PRIMARY KEY (camera_id, track_id)
 );
 CREATE INDEX IF NOT EXISTS idx_tracks_duration ON tracks (duration_seconds DESC);
+CREATE INDEX IF NOT EXISTS idx_tracks_camera ON tracks (camera_id);
 
 CREATE TABLE IF NOT EXISTS trajectories (
     track_id INTEGER NOT NULL,
+    camera_id TEXT NOT NULL DEFAULT '',
     frame_id INTEGER NOT NULL,
     timestamp REAL NOT NULL,
     x REAL NOT NULL,
     y REAL NOT NULL,
-    PRIMARY KEY (track_id, frame_id)
+    PRIMARY KEY (camera_id, track_id, frame_id)
 );
 CREATE INDEX IF NOT EXISTS idx_trajectories_timestamp ON trajectories (timestamp);
+CREATE INDEX IF NOT EXISTS idx_trajectories_camera_ts ON trajectories (camera_id, timestamp);
 
 CREATE TABLE IF NOT EXISTS events (
-    event_id TEXT PRIMARY KEY,
+    event_id TEXT NOT NULL,
+    camera_id TEXT NOT NULL DEFAULT '',
     event_type TEXT NOT NULL,
     track_id INTEGER NOT NULL,
     zone_id TEXT NOT NULL,
@@ -74,25 +94,32 @@ CREATE TABLE IF NOT EXISTS events (
     end_time REAL NOT NULL,
     duration_seconds REAL NOT NULL,
     snapshot_path TEXT NOT NULL,
-    crop_path TEXT NOT NULL
+    crop_path TEXT NOT NULL,
+    PRIMARY KEY (camera_id, event_id)
 );
 CREATE INDEX IF NOT EXISTS idx_events_type_zone ON events (event_type, zone_id);
 CREATE INDEX IF NOT EXISTS idx_events_track_id ON events (track_id);
 CREATE INDEX IF NOT EXISTS idx_events_time_range ON events (start_time, end_time);
+CREATE INDEX IF NOT EXISTS idx_events_camera_type_zone ON events (camera_id, event_type, zone_id);
+CREATE INDEX IF NOT EXISTS idx_events_camera_track_id ON events (camera_id, track_id);
 
 CREATE TABLE IF NOT EXISTS zone_counts (
-    zone_id TEXT PRIMARY KEY,
+    zone_id TEXT NOT NULL,
+    camera_id TEXT NOT NULL DEFAULT '',
     entry_count INTEGER NOT NULL,
     exit_count INTEGER NOT NULL,
     total_dwell_seconds REAL NOT NULL,
-    peak_occupancy INTEGER NOT NULL
+    peak_occupancy INTEGER NOT NULL,
+    PRIMARY KEY (camera_id, zone_id)
 );
 
 CREATE TABLE IF NOT EXISTS line_counts (
-    line_id TEXT PRIMARY KEY,
+    line_id TEXT NOT NULL,
+    camera_id TEXT NOT NULL DEFAULT '',
     crossings_ab INTEGER NOT NULL,
     crossings_ba INTEGER NOT NULL,
-    total INTEGER NOT NULL
+    total INTEGER NOT NULL,
+    PRIMARY KEY (camera_id, line_id)
 );
 """
 
@@ -411,12 +438,36 @@ def save_search_config(config: SearchConfig, path: Path | str) -> Path:
     return out_path
 
 
+def _migrate_multi_camera_columns(conn: sqlite3.Connection) -> None:
+    """Add camera_id column to tables if migrating from older single-camera schemas."""
+    tables = [
+        "detections",
+        "track_observations",
+        "tracks",
+        "trajectories",
+        "events",
+        "zone_counts",
+        "line_counts",
+    ]
+    for table in tables:
+        try:
+            cursor = conn.execute(f"PRAGMA table_info({table})")
+            cols = [row[1] for row in cursor.fetchall()]
+            if cols and "camera_id" not in cols:
+                conn.execute(
+                    f"ALTER TABLE {table} ADD COLUMN camera_id TEXT NOT NULL DEFAULT ''"
+                )
+        except sqlite3.OperationalError:
+            pass
+
+
 def init_intelligence_db(db_path: Path | str) -> Path:
     """Create intelligence.db and execute SCHEMA_DDL idempotently."""
     out_db = Path(db_path)
     out_db.parent.mkdir(parents=True, exist_ok=True)
     with closing(sqlite3.connect(out_db)) as conn:
         conn.executescript(SCHEMA_DDL)
+        _migrate_multi_camera_columns(conn)
         conn.commit()
     return out_db
 
