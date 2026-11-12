@@ -2,8 +2,10 @@
 
 from __future__ import annotations
 
+import itertools
+import math
 import statistics
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 from typing import Any
 
 from event_intelligence.insights.types import (
@@ -31,7 +33,6 @@ def detect_loitering_insights(
     if not dwell_events:
         return []
 
-    # Calculate median dwell per zone
     dwells_by_zone: dict[str, list[float]] = {}
     for ev in dwell_events:
         zone = str(ev.zone_id)
@@ -87,9 +88,9 @@ def detect_loitering_insights(
             camera_id=camera_id,
             insight_type=InsightType.LOITERING.value,
             severity=severity,
-            track_id=int(ev.track_id)
-            if getattr(ev, "track_id", None) is not None
-            else None,
+            track_id=(
+                int(ev.track_id) if getattr(ev, "track_id", None) is not None else None
+            ),
             zone_id=zone,
             start_time=float(ev.start_time),
             end_time=float(ev.end_time),
@@ -194,5 +195,101 @@ def detect_wrong_way_insights(
         )
         insights.append(record)
         idx += 1
+
+    return insights
+
+
+def detect_speed_anomaly_insights(
+    trajectories: Mapping[int, Sequence[Any]],
+    config: InsightConfig,
+    *,
+    camera_id: str = "default",
+    start_index: int = 1,
+) -> list[InsightRecord]:
+    """Detect rapid movement, sprinting, or high-velocity anomalies along trajectories."""
+    threshold = config.speed_anomaly_threshold_px_s
+    min_frames = config.min_speed_anomaly_frames
+    insights: list[InsightRecord] = []
+    idx = start_index
+
+    for track_id, points in trajectories.items():
+        if len(points) < min_frames + 1:
+            continue
+
+        sorted_pts = sorted(
+            points,
+            key=lambda p: (
+                getattr(p, "frame_id", 0),
+                getattr(p, "timestamp", 0.0),
+            ),
+        )
+
+        current_burst: list[tuple[Any, float]] = []
+        bursts: list[list[tuple[Any, float]]] = []
+
+        for p1, p2 in itertools.pairwise(sorted_pts):
+            t1 = float(getattr(p1, "timestamp", 0.0))
+            t2 = float(getattr(p2, "timestamp", 0.0))
+            dt = t2 - t1
+            if dt <= 1e-4:
+                continue
+
+            x1, y1 = float(getattr(p1, "x", 0.0)), float(getattr(p1, "y", 0.0))
+            x2, y2 = float(getattr(p2, "x", 0.0)), float(getattr(p2, "y", 0.0))
+            dist = math.hypot(x2 - x1, y2 - y1)
+            speed = dist / dt
+
+            if speed >= threshold:
+                if not current_burst:
+                    current_burst.append((p1, speed))
+                current_burst.append((p2, speed))
+            else:
+                if len(current_burst) >= min_frames + 1:
+                    bursts.append(list(current_burst))
+                current_burst.clear()
+
+        if len(current_burst) >= min_frames + 1:
+            bursts.append(list(current_burst))
+
+        for burst in bursts:
+            burst_pts = [b[0] for b in burst]
+            burst_speeds = [b[1] for b in burst]
+            max_spd = max(burst_speeds)
+            mean_spd = sum(burst_speeds) / len(burst_speeds)
+            t_start = float(getattr(burst_pts[0], "timestamp", 0.0))
+            t_end = float(getattr(burst_pts[-1], "timestamp", 0.0))
+            dur = max(0.0, t_end - t_start)
+
+            if max_spd >= 2.5 * threshold:
+                sev = Severity.CRITICAL.value
+            elif max_spd >= 1.5 * threshold:
+                sev = Severity.HIGH.value
+            else:
+                sev = Severity.MEDIUM.value
+
+            rec = InsightRecord(
+                insight_id=f"ins_{camera_id}_{idx:04d}",
+                camera_id=camera_id,
+                insight_type=InsightType.HIGH_SPEED.value,
+                severity=sev,
+                track_id=int(track_id),
+                zone_id=None,
+                start_time=t_start,
+                end_time=t_end,
+                duration=dur,
+                description=(
+                    f"Track {track_id} rapid movement / speed anomaly: "
+                    f"max speed {max_spd:.1f} px/s (threshold {threshold:.1f} px/s) "
+                    f"over {dur:.2f}s ({len(burst_pts)} frames)"
+                ),
+                details={
+                    "max_speed_px_s": round(max_spd, 1),
+                    "mean_speed_px_s": round(mean_spd, 1),
+                    "threshold_px_s": threshold,
+                    "burst_frames": len(burst_pts),
+                },
+            )
+            insights.append(rec)
+            idx += 1
 
     return insights

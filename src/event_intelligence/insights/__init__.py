@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from event_intelligence.insights.detectors import (
     detect_loitering_insights,
+    detect_speed_anomaly_insights,
     detect_wrong_way_insights,
 )
 from event_intelligence.insights.types import (
@@ -23,5 +24,6 @@ __all__ = [
     "InsightType",
     "Severity",
     "detect_loitering_insights",
+    "detect_speed_anomaly_insights",
     "detect_wrong_way_insights",
 ]
