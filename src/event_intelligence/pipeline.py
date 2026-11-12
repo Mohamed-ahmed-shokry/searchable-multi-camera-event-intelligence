@@ -378,9 +378,11 @@ def run_pipeline(
         else datetime.now(UTC).strftime("run_%Y%m%dT%H%M%S_") + uuid4().hex[:6]
     )
     runs_base = (
-        Path(output_root) if output_root is not None else (root / "outputs" / "runs")
+        Path(output_root).resolve()
+        if output_root is not None
+        else (root / "outputs" / "runs").resolve()
     )
-    run_dir = runs_base / resolved_run_id
+    run_dir = (runs_base / resolved_run_id).resolve()
     run_dir.mkdir(parents=True, exist_ok=True)
 
     run_config_path = save_pipeline_config(cfg, run_dir / "run_config.yaml")
@@ -617,18 +619,18 @@ def run_pipeline(
     # Phase 10: Ingest into SQLite intelligence.db
     search_cfg = SearchConfig(
         source_name=src_path.name,
-        detections_csv=str(detections_csv_path),
-        tracks_csv=str(tracks_csv_path),
-        tracking_summary_csv=str(track_summary_csv_path),
-        trajectories_csv=str(trajectories_csv_path),
-        trajectory_summary_csv=str(trajectory_summary_csv_path),
-        events_csv=str(run_dir / "events.csv"),
-        evidence_root=str(run_dir),
-        zone_counts_csv=str(zone_counts_csv_path),
-        line_counts_csv=str(line_counts_csv_path),
+        detections_csv=str(detections_csv_path.resolve()),
+        tracks_csv=str(tracks_csv_path.resolve()),
+        tracking_summary_csv=str(track_summary_csv_path.resolve()),
+        trajectories_csv=str(trajectories_csv_path.resolve()),
+        trajectory_summary_csv=str(trajectory_summary_csv_path.resolve()),
+        events_csv=str((run_dir / "events.csv").resolve()),
+        evidence_root=str(run_dir.resolve()),
+        zone_counts_csv=str(zone_counts_csv_path.resolve()),
+        line_counts_csv=str(line_counts_csv_path.resolve()),
         write_subproject_docs=False,
     )
-    db_path = run_dir / "intelligence.db"
+    db_path = (run_dir / "intelligence.db").resolve()
     db_summary = ingest_intelligence_db(db_path, search_cfg, project_root=root)
 
     elapsed = time.perf_counter() - t0

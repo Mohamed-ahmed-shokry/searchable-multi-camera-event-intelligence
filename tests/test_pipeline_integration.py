@@ -560,6 +560,35 @@ class TestEndToEndPipelineAndCli(unittest.TestCase):
             self.assertEqual(payload["run_id"], "seq_run")
             self.assertTrue((out_root / "seq_run" / "intelligence.db").is_file())
 
+    def test_run_pipeline_relative_output_root_populates_database(self) -> None:
+        """Verify that passing a relative output_root still populates intelligence.db."""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            root = Path(tmpdir)
+            vid_path = make_video(root, name="test_rel.avi", count=6)
+            tracks_csv = root / "tracks.csv"
+            write_tracks_csv(
+                tracks_csv,
+                [
+                    FrameTracks(0, [TrackDetection(0, 1, 10.0, 10.0, 20.0, 30.0, 0.9)]),
+                    FrameTracks(1, [TrackDetection(1, 1, 10.0, 10.0, 20.0, 30.0, 0.9)]),
+                ],
+            )
+            cfg = PipelineConfig(
+                precomputed_tracks_csv=str(tracks_csv),
+                save_annotated_video=False,
+            )
+            # Use relative output root like "relative_runs"
+            rel_output = Path(tmpdir) / "sub" / "relative_runs"
+            res = run_pipeline(
+                vid_path,
+                cfg,
+                output_root=str(rel_output),
+                run_id="rel_run",
+                project_root=root,
+            )
+            self.assertTrue(Path(res.db_path).is_file())
+            self.assertGreater(res.tracks_count, 0)
+
     def test_src_package_has_no_sys_path_mutations_or_cv_projects_imports(self) -> None:
         src_pkg = Path(__file__).resolve().parents[1] / "src" / "event_intelligence"
         py_files = sorted(src_pkg.rglob("*.py"))
