@@ -1617,6 +1617,106 @@ uv run --locked python -m event_intelligence.search \
 | `uv run --locked pytest -v` | ✅ `184 passed, 56 subtests passed` | full unit + integration test suite |
 | `uv run --locked python -m event_intelligence.search --db outputs/runs/people_detection/intelligence.db --event-type dwell_time_event --zone right_aisle --json` | ✅ `3` dwell events returned | verified against pipeline-generated `intelligence.db` |
 
+---
+
+## Planned Phase: 11c — Multi-Camera Pipeline Integration & Cross-Camera Search Intelligence (2026-11-12)
+
+### Objective
+
+Deliver multi-camera video intelligence end-to-end across `src/event_intelligence/`:
+1. Resolve critical pipeline correctness and path resolution issues identified in code review:
+   - Make cached detections and tracks source-validated so runs with different videos do not reuse mismatched inputs.
+   - Ensure all output and artifact paths are resolved to absolute paths before passing to `SearchConfig` and `ingest_intelligence_db`.
+2. Upgrade SQLite schema and storage in `event_intelligence.storage` to support multi-camera intelligence:
+   - Add `cameras` table and `camera_id` column across `detections`, `track_observations`, `tracks`, `trajectories`, `events`, `zone_counts`, and `line_counts`.
+   - Maintain 100% backward compatibility for single-camera databases.
+   - Support multi-camera incremental ingestion into a single unified `intelligence.db`.
+3. Add cross-camera query capabilities in `event_intelligence.search`:
+   - Filter events and tracks by `--camera` (`-c`).
+   - Query cross-camera activity summaries (`--camera-summary`) comparing detections, tracks, events, and dwell times across feeds.
+4. Support multi-camera pipeline orchestration in `event_intelligence.pipeline`:
+   - Allow passing multiple video sources (`--videos clip1.mp4 clip2.mp4` or multi-camera YAML config).
+   - Produce per-camera artifacts alongside a unified multi-camera `intelligence.db`.
+5. Maintain 100% green CI parity locally (`uv sync --locked`, `ruff check`, `ruff format --check`, `pytest -v`) and remotely on GitHub Actions.
+
+### Scope
+
+1. **Pipeline Correctness & Path Fixes:**
+   - In `src/event_intelligence/pipeline.py`, ensure `output_root` and all artifact paths are resolved to absolute paths.
+   - In `src/event_intelligence/pipeline.py`, validate precomputed detection and tracking caches against the active video source name or dimensions, preventing cross-video cache contamination.
+2. **Multi-Camera Schema & Storage:**
+   - Update `SCHEMA_DDL` with `cameras` table and `camera_id` column in all entity tables with composite keys/indices.
+   - Update `SearchConfig`, `ingest_intelligence_db`, and add `ingest_multi_camera_intelligence_db` in `event_intelligence.storage.search_events`.
+   - Update `query_events` and `query_tracks` with optional `camera_id` filtering.
+   - Implement `query_camera_summary` returning per-camera breakdown of total frames, tracks, events, and dwell duration.
+3. **Cross-Camera Search CLI:**
+   - Add `--camera` (`-c`) and `--camera-summary` options to `event_intelligence.search`.
+   - Output structured JSON and human-readable tables for multi-camera searches.
+4. **Multi-Camera Pipeline Orchestration:**
+   - Support multi-video execution in `event_intelligence.pipeline` (`--videos`, `--cameras`).
+   - Add `MultiCameraPipelineConfig` and `configs/pipeline_multicam.yaml`.
+5. **Testing & Verification:**
+   - Unit tests for multi-camera schema, ingestion, and query filtering.
+   - Integration tests for multi-camera search CLI flags.
+   - End-to-end multi-camera pipeline integration test verifying unified `intelligence.db` across multiple video clips.
+
+### Acceptance Criteria
+
+| # | Criterion | Status | Evidence |
+|---|-----------|--------|----------|
+| 1 | `output_root` and artifact paths in `run_pipeline` resolve to absolute paths, ensuring consistent ingestion regardless of working directory | ⏳ pending | `test_pipeline_integration.py` |
+| 2 | Cached detections and tracks are validated against source before reuse; mismatched caches do not contaminate other clips | ⏳ pending | `test_pipeline_integration.py` |
+| 3 | SQLite schema supports `cameras` table and `camera_id` attribute across all entity tables while maintaining backward compatibility | ⏳ pending | `test_storage_multicamera.py` |
+| 4 | `ingest_intelligence_db` and multi-camera ingestion populate `intelligence.db` with multiple cameras without key collisions | ⏳ pending | `test_storage_multicamera.py` |
+| 5 | `event_intelligence.search` supports `--camera` filter and `--camera-summary` cross-camera report | ⏳ pending | `test_search_multicamera.py` |
+| 6 | `event_intelligence.pipeline` can orchestrate multiple video sources into a unified multi-camera run and `intelligence.db` | ⏳ pending | `test_pipeline_integration.py` |
+| 7 | All local CI-parity checks (`uv sync --locked`, `ruff check .`, `ruff format --check .`, `pytest -v`) and remote GitHub Actions CI pass 100% | ⏳ pending | local checks + GitHub Actions run |
+
+### Validation & CI Plan
+
+```bash
+uv sync --locked
+uv run --locked ruff check .
+uv run --locked ruff format --check .
+uv run --locked pytest -v
+# Multi-camera pipeline execution:
+uv run --locked python -m event_intelligence.pipeline \
+    --videos data/fallback_clips/people-detection.mp4 data/fallback_clips/store-aisle-detection.mp4 \
+    --config configs/pipeline_multicam.yaml \
+    --run-id multicam_test --json
+# Multi-camera search queries:
+uv run --locked python -m event_intelligence.search \
+    --db outputs/runs/multicam_test/intelligence.db --camera-summary --json
+uv run --locked python -m event_intelligence.search \
+    --db outputs/runs/multicam_test/intelligence.db --camera people-detection --tracks --json
+```
+
+### Exclusions
+
+- **Track C Productization (Phase 12):** FastAPI HTTP server, React web dashboard, RTSP network streaming, user authentication, and cross-camera person re-identification (appearance embeddings).
+
+### Micro-Task Breakdown
+
+- [ ] 1. `docs(roadmap): define Phase 11c multi-camera pipeline and search intelligence scope`
+- [ ] 2. `fix(pipeline): resolve output_root and artifact paths to absolute before database ingestion`
+- [ ] 3. `fix(pipeline): validate cached detections and tracks match source video before reuse`
+- [ ] 4. `types(storage): add camera_id and CameraMetadata support to search and storage schemas`
+- [ ] 5. `feat(storage): support camera_id and cameras table in SQLite schema and DDL`
+- [ ] 6. `feat(storage): update ingest_intelligence_db to record camera_id and metadata`
+- [ ] 7. `feat(storage): support multi-source ingestion into unified intelligence.db`
+- [ ] 8. `feat(storage): add camera_id filtering to query_events and query_tracks`
+- [ ] 9. `feat(storage): implement query_camera_activity_summary in storage`
+- [ ] 10. `test(storage): add unit tests for multi-camera schema, ingestion, and query filtering`
+- [ ] 11. `feat(search): add --camera and --camera-summary CLI flags to event_intelligence.search`
+- [ ] 12. `test(search): add integration tests for multi-camera search CLI flags and formatting`
+- [ ] 13. `feat(pipeline): add multi-source pipeline execution in run_pipeline and pipeline module`
+- [ ] 14. `feat(pipeline): wire CLI --videos flag into event_intelligence.pipeline`
+- [ ] 15. `feat(config): add configs/pipeline_multicam.yaml for multi-camera surveillance runs`
+- [ ] 16. `test(pipeline): add end-to-end multi-camera pipeline tests with unified intelligence.db`
+- [ ] 17. `docs(readme): document multi-camera pipeline and cross-camera search capabilities`
+- [ ] 18. `docs(roadmap): complete Phase 11c criteria, decision log, and CI log`
+
+
 
 
 
