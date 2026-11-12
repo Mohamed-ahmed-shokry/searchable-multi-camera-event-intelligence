@@ -102,6 +102,7 @@ class SearchConfig:
     """Configuration for Phase 10 SQLite ingestion and query execution."""
 
     source_name: str = "people-detection.mp4"
+    camera_id: str = ""
     detections_csv: str = (
         "cv_projects/02_person_detection/outputs/people_detection_run/detections.csv"
     )
@@ -140,6 +141,62 @@ class SearchConfig:
 
 
 @dataclass(frozen=True, slots=True)
+class CameraMetadata:
+    """Metadata for a registered video camera feed."""
+
+    camera_id: str
+    source_name: str
+    fps: float = 30.0
+    width: int = 1920
+    height: int = 1080
+    total_frames: int = 0
+    created_at: str = ""
+
+    def __post_init__(self) -> None:
+        if not self.camera_id.strip():
+            raise ValueError("camera_id must be non-empty")
+        if not self.source_name.strip():
+            raise ValueError("source_name must be non-empty")
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "camera_id": self.camera_id,
+            "source_name": self.source_name,
+            "fps": round(self.fps, 2),
+            "width": self.width,
+            "height": self.height,
+            "total_frames": self.total_frames,
+            "created_at": self.created_at,
+        }
+
+
+@dataclass(frozen=True, slots=True)
+class CameraActivitySummary:
+    """Aggregated activity metrics for one camera stream in intelligence.db."""
+
+    camera_id: str
+    source_name: str
+    total_detections: int
+    total_tracks: int
+    total_events: int
+    total_dwell_seconds: float
+    zones_active: int
+    lines_active: int
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "camera_id": self.camera_id,
+            "source_name": self.source_name,
+            "total_detections": self.total_detections,
+            "total_tracks": self.total_tracks,
+            "total_events": self.total_events,
+            "total_dwell_seconds": round(self.total_dwell_seconds, 4),
+            "zones_active": self.zones_active,
+            "lines_active": self.lines_active,
+        }
+
+
+@dataclass(frozen=True, slots=True)
 class EventSearchResult:
     """Structured event row returned by query_events."""
 
@@ -152,6 +209,7 @@ class EventSearchResult:
     duration_seconds: float
     snapshot_path: str
     crop_path: str
+    camera_id: str = ""
 
     def __post_init__(self) -> None:
         if not self.event_id.strip() or not self.event_type.strip():
@@ -163,6 +221,7 @@ class EventSearchResult:
 
     def to_dict(self) -> dict[str, Any]:
         return {
+            "camera_id": self.camera_id,
             "event_id": self.event_id,
             "event_type": self.event_type,
             "track_id": self.track_id,
@@ -187,6 +246,7 @@ class TrackSearchResult:
     observed_frames: int
     path_length_px: float
     event_count: int = 0
+    camera_id: str = ""
 
     def __post_init__(self) -> None:
         if self.track_id < 0:
@@ -200,6 +260,7 @@ class TrackSearchResult:
 
     def to_dict(self) -> dict[str, Any]:
         return {
+            "camera_id": self.camera_id,
             "track_id": self.track_id,
             "start_frame": self.start_frame,
             "end_frame": self.end_frame,

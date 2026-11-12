@@ -4,6 +4,8 @@ from __future__ import annotations
 
 from event_intelligence.storage.search_events import (
     SCHEMA_DDL,
+    CameraActivitySummary,
+    CameraMetadata,
     DatabaseSummary,
     EventSearchResult,
     EvidenceLookupResult,
@@ -25,6 +27,8 @@ from event_intelligence.storage.search_events import (
 
 __all__ = [
     "SCHEMA_DDL",
+    "CameraActivitySummary",
+    "CameraMetadata",
     "DatabaseSummary",
     "EventSearchResult",
     "EvidenceLookupResult",
