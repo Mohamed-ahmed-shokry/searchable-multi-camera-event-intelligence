@@ -293,3 +293,155 @@ def detect_speed_anomaly_insights(
             idx += 1
 
     return insights
+
+
+def detect_stationary_and_drop_insights(
+    events: Sequence[Any],
+    trajectories: Mapping[int, Sequence[Any]],
+    config: InsightConfig,
+    *,
+    traces: Sequence[Any] | None = None,
+    camera_id: str = "default",
+    start_index: int = 1,
+) -> list[InsightRecord]:
+    """Detect stationary entities and unexpected track drop/loss inside sensitive zones."""
+    insights: list[InsightRecord] = []
+    idx = start_index
+
+    # 1. Detect track loss in zone from traces or events
+    lost_records: list[tuple[int, str, float, float, Any]] = []
+    if traces is not None:
+        for tr in traces:
+            if getattr(tr, "track_lost_in_zone", False):
+                t_id = int(getattr(tr, "track_id", 0))
+                z_id = str(getattr(tr, "zone_id", ""))
+                t_in = float(getattr(tr, "entry_timestamp", 0.0))
+                t_out = float(getattr(tr, "exit_timestamp", t_in))
+                lost_records.append((t_id, z_id, t_in, t_out, tr))
+
+    # Also inspect events if event_type explicitly mentions track loss
+    for ev in events:
+        ev_type = str(getattr(ev, "event_type", ""))
+        if "track_lost" in ev_type or "lost_in_zone" in ev_type:
+            t_id = int(getattr(ev, "track_id", 0))
+            z_id = str(getattr(ev, "zone_id", ""))
+            t_in = float(getattr(ev, "start_time", 0.0))
+            t_out = float(getattr(ev, "end_time", t_in))
+            if not any(r[0] == t_id and r[1] == z_id for r in lost_records):
+                lost_records.append((t_id, z_id, t_in, t_out, ev))
+
+    for t_id, z_id, t_in, t_out, src_obj in lost_records:
+        is_restricted = z_id in config.restricted_zones
+        dur = max(0.0, t_out - t_in)
+        sev = Severity.CRITICAL.value if is_restricted else Severity.HIGH.value
+
+        snap_path = getattr(src_obj, "evidence_snapshot_path", None) or getattr(
+            src_obj, "snapshot_path", None
+        )
+        crop_path = getattr(src_obj, "evidence_crop_path", None) or getattr(
+            src_obj, "crop_path", None
+        )
+
+        insights.append(
+            InsightRecord(
+                insight_id=f"ins_{camera_id}_{idx:04d}",
+                camera_id=camera_id,
+                insight_type=InsightType.TRACK_DROP_IN_ZONE.value,
+                severity=sev,
+                track_id=t_id,
+                zone_id=z_id,
+                start_time=t_in,
+                end_time=t_out,
+                duration=dur,
+                description=(
+                    f"Track {t_id} terminated / lost inside {'restricted ' if is_restricted else ''}"
+                    f"zone '{z_id}' at {t_out:.2f}s"
+                ),
+                evidence_snapshot_path=str(snap_path) if snap_path else None,
+                evidence_crop_path=str(crop_path) if crop_path else None,
+                details={
+                    "is_restricted_zone": is_restricted,
+                    "resolution_reason": "track_lost_in_zone",
+                },
+            )
+        )
+        idx += 1
+
+    # 2. Detect stationary entities inside zones
+    dwell_events = [
+        ev
+        for ev in events
+        if getattr(ev, "event_type", None) in ("dwell_time_event", "zone_dwell")
+        and getattr(ev, "zone_id", None)
+    ]
+
+    for ev in dwell_events:
+        t_id = int(getattr(ev, "track_id", 0))
+        z_id = str(getattr(ev, "zone_id", ""))
+        dur = float(
+            getattr(ev, "duration", 0.0) or getattr(ev, "duration_seconds", 0.0)
+        )
+        if dur < config.stationary_min_seconds:
+            continue
+
+        pts = [
+            p
+            for p in trajectories.get(t_id, [])
+            if float(getattr(ev, "start_time", 0.0))
+            <= float(getattr(p, "timestamp", 0.0))
+            <= float(getattr(ev, "end_time", 0.0))
+        ]
+        if len(pts) < 3:
+            continue
+
+        speeds: list[float] = []
+        for p1, p2 in itertools.pairwise(pts):
+            dt = float(getattr(p2, "timestamp", 0.0)) - float(
+                getattr(p1, "timestamp", 0.0)
+            )
+            if dt > 1e-4:
+                dist = math.hypot(
+                    float(getattr(p2, "x", 0.0)) - float(getattr(p1, "x", 0.0)),
+                    float(getattr(p2, "y", 0.0)) - float(getattr(p1, "y", 0.0)),
+                )
+                speeds.append(dist / dt)
+
+        avg_spd = sum(speeds) / len(speeds) if speeds else 0.0
+        if avg_spd <= config.stationary_speed_threshold_px_s:
+            is_restricted = z_id in config.restricted_zones
+            sev = Severity.HIGH.value if is_restricted else Severity.MEDIUM.value
+
+            snap_path = getattr(ev, "evidence_snapshot_path", None) or getattr(
+                ev, "snapshot_path", None
+            )
+            crop_path = getattr(ev, "evidence_crop_path", None) or getattr(
+                ev, "crop_path", None
+            )
+
+            insights.append(
+                InsightRecord(
+                    insight_id=f"ins_{camera_id}_{idx:04d}",
+                    camera_id=camera_id,
+                    insight_type=InsightType.STATIONARY_IN_ZONE.value,
+                    severity=sev,
+                    track_id=t_id,
+                    zone_id=z_id,
+                    start_time=float(ev.start_time),
+                    end_time=float(ev.end_time),
+                    duration=dur,
+                    description=(
+                        f"Track {t_id} remained stationary in {'restricted ' if is_restricted else ''}"
+                        f"zone '{z_id}' for {dur:.1f}s (avg speed {avg_spd:.1f} px/s)"
+                    ),
+                    evidence_snapshot_path=str(snap_path) if snap_path else None,
+                    evidence_crop_path=str(crop_path) if crop_path else None,
+                    details={
+                        "avg_speed_px_s": round(avg_spd, 2),
+                        "speed_threshold_px_s": config.stationary_speed_threshold_px_s,
+                        "is_restricted_zone": is_restricted,
+                    },
+                )
+            )
+            idx += 1
+
+    return insights
