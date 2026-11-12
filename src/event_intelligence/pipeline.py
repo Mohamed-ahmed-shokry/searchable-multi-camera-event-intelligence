@@ -357,6 +357,47 @@ def _load_detections_as_frame_records(
     return [by_frame[k] for k in sorted(by_frame)]
 
 
+def validate_cached_artifact_source(
+    csv_path: Path,
+    expected_source_path: Path,
+    *,
+    strict: bool = False,
+) -> bool:
+    """Validate whether a precomputed detections/tracks CSV belongs to expected_source_path."""
+    if not csv_path.is_file():
+        return False
+
+    expected_name = expected_source_path.name.replace("_", "-").lower()
+    expected_stem = expected_source_path.stem.replace("_", "-").lower()
+
+    for summary_name in (
+        "detection_summary.json",
+        "tracking_summary.json",
+        "video_info.json",
+    ):
+        summary_file = csv_path.parent / summary_name
+        if summary_file.is_file():
+            try:
+                data = json.loads(summary_file.read_text(encoding="utf-8"))
+                if isinstance(data, list) and data and isinstance(data[0], dict):
+                    data = data[0]
+                if isinstance(data, dict):
+                    cached_src = data.get("source_path") or data.get("name")
+                    if cached_src:
+                        cached_name = Path(cached_src).name.replace("_", "-").lower()
+                        cached_stem = Path(cached_src).stem.replace("_", "-").lower()
+                        if cached_name != expected_name and cached_stem != expected_stem:
+                            if strict:
+                                raise ValueError(
+                                    f"Cached CSV {csv_path} was generated for source {cached_src!r}, "
+                                    f"not for requested video {expected_source_path.name!r}."
+                                )
+                            return False
+            except (json.JSONDecodeError, OSError):
+                pass
+    return True
+
+
 def run_pipeline(
     video_path: Path | str,
     config: PipelineConfig | None = None,
@@ -425,7 +466,12 @@ def run_pipeline(
     trk_csv_in = _resolve_optional_path(cfg.precomputed_tracks_csv, root)
     det_csv_in = _resolve_optional_path(cfg.precomputed_detections_csv, root)
 
-    if trk_csv_in is not None and trk_csv_in.is_file():
+    use_cached_tracks = (
+        trk_csv_in is not None
+        and trk_csv_in.is_file()
+        and validate_cached_artifact_source(trk_csv_in, src_path)
+    )
+    if use_cached_tracks:
         frame_tracks = read_tracks_csv(trk_csv_in)
         if cfg.max_frames is not None:
             frame_tracks = [ft for ft in frame_tracks if ft.frame_id < cfg.max_frames]
@@ -447,7 +493,12 @@ def run_pipeline(
                 trks = active_tracker.track(frame, frame_id=fid)
                 frame_tracks.append(FrameTracks(frame_id=fid, tracks=trks))
 
-    if det_csv_in is not None and det_csv_in.is_file():
+    use_cached_detections = (
+        det_csv_in is not None
+        and det_csv_in.is_file()
+        and validate_cached_artifact_source(det_csv_in, src_path)
+    )
+    if use_cached_detections:
         frame_detections = _load_detections_as_frame_records(det_csv_in, cfg.max_frames)
     elif detector is not None:
         frame_detections = []
