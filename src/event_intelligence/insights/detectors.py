@@ -36,7 +36,8 @@ def detect_loitering_insights(
     dwells_by_zone: dict[str, list[float]] = {}
     for ev in dwell_events:
         zone = str(ev.zone_id)
-        dwells_by_zone.setdefault(zone, []).append(float(ev.duration))
+        ev_dur = float(getattr(ev, "duration_seconds", getattr(ev, "duration", 0.0)))
+        dwells_by_zone.setdefault(zone, []).append(ev_dur)
 
     medians_by_zone = {
         zone: statistics.median(durations)
@@ -49,7 +50,7 @@ def detect_loitering_insights(
 
     for ev in dwell_events:
         zone = str(ev.zone_id)
-        dur = float(ev.duration)
+        dur = float(getattr(ev, "duration_seconds", getattr(ev, "duration", 0.0)))
         zone_threshold = config.per_zone_loitering_seconds.get(
             zone, config.min_loitering_seconds
         )
