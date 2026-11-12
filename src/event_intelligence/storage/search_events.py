@@ -1444,6 +1444,20 @@ def build_parser() -> argparse.ArgumentParser:
         help="Query tracks table instead of events table.",
     )
     parser.add_argument(
+        "-c",
+        "--camera",
+        "--camera-id",
+        dest="camera_id",
+        type=str,
+        default=None,
+        help="Filter events or tracks by camera identifier (e.g. entrance, concourse).",
+    )
+    parser.add_argument(
+        "--camera-summary",
+        action="store_true",
+        help="Query activity breakdown grouped by registered camera stream.",
+    )
+    parser.add_argument(
         "--evidence-event-id",
         type=str,
         default=None,
@@ -1515,6 +1529,21 @@ def main(argv: list[str] | None = None) -> int:
 
     db_path = args.db if args.db is not None else (args.output_dir / "intelligence.db")
 
+    if args.camera_summary:
+        summaries = query_camera_summary(db_path)
+        if args.json:
+            print(json.dumps([s.to_dict() for s in summaries], indent=2))
+        else:
+            print(f"=== Camera Activity Summary ({len(summaries)} cameras) ===")
+            for s in summaries:
+                print(
+                    f"Camera [{s.camera_id}] (Source: {s.source_name}): "
+                    f"{s.total_detections} detections, {s.total_tracks} tracks, "
+                    f"{s.total_events} events ({s.total_dwell_seconds:.2f}s dwell), "
+                    f"{s.zones_active} zones active, {s.lines_active} lines active"
+                )
+        return 0
+
     if args.evidence_event_id is not None:
         ev_root = (
             args.evidence_root
@@ -1542,6 +1571,7 @@ def main(argv: list[str] | None = None) -> int:
     if args.tracks:
         tracks = query_tracks(
             db_path,
+            camera_id=args.camera_id,
             min_duration=args.min_duration,
             max_duration=args.max_duration,
             min_path_length_px=args.min_path_length,
@@ -1552,8 +1582,9 @@ def main(argv: list[str] | None = None) -> int:
         else:
             print(f"Matched {len(tracks)} track(s):")
             for t in tracks:
+                cam_label = f" cam={t.camera_id}" if t.camera_id else ""
                 print(
-                    f"  track_id={t.track_id} frames={t.start_frame}..{t.end_frame} "
+                    f"  track_id={t.track_id}{cam_label} frames={t.start_frame}..{t.end_frame} "
                     f"duration={t.duration_seconds:.4f}s "
                     f"path_length={t.path_length_px:.2f}px events={t.event_count}"
                 )
@@ -1561,6 +1592,7 @@ def main(argv: list[str] | None = None) -> int:
 
     events = query_events(
         db_path,
+        camera_id=args.camera_id,
         event_type=args.event_type,
         zone_id=args.zone,
         track_id=args.track_id,
@@ -1574,8 +1606,9 @@ def main(argv: list[str] | None = None) -> int:
     else:
         print(f"Matched {len(events)} event(s):")
         for e in events:
+            cam_label = f" cam={e.camera_id}" if e.camera_id else ""
             print(
-                f"  {e.event_id} [{e.event_type}] track={e.track_id} zone={e.zone_id} "
+                f"  {e.event_id} [{e.event_type}]{cam_label} track={e.track_id} zone={e.zone_id} "
                 f"time={e.start_time:.4f}..{e.end_time:.4f}s "
                 f"(dur={e.duration_seconds:.4f}s) snap={e.snapshot_path}"
             )
