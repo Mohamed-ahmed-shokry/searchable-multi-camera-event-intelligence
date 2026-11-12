@@ -346,6 +346,7 @@ class DatabaseSummary:
     events_count: int
     zone_counts_rows: int
     line_counts_rows: int
+    cameras_count: int = 1
 
     def __post_init__(self) -> None:
         for name, val in (
@@ -356,6 +357,7 @@ class DatabaseSummary:
             ("events_count", self.events_count),
             ("zone_counts_rows", self.zone_counts_rows),
             ("line_counts_rows", self.line_counts_rows),
+            ("cameras_count", self.cameras_count),
         ):
             if val < 0:
                 raise ValueError(f"{name} must be non-negative")
@@ -364,6 +366,7 @@ class DatabaseSummary:
         return {
             "db_path": self.db_path,
             "source_name": self.source_name,
+            "cameras_count": self.cameras_count,
             "detections_count": self.detections_count,
             "track_observations_count": self.track_observations_count,
             "tracks_count": self.tracks_count,
@@ -482,10 +485,18 @@ def ingest_intelligence_db(
     config: SearchConfig,
     *,
     project_root: Path | str | None = None,
+    clear_existing: bool = False,
+    camera_metadata: CameraMetadata | None = None,
 ) -> DatabaseSummary:
     """Load detections, tracks, trajectories, events, and zone/line counts into intelligence.db."""
     root = Path(project_root) if project_root is not None else _PROJECT_ROOT
     out_db = init_intelligence_db(db_path)
+
+    cam_id = (
+        (config.camera_id.strip() if config.camera_id else "")
+        or Path(config.source_name).stem
+        or "default"
+    )
 
     det_path = _resolve_optional_path(config.detections_csv, root)
     trk_path = _resolve_optional_path(config.tracks_csv, root)
@@ -496,7 +507,7 @@ def ingest_intelligence_db(
     zc_path = _resolve_optional_path(config.zone_counts_csv, root)
     lc_path = _resolve_optional_path(config.line_counts_csv, root)
 
-    det_rows: list[tuple[int, float, float, float, float, float, str]] = []
+    det_rows: list[tuple[str, int, float, float, float, float, float, str]] = []
     if det_path.is_file():
         with det_path.open("r", encoding="utf-8", newline="") as handle:
             reader = csv.DictReader(handle)
@@ -505,6 +516,7 @@ def ingest_intelligence_db(
                     continue
                 det_rows.append(
                     (
+                        cam_id,
                         int(row["frame_id"]),
                         float(row["x1"]),
                         float(row["y1"]),
@@ -515,7 +527,7 @@ def ingest_intelligence_db(
                     )
                 )
 
-    obs_rows: list[tuple[int, int, float, float, float, float, float]] = []
+    obs_rows: list[tuple[str, int, int, float, float, float, float, float]] = []
     if trk_path.is_file():
         with trk_path.open("r", encoding="utf-8", newline="") as handle:
             reader = csv.DictReader(handle)
@@ -524,6 +536,7 @@ def ingest_intelligence_db(
                     continue
                 obs_rows.append(
                     (
+                        cam_id,
                         int(row["frame_id"]),
                         int(row["track_id"]),
                         float(row["x1"]),
@@ -534,7 +547,7 @@ def ingest_intelligence_db(
                     )
                 )
 
-    traj_rows: list[tuple[int, int, float, float, float]] = []
+    traj_rows: list[tuple[str, int, int, float, float, float]] = []
     traj_points_by_track: dict[int, list[tuple[int, float, float, float]]] = {}
     if traj_path.is_file():
         with traj_path.open("r", encoding="utf-8", newline="") as handle:
@@ -547,7 +560,7 @@ def ingest_intelligence_db(
                 ts = float(row["timestamp"])
                 x = float(row["x"])
                 y = float(row["y"])
-                traj_rows.append((tid, fid, ts, x, y))
+                traj_rows.append((cam_id, tid, fid, ts, x, y))
                 traj_points_by_track.setdefault(tid, []).append((fid, ts, x, y))
 
     path_len_by_track: dict[int, float] = {}
@@ -566,7 +579,7 @@ def ingest_intelligence_db(
             )
             path_len_by_track[tid] = round(dist, 2)
 
-    track_rows: list[tuple[int, int, int, int, float, int, float]] = []
+    track_rows: list[tuple[str, int, int, int, int, float, int, float]] = []
     if trk_sum_path.is_file():
         with trk_sum_path.open("r", encoding="utf-8", newline="") as handle:
             reader = csv.DictReader(handle)
@@ -576,6 +589,7 @@ def ingest_intelligence_db(
                 tid = int(row["track_id"])
                 track_rows.append(
                     (
+                        cam_id,
                         tid,
                         int(row["start_frame"]),
                         int(row["end_frame"]),
@@ -585,7 +599,7 @@ def ingest_intelligence_db(
                         float(path_len_by_track.get(tid, 0.0)),
                     )
                 )
-    else:
+    elif traj_points_by_track:
         for tid in sorted(traj_points_by_track):
             ordered = sorted(traj_points_by_track[tid], key=lambda item: item[0])
             sf = ordered[0][0]
@@ -594,6 +608,7 @@ def ingest_intelligence_db(
             dur_s = max(0.0, ordered[-1][1] - ordered[0][1])
             track_rows.append(
                 (
+                    cam_id,
                     tid,
                     sf,
                     ef,
@@ -603,8 +618,28 @@ def ingest_intelligence_db(
                     float(path_len_by_track.get(tid, 0.0)),
                 )
             )
+    elif obs_rows:
+        obs_by_tid: dict[int, list[int]] = {}
+        for r in obs_rows:
+            obs_by_tid.setdefault(r[2], []).append(r[1])
+        for tid, fids in sorted(obs_by_tid.items()):
+            sf = min(fids)
+            ef = max(fids)
+            dur_f = max(1, ef - sf + 1)
+            track_rows.append(
+                (
+                    cam_id,
+                    tid,
+                    sf,
+                    ef,
+                    dur_f,
+                    round(dur_f / 30.0, 4),
+                    len(fids),
+                    0.0,
+                )
+            )
 
-    event_rows: list[tuple[str, str, int, str, float, float, float, str, str]] = []
+    event_rows: list[tuple[str, str, str, int, str, float, float, float, str, str]] = []
     if ev_path.is_file():
         with ev_path.open("r", encoding="utf-8", newline="") as handle:
             reader = csv.DictReader(handle)
@@ -618,6 +653,7 @@ def ingest_intelligence_db(
                 crop = str(row.get("crop_path") or "").strip()
                 event_rows.append(
                     (
+                        cam_id,
                         str(row["event_id"]).strip(),
                         str(row["event_type"]).strip(),
                         int(row["track_id"]),
@@ -630,7 +666,7 @@ def ingest_intelligence_db(
                     )
                 )
 
-    zc_rows: list[tuple[str, int, int, float, int]] = []
+    zc_rows: list[tuple[str, str, int, int, float, int]] = []
     if zc_path.is_file():
         with zc_path.open("r", encoding="utf-8", newline="") as handle:
             reader = csv.DictReader(handle)
@@ -639,6 +675,7 @@ def ingest_intelligence_db(
                     continue
                 zc_rows.append(
                     (
+                        cam_id,
                         str(row["zone_id"]).strip(),
                         int(row["entry_count"]),
                         int(row["exit_count"]),
@@ -647,7 +684,7 @@ def ingest_intelligence_db(
                     )
                 )
 
-    lc_rows: list[tuple[str, int, int, int]] = []
+    lc_rows: list[tuple[str, str, int, int, int]] = []
     if lc_path.is_file():
         with lc_path.open("r", encoding="utf-8", newline="") as handle:
             reader = csv.DictReader(handle)
@@ -656,6 +693,7 @@ def ingest_intelligence_db(
                     continue
                 lc_rows.append(
                     (
+                        cam_id,
                         str(row["line_id"]).strip(),
                         int(row["crossings_ab"]),
                         int(row["crossings_ba"]),
@@ -664,6 +702,25 @@ def ingest_intelligence_db(
                 )
 
     with closing(sqlite3.connect(out_db)) as conn:
+        meta = camera_metadata or CameraMetadata(
+            camera_id=cam_id,
+            source_name=config.source_name,
+        )
+        conn.execute(
+            "INSERT OR REPLACE INTO cameras "
+            "(camera_id, source_name, fps, width, height, total_frames, created_at) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?)",
+            (
+                meta.camera_id,
+                meta.source_name,
+                meta.fps,
+                meta.width,
+                meta.height,
+                meta.total_frames,
+                meta.created_at,
+            ),
+        )
+
         for tbl in (
             "detections",
             "track_observations",
@@ -673,62 +730,111 @@ def ingest_intelligence_db(
             "zone_counts",
             "line_counts",
         ):
-            conn.execute(f"DELETE FROM {tbl}")
+            if clear_existing:
+                conn.execute(f"DELETE FROM {tbl}")
+            else:
+                conn.execute(f"DELETE FROM {tbl} WHERE camera_id = ?", (cam_id,))
 
         conn.executemany(
-            "INSERT INTO detections (frame_id, x1, y1, x2, y2, confidence, class_name) "
-            "VALUES (?, ?, ?, ?, ?, ?, ?)",
+            "INSERT INTO detections (camera_id, frame_id, x1, y1, x2, y2, confidence, class_name) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
             det_rows,
         )
         conn.executemany(
-            "INSERT INTO track_observations (frame_id, track_id, x1, y1, x2, y2, confidence) "
-            "VALUES (?, ?, ?, ?, ?, ?, ?)",
+            "INSERT INTO track_observations (camera_id, frame_id, track_id, x1, y1, x2, y2, confidence) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
             obs_rows,
         )
         conn.executemany(
-            "INSERT INTO tracks (track_id, start_frame, end_frame, duration_frames, "
-            "duration_seconds, observed_frames, path_length_px) VALUES (?, ?, ?, ?, ?, ?, ?)",
+            "INSERT OR REPLACE INTO tracks (camera_id, track_id, start_frame, end_frame, duration_frames, "
+            "duration_seconds, observed_frames, path_length_px) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
             track_rows,
         )
         conn.executemany(
-            "INSERT INTO trajectories (track_id, frame_id, timestamp, x, y) "
-            "VALUES (?, ?, ?, ?, ?)",
+            "INSERT OR REPLACE INTO trajectories (camera_id, track_id, frame_id, timestamp, x, y) "
+            "VALUES (?, ?, ?, ?, ?, ?)",
             traj_rows,
         )
         conn.executemany(
-            "INSERT INTO events (event_id, event_type, track_id, zone_id, start_time, "
+            "INSERT OR REPLACE INTO events (camera_id, event_id, event_type, track_id, zone_id, start_time, "
             "end_time, duration_seconds, snapshot_path, crop_path) "
-            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
             event_rows,
         )
         conn.executemany(
-            "INSERT INTO zone_counts (zone_id, entry_count, exit_count, "
-            "total_dwell_seconds, peak_occupancy) VALUES (?, ?, ?, ?, ?)",
+            "INSERT OR REPLACE INTO zone_counts (camera_id, zone_id, entry_count, exit_count, "
+            "total_dwell_seconds, peak_occupancy) VALUES (?, ?, ?, ?, ?, ?)",
             zc_rows,
         )
         conn.executemany(
-            "INSERT INTO line_counts (line_id, crossings_ab, crossings_ba, total) "
-            "VALUES (?, ?, ?, ?)",
+            "INSERT OR REPLACE INTO line_counts (camera_id, line_id, crossings_ab, crossings_ba, total) "
+            "VALUES (?, ?, ?, ?, ?)",
             lc_rows,
         )
         conn.commit()
 
+        cam_count = conn.execute("SELECT count(*) FROM cameras").fetchone()[0]
+        total_dets = conn.execute("SELECT count(*) FROM detections").fetchone()[0]
+        total_obs = conn.execute("SELECT count(*) FROM track_observations").fetchone()[0]
+        total_trks = conn.execute("SELECT count(*) FROM tracks").fetchone()[0]
+        total_trajs = conn.execute("SELECT count(*) FROM trajectories").fetchone()[0]
+        total_evs = conn.execute("SELECT count(*) FROM events").fetchone()[0]
+        total_zc = conn.execute("SELECT count(*) FROM zone_counts").fetchone()[0]
+        total_lc = conn.execute("SELECT count(*) FROM line_counts").fetchone()[0]
+
     return DatabaseSummary(
         db_path=str(out_db),
         source_name=config.source_name,
-        detections_count=len(det_rows),
-        track_observations_count=len(obs_rows),
-        tracks_count=len(track_rows),
-        trajectories_count=len(traj_rows),
-        events_count=len(event_rows),
-        zone_counts_rows=len(zc_rows),
-        line_counts_rows=len(lc_rows),
+        detections_count=total_dets,
+        track_observations_count=total_obs,
+        tracks_count=total_trks,
+        trajectories_count=total_trajs,
+        events_count=total_evs,
+        zone_counts_rows=total_zc,
+        line_counts_rows=total_lc,
+        cameras_count=max(1, cam_count),
     )
+
+
+def ingest_multi_camera_intelligence_db(
+    db_path: Path | str,
+    configs: list[SearchConfig],
+    *,
+    project_root: Path | str | None = None,
+    clear_existing: bool = True,
+    cameras_metadata: list[CameraMetadata] | None = None,
+) -> DatabaseSummary:
+    """Ingest multiple camera runs into one unified intelligence.db."""
+    if not configs:
+        raise ValueError("configs must be non-empty")
+    summary: DatabaseSummary | None = None
+    meta_by_cam: dict[str, CameraMetadata] = {}
+    if cameras_metadata:
+        for m in cameras_metadata:
+            meta_by_cam[m.camera_id] = m
+
+    for i, cfg in enumerate(configs):
+        c_clear = clear_existing and (i == 0)
+        cam_id = (
+            (cfg.camera_id.strip() if cfg.camera_id else "")
+            or Path(cfg.source_name).stem
+            or f"cam_{i+1}"
+        )
+        summary = ingest_intelligence_db(
+            db_path,
+            cfg,
+            project_root=project_root,
+            clear_existing=c_clear,
+            camera_metadata=meta_by_cam.get(cam_id),
+        )
+    assert summary is not None
+    return summary
 
 
 def query_events(
     db_path: Path | str,
     *,
+    camera_id: str | None = None,
     event_type: str | None = None,
     zone_id: str | None = None,
     track_id: int | None = None,
@@ -737,7 +843,7 @@ def query_events(
     min_duration: float | None = None,
     limit: int = 50,
 ) -> list[EventSearchResult]:
-    """Query events from intelligence.db by type, zone/line, track_id, time range, or duration."""
+    """Query events from intelligence.db by type, zone/line, track_id, time range, duration, or camera."""
     if limit <= 0:
         raise ValueError("limit must be positive")
     path = Path(db_path)
@@ -746,6 +852,10 @@ def query_events(
 
     clauses: list[str] = []
     params: list[Any] = []
+
+    if camera_id is not None and camera_id.strip():
+        clauses.append("camera_id = ?")
+        params.append(camera_id.strip())
 
     if event_type is not None and event_type.strip():
         clauses.append("event_type = ?")
@@ -774,7 +884,7 @@ def query_events(
 
     where_sql = f"WHERE {' AND '.join(clauses)}" if clauses else ""
     sql = (
-        "SELECT event_id, event_type, track_id, zone_id, start_time, end_time, "
+        "SELECT camera_id, event_id, event_type, track_id, zone_id, start_time, end_time, "
         "duration_seconds, snapshot_path, crop_path "
         f"FROM events {where_sql} "
         "ORDER BY start_time ASC, event_id ASC LIMIT ?"
@@ -786,15 +896,16 @@ def query_events(
         for row in conn.execute(sql, params).fetchall():
             results.append(
                 EventSearchResult(
-                    event_id=str(row[0]),
-                    event_type=str(row[1]),
-                    track_id=int(row[2]),
-                    zone_id=str(row[3]),
-                    start_time=float(row[4]),
-                    end_time=float(row[5]),
-                    duration_seconds=float(row[6]),
-                    snapshot_path=str(row[7]),
-                    crop_path=str(row[8]),
+                    camera_id=str(row[0] or ""),
+                    event_id=str(row[1]),
+                    event_type=str(row[2]),
+                    track_id=int(row[3]),
+                    zone_id=str(row[4]),
+                    start_time=float(row[5]),
+                    end_time=float(row[6]),
+                    duration_seconds=float(row[7]),
+                    snapshot_path=str(row[8]),
+                    crop_path=str(row[9]),
                 )
             )
     return results
@@ -803,13 +914,14 @@ def query_events(
 def query_tracks(
     db_path: Path | str,
     *,
+    camera_id: str | None = None,
     min_duration: float | None = None,
     max_duration: float | None = None,
     min_path_length_px: float | None = None,
     track_id: int | None = None,
     limit: int = 50,
 ) -> list[TrackSearchResult]:
-    """Query tracks from intelligence.db by duration range, path length, or track_id."""
+    """Query tracks from intelligence.db by duration range, path length, track_id, or camera."""
     if limit <= 0:
         raise ValueError("limit must be positive")
     path = Path(db_path)
@@ -818,6 +930,10 @@ def query_tracks(
 
     clauses: list[str] = []
     params: list[Any] = []
+
+    if camera_id is not None and camera_id.strip():
+        clauses.append("t.camera_id = ?")
+        params.append(camera_id.strip())
 
     if min_duration is not None:
         clauses.append("t.duration_seconds >= ?")
@@ -837,13 +953,13 @@ def query_tracks(
 
     where_sql = f"WHERE {' AND '.join(clauses)}" if clauses else ""
     sql = (
-        "SELECT t.track_id, t.start_frame, t.end_frame, t.duration_frames, "
+        "SELECT t.camera_id, t.track_id, t.start_frame, t.end_frame, t.duration_frames, "
         "t.duration_seconds, t.observed_frames, t.path_length_px, "
         "COUNT(e.event_id) AS event_count "
         "FROM tracks t "
-        "LEFT JOIN events e ON e.track_id = t.track_id "
+        "LEFT JOIN events e ON e.camera_id = t.camera_id AND e.track_id = t.track_id "
         f"{where_sql} "
-        "GROUP BY t.track_id "
+        "GROUP BY t.camera_id, t.track_id "
         "ORDER BY t.duration_seconds DESC, t.track_id ASC LIMIT ?"
     )
     params.append(int(limit))
@@ -853,17 +969,71 @@ def query_tracks(
         for row in conn.execute(sql, params).fetchall():
             results.append(
                 TrackSearchResult(
-                    track_id=int(row[0]),
-                    start_frame=int(row[1]),
-                    end_frame=int(row[2]),
-                    duration_frames=int(row[3]),
-                    duration_seconds=float(row[4]),
-                    observed_frames=int(row[5]),
-                    path_length_px=float(row[6]),
-                    event_count=int(row[7]),
+                    camera_id=str(row[0] or ""),
+                    track_id=int(row[1]),
+                    start_frame=int(row[2]),
+                    end_frame=int(row[3]),
+                    duration_frames=int(row[4]),
+                    duration_seconds=float(row[5]),
+                    observed_frames=int(row[6]),
+                    path_length_px=float(row[7]),
+                    event_count=int(row[8]),
                 )
             )
     return results
+
+
+def query_camera_summary(
+    db_path: Path | str,
+) -> list[CameraActivitySummary]:
+    """Query activity breakdown grouped by registered camera stream."""
+    path = Path(db_path)
+    if not path.is_file():
+        raise FileNotFoundError(f"SQLite database not found: {path}")
+
+    summaries: list[CameraActivitySummary] = []
+    with closing(sqlite3.connect(path)) as conn:
+        cameras = conn.execute(
+            "SELECT camera_id, source_name FROM cameras ORDER BY camera_id"
+        ).fetchall()
+        if not cameras:
+            cameras = conn.execute(
+                "SELECT DISTINCT camera_id, camera_id FROM tracks ORDER BY camera_id"
+            ).fetchall()
+
+        for cam_id, src_name in cameras:
+            cid = str(cam_id)
+            dets = conn.execute(
+                "SELECT count(*) FROM detections WHERE camera_id = ?", (cid,)
+            ).fetchone()[0]
+            trks = conn.execute(
+                "SELECT count(*) FROM tracks WHERE camera_id = ?", (cid,)
+            ).fetchone()[0]
+            evs = conn.execute(
+                "SELECT count(*), coalesce(sum(duration_seconds), 0.0) FROM events WHERE camera_id = ?",
+                (cid,),
+            ).fetchone()
+            total_evs = int(evs[0])
+            total_dwell = float(evs[1])
+            zc = conn.execute(
+                "SELECT count(*) FROM zone_counts WHERE camera_id = ?", (cid,)
+            ).fetchone()[0]
+            lc = conn.execute(
+                "SELECT count(*) FROM line_counts WHERE camera_id = ?", (cid,)
+            ).fetchone()[0]
+            summaries.append(
+                CameraActivitySummary(
+                    camera_id=cid,
+                    source_name=str(src_name or cid),
+                    total_detections=dets,
+                    total_tracks=trks,
+                    total_events=total_evs,
+                    total_dwell_seconds=round(total_dwell, 4),
+                    zones_active=zc,
+                    lines_active=lc,
+                )
+            )
+    return summaries
 
 
 def lookup_event_evidence(
