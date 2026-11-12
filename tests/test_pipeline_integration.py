@@ -519,9 +519,16 @@ class TestEndToEndPipelineAndCli(unittest.TestCase):
                 "annotated_video.mp4",
                 "intelligence.db",
                 "run_config.yaml",
+                "insights.json",
+                "insights.csv",
+                "intelligence_report.md",
             ):
                 self.assertTrue((vid_dir / fname).is_file(), f"Missing {fname}")
             self.assertGreaterEqual(res_vid.events_count, 2)
+            self.assertIn(
+                "Surveillance Event Intelligence Report",
+                (vid_dir / "intelligence_report.md").read_text(encoding="utf-8"),
+            )
 
             # Query the generated intelligence.db via event_intelligence.search CLI
             sbuf = io.StringIO()
@@ -693,6 +700,12 @@ class TestEndToEndPipelineAndCli(unittest.TestCase):
             master_dir = Path(res.run_dir)
             self.assertTrue((master_dir / "multicam_summary.json").is_file())
             self.assertTrue((master_dir / "run_config.yaml").is_file())
+            self.assertTrue((master_dir / "intelligence_report.md").is_file())
+            self.assertTrue((master_dir / "insights.json").is_file())
+            self.assertIn(
+                "Surveillance Event Intelligence Report",
+                (master_dir / "intelligence_report.md").read_text(encoding="utf-8"),
+            )
             self.assertTrue(
                 (master_dir / "cameras" / "entrance" / "video_info.json").is_file()
             )
