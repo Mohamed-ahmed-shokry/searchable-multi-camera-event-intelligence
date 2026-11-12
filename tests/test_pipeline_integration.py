@@ -596,21 +596,35 @@ class TestEndToEndPipelineAndCli(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmpdir:
             tmp = Path(tmpdir)
             cached_csv = tmp / "tracks.csv"
-            cached_csv.write_text("frame_id,track_id,x1,y1,x2,y2,confidence\n", encoding="utf-8")
+            cached_csv.write_text(
+                "frame_id,track_id,x1,y1,x2,y2,confidence\n", encoding="utf-8"
+            )
 
             # With no summary file, returns True (cannot disprove)
-            self.assertTrue(validate_cached_artifact_source(cached_csv, Path("my_clip.mp4")))
+            self.assertTrue(
+                validate_cached_artifact_source(cached_csv, Path("my_clip.mp4"))
+            )
 
             # With matching summary file
             summary = tmp / "tracking_summary.json"
-            summary.write_text(json.dumps({"source_path": "/data/my_clip.mp4"}), encoding="utf-8")
-            self.assertTrue(validate_cached_artifact_source(cached_csv, Path("my_clip.mp4")))
+            summary.write_text(
+                json.dumps({"source_path": "/data/my_clip.mp4"}), encoding="utf-8"
+            )
+            self.assertTrue(
+                validate_cached_artifact_source(cached_csv, Path("my_clip.mp4"))
+            )
 
             # With mismatched summary file
-            summary.write_text(json.dumps({"source_path": "/data/other_camera.mp4"}), encoding="utf-8")
-            self.assertFalse(validate_cached_artifact_source(cached_csv, Path("my_clip.mp4")))
+            summary.write_text(
+                json.dumps({"source_path": "/data/other_camera.mp4"}), encoding="utf-8"
+            )
+            self.assertFalse(
+                validate_cached_artifact_source(cached_csv, Path("my_clip.mp4"))
+            )
             with self.assertRaises(ValueError):
-                validate_cached_artifact_source(cached_csv, Path("my_clip.mp4"), strict=True)
+                validate_cached_artifact_source(
+                    cached_csv, Path("my_clip.mp4"), strict=True
+                )
 
     def test_src_package_has_no_sys_path_mutations_or_cv_projects_imports(self) -> None:
         src_pkg = Path(__file__).resolve().parents[1] / "src" / "event_intelligence"

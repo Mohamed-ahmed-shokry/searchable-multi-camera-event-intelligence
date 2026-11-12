@@ -386,7 +386,10 @@ def validate_cached_artifact_source(
                     if cached_src:
                         cached_name = Path(cached_src).name.replace("_", "-").lower()
                         cached_stem = Path(cached_src).stem.replace("_", "-").lower()
-                        if cached_name != expected_name and cached_stem != expected_stem:
+                        if (
+                            cached_name != expected_name
+                            and cached_stem != expected_stem
+                        ):
                             if strict:
                                 raise ValueError(
                                     f"Cached CSV {csv_path} was generated for source {cached_src!r}, "

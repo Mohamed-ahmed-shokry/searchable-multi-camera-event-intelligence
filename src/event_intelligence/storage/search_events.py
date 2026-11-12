@@ -775,7 +775,9 @@ def ingest_intelligence_db(
 
         cam_count = conn.execute("SELECT count(*) FROM cameras").fetchone()[0]
         total_dets = conn.execute("SELECT count(*) FROM detections").fetchone()[0]
-        total_obs = conn.execute("SELECT count(*) FROM track_observations").fetchone()[0]
+        total_obs = conn.execute("SELECT count(*) FROM track_observations").fetchone()[
+            0
+        ]
         total_trks = conn.execute("SELECT count(*) FROM tracks").fetchone()[0]
         total_trajs = conn.execute("SELECT count(*) FROM trajectories").fetchone()[0]
         total_evs = conn.execute("SELECT count(*) FROM events").fetchone()[0]
@@ -818,7 +820,7 @@ def ingest_multi_camera_intelligence_db(
         cam_id = (
             (cfg.camera_id.strip() if cfg.camera_id else "")
             or Path(cfg.source_name).stem
-            or f"cam_{i+1}"
+            or f"cam_{i + 1}"
         )
         summary = ingest_intelligence_db(
             db_path,

@@ -60,7 +60,9 @@ class TestMultiCameraStorage(unittest.TestCase):
             self.assertEqual(cam_summaries[0].camera_id, "cam_north")
             self.assertEqual(cam_summaries[0].total_tracks, 1)
 
-    def test_multi_camera_ingestion_preserves_independent_tracks_and_events(self) -> None:
+    def test_multi_camera_ingestion_preserves_independent_tracks_and_events(
+        self,
+    ) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
             tmp = Path(tmpdir)
             db_path = tmp / "intelligence.db"
@@ -124,7 +126,9 @@ class TestMultiCameraStorage(unittest.TestCase):
                 [cfg1, cfg2],
                 cameras_metadata=[
                     CameraMetadata("entrance", "cam_entrance.mp4", 10.0, 640, 480, 50),
-                    CameraMetadata("concourse", "cam_concourse.mp4", 10.0, 640, 480, 50),
+                    CameraMetadata(
+                        "concourse", "cam_concourse.mp4", 10.0, 640, 480, 50
+                    ),
                 ],
             )
             self.assertEqual(summary.cameras_count, 2)
