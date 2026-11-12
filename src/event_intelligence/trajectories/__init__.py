@@ -2,19 +2,8 @@
 
 from __future__ import annotations
 
-import sys
-from pathlib import Path
-
-_SCRIPTS = (
-    Path(__file__).resolve().parents[3]
-    / "cv_projects"
-    / "04_trajectory_extraction"
-    / "scripts"
-)
-if str(_SCRIPTS) not in sys.path:
-    sys.path.insert(0, str(_SCRIPTS))
-
-from extract_trajectories import (
+from event_intelligence.trajectories.compare_smoothing import compare_smoothing
+from event_intelligence.trajectories.extract_trajectories import (
     TRAJECTORIES_CSV_HEADER,
     TRAJECTORY_SUMMARY_CSV_HEADER,
     VALID_ANCHORS,
@@ -42,6 +31,7 @@ __all__ = [
     "TrajectoryPoint",
     "TrajectorySummary",
     "analyze_trajectory_quality",
+    "compare_smoothing",
     "compute_anchor_point",
     "compute_trajectory_summaries",
     "draw_trajectory_trails",

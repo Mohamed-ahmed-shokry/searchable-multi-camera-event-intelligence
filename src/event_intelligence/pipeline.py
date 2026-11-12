@@ -51,8 +51,10 @@ from event_intelligence.spatial import (
     write_zone_line_events_csv,
 )
 from event_intelligence.storage import (
+    CameraMetadata,
     SearchConfig,
     ingest_intelligence_db,
+    ingest_multi_camera_intelligence_db,
 )
 from event_intelligence.tracking import (
     FrameTracks,
@@ -68,6 +70,7 @@ from event_intelligence.trajectories import (
     smooth_trajectories,
     tracks_to_trajectories,
     write_trajectories_csv,
+    write_trajectory_summary_csv,
 )
 from event_intelligence.video import (
     VideoSource,
@@ -208,6 +211,36 @@ class PipelineRunResult:
             "lines_count": self.lines_count,
             "db_path": self.db_path,
             "run_config_path": self.run_config_path,
+            "elapsed_seconds": round(self.elapsed_seconds, 4),
+        }
+
+
+@dataclass(frozen=True, slots=True)
+class MultiCameraPipelineRunResult:
+    """Summary of a multi-camera event_intelligence pipeline run."""
+
+    run_id: str
+    run_dir: str
+    cameras: list[str]
+    camera_results: list[PipelineRunResult]
+    db_path: str
+    cameras_count: int
+    total_detections: int
+    total_tracks: int
+    total_events: int
+    elapsed_seconds: float
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "run_id": self.run_id,
+            "run_dir": self.run_dir,
+            "cameras": list(self.cameras),
+            "cameras_count": self.cameras_count,
+            "total_detections": self.total_detections,
+            "total_tracks": self.total_tracks,
+            "total_events": self.total_events,
+            "camera_results": [r.to_dict() for r in self.camera_results],
+            "db_path": self.db_path,
             "elapsed_seconds": round(self.elapsed_seconds, 4),
         }
 
@@ -356,6 +389,50 @@ def _load_detections_as_frame_records(
     return [by_frame[k] for k in sorted(by_frame)]
 
 
+def validate_cached_artifact_source(
+    csv_path: Path,
+    expected_source_path: Path,
+    *,
+    strict: bool = False,
+) -> bool:
+    """Validate whether a precomputed detections/tracks CSV belongs to expected_source_path."""
+    if not csv_path.is_file():
+        return False
+
+    expected_name = expected_source_path.name.replace("_", "-").lower()
+    expected_stem = expected_source_path.stem.replace("_", "-").lower()
+
+    for summary_name in (
+        "detection_summary.json",
+        "tracking_summary.json",
+        "video_info.json",
+    ):
+        summary_file = csv_path.parent / summary_name
+        if summary_file.is_file():
+            try:
+                data = json.loads(summary_file.read_text(encoding="utf-8"))
+                if isinstance(data, list) and data and isinstance(data[0], dict):
+                    data = data[0]
+                if isinstance(data, dict):
+                    cached_src = data.get("source_path") or data.get("name")
+                    if cached_src:
+                        cached_name = Path(cached_src).name.replace("_", "-").lower()
+                        cached_stem = Path(cached_src).stem.replace("_", "-").lower()
+                        if (
+                            cached_name != expected_name
+                            and cached_stem != expected_stem
+                        ):
+                            if strict:
+                                raise ValueError(
+                                    f"Cached CSV {csv_path} was generated for source {cached_src!r}, "
+                                    f"not for requested video {expected_source_path.name!r}."
+                                )
+                            return False
+            except (json.JSONDecodeError, OSError):
+                pass
+    return True
+
+
 def run_pipeline(
     video_path: Path | str,
     config: PipelineConfig | None = None,
@@ -377,9 +454,11 @@ def run_pipeline(
         else datetime.now(UTC).strftime("run_%Y%m%dT%H%M%S_") + uuid4().hex[:6]
     )
     runs_base = (
-        Path(output_root) if output_root is not None else (root / "outputs" / "runs")
+        Path(output_root).resolve()
+        if output_root is not None
+        else (root / "outputs" / "runs").resolve()
     )
-    run_dir = runs_base / resolved_run_id
+    run_dir = (runs_base / resolved_run_id).resolve()
     run_dir.mkdir(parents=True, exist_ok=True)
 
     run_config_path = save_pipeline_config(cfg, run_dir / "run_config.yaml")
@@ -422,7 +501,12 @@ def run_pipeline(
     trk_csv_in = _resolve_optional_path(cfg.precomputed_tracks_csv, root)
     det_csv_in = _resolve_optional_path(cfg.precomputed_detections_csv, root)
 
-    if trk_csv_in is not None and trk_csv_in.is_file():
+    use_cached_tracks = (
+        trk_csv_in is not None
+        and trk_csv_in.is_file()
+        and validate_cached_artifact_source(trk_csv_in, src_path)
+    )
+    if use_cached_tracks:
         frame_tracks = read_tracks_csv(trk_csv_in)
         if cfg.max_frames is not None:
             frame_tracks = [ft for ft in frame_tracks if ft.frame_id < cfg.max_frames]
@@ -444,7 +528,12 @@ def run_pipeline(
                 trks = active_tracker.track(frame, frame_id=fid)
                 frame_tracks.append(FrameTracks(frame_id=fid, tracks=trks))
 
-    if det_csv_in is not None and det_csv_in.is_file():
+    use_cached_detections = (
+        det_csv_in is not None
+        and det_csv_in.is_file()
+        and validate_cached_artifact_source(det_csv_in, src_path)
+    )
+    if use_cached_detections:
         frame_detections = _load_detections_as_frame_records(det_csv_in, cfg.max_frames)
     elif detector is not None:
         frame_detections = []
@@ -471,6 +560,9 @@ def run_pipeline(
         run_dir / "trajectories.csv", trajectories
     )
     traj_summaries = compute_trajectory_summaries(trajectories, fps=fps)
+    trajectory_summary_csv_path = write_trajectory_summary_csv(
+        run_dir / "trajectory_summary.csv", traj_summaries
+    )
 
     # Phase 5: Zone & line spatial reasoning
     scene_cfg_file = _resolve_optional_path(cfg.scene_config_path, root)
@@ -613,18 +705,18 @@ def run_pipeline(
     # Phase 10: Ingest into SQLite intelligence.db
     search_cfg = SearchConfig(
         source_name=src_path.name,
-        detections_csv=str(detections_csv_path),
-        tracks_csv=str(tracks_csv_path),
-        tracking_summary_csv=str(track_summary_csv_path),
-        trajectories_csv=str(trajectories_csv_path),
-        trajectory_summary_csv=str(run_dir / "missing_traj_summary.csv"),
-        events_csv=str(run_dir / "events.csv"),
-        evidence_root=str(run_dir),
-        zone_counts_csv=str(zone_counts_csv_path),
-        line_counts_csv=str(line_counts_csv_path),
+        detections_csv=str(detections_csv_path.resolve()),
+        tracks_csv=str(tracks_csv_path.resolve()),
+        tracking_summary_csv=str(track_summary_csv_path.resolve()),
+        trajectories_csv=str(trajectories_csv_path.resolve()),
+        trajectory_summary_csv=str(trajectory_summary_csv_path.resolve()),
+        events_csv=str((run_dir / "events.csv").resolve()),
+        evidence_root=str(run_dir.resolve()),
+        zone_counts_csv=str(zone_counts_csv_path.resolve()),
+        line_counts_csv=str(line_counts_csv_path.resolve()),
         write_subproject_docs=False,
     )
-    db_path = run_dir / "intelligence.db"
+    db_path = (run_dir / "intelligence.db").resolve()
     db_summary = ingest_intelligence_db(db_path, search_cfg, project_root=root)
 
     elapsed = time.perf_counter() - t0
@@ -646,6 +738,206 @@ def run_pipeline(
     )
 
 
+def run_multi_camera_pipeline(
+    video_sources: list[Path | str],
+    config: PipelineConfig | None = None,
+    *,
+    camera_ids: list[str] | None = None,
+    output_root: Path | str | None = None,
+    run_id: str | None = None,
+    project_root: Path | None = None,
+    detector: PersonDetector | None = None,
+    tracker: PersonTracker | None = None,
+    scene_configs_by_camera: Mapping[str, Path | str] | None = None,
+    precomputed_tracks_by_camera: Mapping[str, Path | str] | None = None,
+    precomputed_detections_by_camera: Mapping[str, Path | str] | None = None,
+) -> MultiCameraPipelineRunResult:
+    """Execute the CV pipeline across multiple camera streams into a unified intelligence.db."""
+    if not video_sources:
+        raise ValueError("video_sources must be non-empty")
+
+    t0 = time.perf_counter()
+    cfg = config if config is not None else PipelineConfig()
+    root = project_root if project_root is not None else _PROJECT_ROOT
+
+    resolved_run_id = (
+        run_id.strip()
+        if run_id and run_id.strip()
+        else datetime.now(UTC).strftime("multicam_%Y%m%dT%H%M%S_") + uuid4().hex[:6]
+    )
+    runs_base = (
+        Path(output_root).resolve()
+        if output_root is not None
+        else (root / "outputs" / "runs").resolve()
+    )
+    master_run_dir = (runs_base / resolved_run_id).resolve()
+    master_run_dir.mkdir(parents=True, exist_ok=True)
+    save_pipeline_config(cfg, master_run_dir / "run_config.yaml")
+
+    cams_dir = (master_run_dir / "cameras").resolve()
+    cams_dir.mkdir(parents=True, exist_ok=True)
+
+    results: list[PipelineRunResult] = []
+    search_configs: list[SearchConfig] = []
+    cameras_meta: list[CameraMetadata] = []
+    cam_names: list[str] = []
+
+    for i, vsrc in enumerate(video_sources):
+        src_p = Path(vsrc)
+        cam_id = (
+            camera_ids[i].strip()
+            if camera_ids and i < len(camera_ids) and camera_ids[i].strip()
+            else src_p.stem
+        )
+        cam_names.append(cam_id)
+
+        cam_scene_cfg = (
+            scene_configs_by_camera.get(cam_id)
+            if scene_configs_by_camera and cam_id in scene_configs_by_camera
+            else cfg.scene_config_path
+        )
+        cam_tracks = (
+            precomputed_tracks_by_camera.get(cam_id)
+            if precomputed_tracks_by_camera and cam_id in precomputed_tracks_by_camera
+            else cfg.precomputed_tracks_csv
+        )
+        cam_dets = (
+            precomputed_detections_by_camera.get(cam_id)
+            if precomputed_detections_by_camera
+            and cam_id in precomputed_detections_by_camera
+            else cfg.precomputed_detections_csv
+        )
+        cam_pipeline_cfg = PipelineConfig(
+            model_name=cfg.model_name,
+            confidence_threshold=cfg.confidence_threshold,
+            iou_threshold=cfg.iou_threshold,
+            tracker_config=cfg.tracker_config,
+            device=cfg.device,
+            precomputed_detections_csv=str(cam_dets) if cam_dets else None,
+            precomputed_tracks_csv=str(cam_tracks) if cam_tracks else None,
+            scene_config_path=str(cam_scene_cfg),
+            anchor=cfg.anchor,
+            smoothing_window=cfg.smoothing_window,
+            max_trail_length=cfg.max_trail_length,
+            min_dwell_seconds=cfg.min_dwell_seconds,
+            min_entry_frames=cfg.min_entry_frames,
+            grace_frames=cfg.grace_frames,
+            line_cooldown_frames=cfg.line_cooldown_frames,
+            include_line_crossings=cfg.include_line_crossings,
+            per_zone_min_dwell_seconds=cfg.per_zone_min_dwell_seconds,
+            best_frame_strategy=cfg.best_frame_strategy,
+            crop_padding_ratio=cfg.crop_padding_ratio,
+            min_padding_px=cfg.min_padding_px,
+            jpeg_quality=cfg.jpeg_quality,
+            grid_bin_size_px=cfg.grid_bin_size_px,
+            gaussian_sigma_px=cfg.gaussian_sigma_px,
+            normalization_mode=cfg.normalization_mode,
+            max_points_per_track_cell=cfg.max_points_per_track_cell,
+            colormap=cfg.colormap,
+            reference_frame_index=cfg.reference_frame_index,
+            inspection_sample_count=cfg.inspection_sample_count,
+            save_annotated_video=cfg.save_annotated_video,
+            max_frames=cfg.max_frames,
+        )
+
+        res = run_pipeline(
+            vsrc,
+            cam_pipeline_cfg,
+            output_root=cams_dir,
+            run_id=cam_id,
+            project_root=root,
+            detector=detector,
+            tracker=tracker,
+        )
+        results.append(res)
+
+        cam_run_path = Path(res.run_dir)
+        vinfo_path = cam_run_path / "video_info.json"
+        fps, w, h, frames = 30.0, 1920, 1080, res.processed_frames
+        if vinfo_path.is_file():
+            try:
+                vinfo = json.loads(vinfo_path.read_text(encoding="utf-8"))[0]
+                fps = float(vinfo.get("fps", fps))
+                w = int(vinfo.get("width", w))
+                h = int(vinfo.get("height", h))
+                frames = int(vinfo.get("frame_count", frames))
+            except (json.JSONDecodeError, KeyError, IndexError, ValueError, OSError):
+                pass
+
+        cameras_meta.append(
+            CameraMetadata(
+                camera_id=cam_id,
+                source_name=src_p.name,
+                fps=fps,
+                width=w,
+                height=h,
+                total_frames=frames,
+            )
+        )
+        search_configs.append(
+            SearchConfig(
+                source_name=src_p.name,
+                camera_id=cam_id,
+                detections_csv=str((cam_run_path / "detections.csv").resolve()),
+                tracks_csv=str((cam_run_path / "tracks.csv").resolve()),
+                tracking_summary_csv=str(
+                    (cam_run_path / "track_summary.csv").resolve()
+                ),
+                trajectories_csv=str((cam_run_path / "trajectories.csv").resolve()),
+                trajectory_summary_csv=str(
+                    (cam_run_path / "trajectory_summary.csv").resolve()
+                ),
+                events_csv=str((cam_run_path / "events.csv").resolve()),
+                evidence_root=str(cam_run_path.resolve()),
+                zone_counts_csv=str((cam_run_path / "zone_counts.csv").resolve()),
+                line_counts_csv=str((cam_run_path / "line_counts.csv").resolve()),
+                write_subproject_docs=False,
+            )
+        )
+
+    master_db = (master_run_dir / "intelligence.db").resolve()
+    db_summary = ingest_multi_camera_intelligence_db(
+        master_db,
+        search_configs,
+        project_root=root,
+        clear_existing=True,
+        cameras_metadata=cameras_meta,
+    )
+
+    elapsed = time.perf_counter() - t0
+    total_dets = sum(r.detections_count for r in results)
+    total_trks = db_summary.tracks_count
+    total_evs = db_summary.events_count
+
+    summary_payload = {
+        "run_id": resolved_run_id,
+        "run_dir": str(master_run_dir),
+        "cameras": cam_names,
+        "cameras_count": len(cam_names),
+        "total_detections": total_dets,
+        "total_tracks": total_trks,
+        "total_events": total_evs,
+        "db_path": str(master_db),
+        "elapsed_seconds": round(elapsed, 4),
+    }
+    (master_run_dir / "multicam_summary.json").write_text(
+        json.dumps(summary_payload, indent=2) + "\n", encoding="utf-8"
+    )
+
+    return MultiCameraPipelineRunResult(
+        run_id=resolved_run_id,
+        run_dir=str(master_run_dir),
+        cameras=cam_names,
+        camera_results=results,
+        db_path=str(master_db),
+        cameras_count=len(cam_names),
+        total_detections=total_dets,
+        total_tracks=total_trks,
+        total_events=total_evs,
+        elapsed_seconds=elapsed,
+    )
+
+
 def build_parser() -> argparse.ArgumentParser:
     """Build the CLI argument parser for python -m event_intelligence.pipeline."""
     parser = argparse.ArgumentParser(
@@ -657,8 +949,22 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--video",
         type=Path,
-        required=True,
+        default=None,
         help="Path to the input video file or MOT17 frame-sequence directory.",
+    )
+    parser.add_argument(
+        "--videos",
+        type=Path,
+        nargs="+",
+        default=None,
+        help="Paths to multiple video files or directories for multi-camera processing.",
+    )
+    parser.add_argument(
+        "--cameras",
+        type=str,
+        nargs="+",
+        default=None,
+        help="Optional camera identifiers matching --videos (e.g. entrance concourse).",
     )
     parser.add_argument(
         "--config",
@@ -744,8 +1050,35 @@ def main(argv: list[str] | None = None) -> int:
         ),
     )
 
+    videos: list[Path] = []
+    if args.videos:
+        videos = [Path(v) for v in args.videos]
+    elif args.video is not None:
+        videos = [Path(args.video)]
+    else:
+        videos = [Path("data/fallback_clips/people-detection.mp4")]
+
+    if len(videos) > 1:
+        res_multi = run_multi_camera_pipeline(
+            videos,
+            cfg,
+            camera_ids=args.cameras,
+            output_root=args.output_root,
+            run_id=args.run_id,
+        )
+        if args.json:
+            print(json.dumps(res_multi.to_dict(), indent=2))
+        else:
+            print(
+                f"Completed multi-camera pipeline run '{res_multi.run_id}' -> {res_multi.run_dir} "
+                f"({res_multi.cameras_count} cameras: {', '.join(res_multi.cameras)}, "
+                f"detections={res_multi.total_detections}, tracks={res_multi.total_tracks}, "
+                f"events={res_multi.total_events}, elapsed={res_multi.elapsed_seconds:.2f}s)"
+            )
+        return 0
+
     result = run_pipeline(
-        args.video,
+        videos[0],
         cfg,
         output_root=args.output_root,
         run_id=args.run_id,

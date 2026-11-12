@@ -2,19 +2,7 @@
 
 from __future__ import annotations
 
-import sys
-from pathlib import Path
-
-_SCRIPTS = (
-    Path(__file__).resolve().parents[3]
-    / "cv_projects"
-    / "08_heatmaps_analytics"
-    / "scripts"
-)
-if str(_SCRIPTS) not in sys.path:
-    sys.path.insert(0, str(_SCRIPTS))
-
-from generate_heatmaps_analytics import (
+from event_intelligence.analytics.generate_heatmaps_analytics import (
     LINE_COUNTS_CSV_HEADER,
     VALID_COLORMAPS,
     VALID_NORMALIZATION_MODES,

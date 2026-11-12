@@ -2,19 +2,7 @@
 
 from __future__ import annotations
 
-import sys
-from pathlib import Path
-
-_SCRIPTS = (
-    Path(__file__).resolve().parents[3]
-    / "cv_projects"
-    / "07_visual_evidence"
-    / "scripts"
-)
-if str(_SCRIPTS) not in sys.path:
-    sys.path.insert(0, str(_SCRIPTS))
-
-from extract_visual_evidence import (
+from event_intelligence.evidence.extract_visual_evidence import (
     EVIDENCE_EVENTS_CSV_HEADER,
     VALID_BEST_FRAME_STRATEGIES,
     BestFrameSelection,

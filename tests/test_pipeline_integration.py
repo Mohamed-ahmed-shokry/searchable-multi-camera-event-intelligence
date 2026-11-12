@@ -47,11 +47,15 @@ from event_intelligence.evidence import (
 from event_intelligence.pipeline import (
     PipelineConfig,
     load_pipeline_config,
+    run_multi_camera_pipeline,
     run_pipeline,
     save_pipeline_config,
 )
 from event_intelligence.pipeline import (
     main as pipeline_main,
+)
+from event_intelligence.search import (
+    main as search_main,
 )
 from event_intelligence.spatial import (
     LineSpec,
@@ -117,6 +121,17 @@ class TestPromotedVideoPackage(unittest.TestCase):
             with VideoSource(seq_path) as seq_vs:
                 self.assertEqual(seq_vs.metadata.source_type, "frame_sequence")
 
+            self.assertEqual(
+                VideoSource.__module__, "event_intelligence.video.video_source"
+            )
+            self.assertEqual(
+                inspect_source.__module__, "event_intelligence.video.inspect_video"
+            )
+            self.assertEqual(
+                validate_video_info.__module__,
+                "event_intelligence.video.validate_dataset",
+            )
+
 
 class TestPromotedDetectionPackage(unittest.TestCase):
     """Test event_intelligence.detection CSV schema and round-trip."""
@@ -135,6 +150,13 @@ class TestPromotedDetectionPackage(unittest.TestCase):
             self.assertEqual(list(rows[0].keys()), DETECTIONS_CSV_HEADER)
             self.assertAlmostEqual(rows[0]["confidence"], 0.91)
             self.assertIsNone(rows[1]["x1"])
+            self.assertEqual(
+                Detection.__module__, "event_intelligence.detection.detect_people"
+            )
+            self.assertEqual(
+                write_detections_csv.__module__,
+                "event_intelligence.detection.detect_people",
+            )
 
 
 class TestPromotedTrackingPackage(unittest.TestCase):
@@ -162,6 +184,12 @@ class TestPromotedTrackingPackage(unittest.TestCase):
             self.assertEqual(metrics["mota"], 1.0)
             self.assertEqual(metrics["idf1"], 1.0)
             self.assertEqual(metrics["id_switches"], 0)
+            self.assertEqual(
+                TrackDetection.__module__, "event_intelligence.tracking.track_people"
+            )
+            self.assertEqual(
+                evaluate_tracking.__module__, "event_intelligence.tracking.evaluate_mot"
+            )
 
 
 class TestPromotedTrajectoriesPackage(unittest.TestCase):
@@ -184,6 +212,14 @@ class TestPromotedTrajectoriesPackage(unittest.TestCase):
             write_trajectories_csv(csv_path, smoothed)
             reloaded = read_trajectories_csv(csv_path)
             self.assertEqual(len(reloaded[1]), 2)
+            self.assertEqual(
+                TrajectoryPoint.__module__,
+                "event_intelligence.trajectories.extract_trajectories",
+            )
+            self.assertEqual(
+                smooth_trajectories.__module__,
+                "event_intelligence.trajectories.extract_trajectories",
+            )
 
 
 class TestPromotedSpatialPackage(unittest.TestCase):
@@ -211,6 +247,12 @@ class TestPromotedSpatialPackage(unittest.TestCase):
         sigs = evaluate_scene_signals(trajs, scene)
         self.assertEqual(
             [s.signal_type for s in sigs], ["zone_enter", "line_cross", "zone_exit"]
+        )
+        self.assertEqual(
+            ZoneSpec.__module__, "event_intelligence.spatial.reason_zones_lines"
+        )
+        self.assertEqual(
+            point_in_zone.__module__, "event_intelligence.spatial.reason_zones_lines"
         )
 
 
@@ -241,6 +283,14 @@ class TestPromotedEventsPackage(unittest.TestCase):
         events, traces = evaluate_dwell_events(trajs, scene, cfg)
         self.assertEqual(len(events), 2)
         self.assertEqual(len(traces), 1)
+        self.assertEqual(
+            ZoneDwellStateMachine.__module__,
+            "event_intelligence.events.generate_dwell_events",
+        )
+        self.assertEqual(
+            evaluate_dwell_events.__module__,
+            "event_intelligence.events.generate_dwell_events",
+        )
 
 
 class TestPromotedEvidencePackage(unittest.TestCase):
@@ -272,6 +322,14 @@ class TestPromotedEvidencePackage(unittest.TestCase):
             loaded = read_evidence_events_csv(csv_path)
             self.assertEqual(len(loaded), 1)
             self.assertEqual(loaded[0].snapshot_path, "snapshots/evt_0001_1.jpg")
+            self.assertEqual(
+                EvidenceEventRecord.__module__,
+                "event_intelligence.evidence.extract_visual_evidence",
+            )
+            self.assertEqual(
+                select_best_frame_for_event.__module__,
+                "event_intelligence.evidence.extract_visual_evidence",
+            )
 
 
 class TestPromotedAnalyticsPackage(unittest.TestCase):
@@ -302,6 +360,14 @@ class TestPromotedAnalyticsPackage(unittest.TestCase):
         l_counts = compute_line_counts(events)
         self.assertEqual(z_counts[0].entry_count, 1)
         self.assertEqual(l_counts[0].crossings_ab, 1)
+        self.assertEqual(
+            accumulate_trajectory_grid.__module__,
+            "event_intelligence.analytics.generate_heatmaps_analytics",
+        )
+        self.assertEqual(
+            compute_zone_counts.__module__,
+            "event_intelligence.analytics.generate_heatmaps_analytics",
+        )
 
 
 class TestPromotedEvaluationPackage(unittest.TestCase):
@@ -316,6 +382,14 @@ class TestPromotedEvaluationPackage(unittest.TestCase):
         trk_m = evaluate_tracking_metrics("bytetrack", gt, preds)
         self.assertEqual(det_m.precision, 1.0)
         self.assertEqual(trk_m.mota, 1.0)
+        self.assertEqual(
+            EvaluationConfig.__module__,
+            "event_intelligence.evaluation.evaluate_pipeline",
+        )
+        self.assertEqual(
+            evaluate_detection_precision_recall.__module__,
+            "event_intelligence.evaluation.evaluate_pipeline",
+        )
 
 
 class TestPromotedStoragePackage(unittest.TestCase):
@@ -352,6 +426,13 @@ class TestPromotedStoragePackage(unittest.TestCase):
             self.assertEqual(summary.events_count, 1)
             self.assertEqual(len(query_events(db_path, zone_id="lobby")), 1)
             self.assertEqual(len(query_tracks(db_path, min_duration=5.0)), 1)
+            self.assertEqual(
+                SearchConfig.__module__, "event_intelligence.storage.search_events"
+            )
+            self.assertEqual(
+                ingest_intelligence_db.__module__,
+                "event_intelligence.storage.search_events",
+            )
 
 
 class TestEndToEndPipelineAndCli(unittest.TestCase):
@@ -428,6 +509,7 @@ class TestEndToEndPipelineAndCli(unittest.TestCase):
                 "tracks.csv",
                 "track_summary.csv",
                 "trajectories.csv",
+                "trajectory_summary.csv",
                 "zone_line_events.csv",
                 "events.csv",
                 "heatmap.png",
@@ -440,6 +522,23 @@ class TestEndToEndPipelineAndCli(unittest.TestCase):
             ):
                 self.assertTrue((vid_dir / fname).is_file(), f"Missing {fname}")
             self.assertGreaterEqual(res_vid.events_count, 2)
+
+            # Query the generated intelligence.db via event_intelligence.search CLI
+            sbuf = io.StringIO()
+            with redirect_stdout(sbuf):
+                src_rc = search_main(
+                    [
+                        "--db",
+                        str(vid_dir / "intelligence.db"),
+                        "--zone",
+                        "plaza",
+                        "--json",
+                    ]
+                )
+            self.assertEqual(src_rc, 0)
+            search_rows = json.loads(sbuf.getvalue())
+            self.assertGreaterEqual(len(search_rows), 1)
+            self.assertEqual(search_rows[0]["zone_id"], "plaza")
 
             # Run via CLI on MOT sequence
             buf = io.StringIO()
@@ -461,6 +560,199 @@ class TestEndToEndPipelineAndCli(unittest.TestCase):
             payload = json.loads(buf.getvalue())
             self.assertEqual(payload["run_id"], "seq_run")
             self.assertTrue((out_root / "seq_run" / "intelligence.db").is_file())
+
+    def test_run_pipeline_relative_output_root_populates_database(self) -> None:
+        """Verify that passing a relative output_root still populates intelligence.db."""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            root = Path(tmpdir)
+            vid_path = make_video(root, name="test_rel.avi", count=6)
+            tracks_csv = root / "tracks.csv"
+            write_tracks_csv(
+                tracks_csv,
+                [
+                    FrameTracks(0, [TrackDetection(0, 1, 10.0, 10.0, 20.0, 30.0, 0.9)]),
+                    FrameTracks(1, [TrackDetection(1, 1, 10.0, 10.0, 20.0, 30.0, 0.9)]),
+                ],
+            )
+            cfg = PipelineConfig(
+                precomputed_tracks_csv=str(tracks_csv),
+                save_annotated_video=False,
+            )
+            # Use relative output root like "relative_runs"
+            rel_output = Path(tmpdir) / "sub" / "relative_runs"
+            res = run_pipeline(
+                vid_path,
+                cfg,
+                output_root=str(rel_output),
+                run_id="rel_run",
+                project_root=root,
+            )
+            self.assertTrue(Path(res.db_path).is_file())
+            self.assertGreater(res.tracks_count, 0)
+
+    def test_validate_cached_artifact_source_detects_mismatch(self) -> None:
+        """Verify that cached artifacts belonging to an unrelated clip are identified."""
+        from event_intelligence.pipeline import validate_cached_artifact_source
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            tmp = Path(tmpdir)
+            cached_csv = tmp / "tracks.csv"
+            cached_csv.write_text(
+                "frame_id,track_id,x1,y1,x2,y2,confidence\n", encoding="utf-8"
+            )
+
+            # With no summary file, returns True (cannot disprove)
+            self.assertTrue(
+                validate_cached_artifact_source(cached_csv, Path("my_clip.mp4"))
+            )
+
+            # With matching summary file
+            summary = tmp / "tracking_summary.json"
+            summary.write_text(
+                json.dumps({"source_path": "/data/my_clip.mp4"}), encoding="utf-8"
+            )
+            self.assertTrue(
+                validate_cached_artifact_source(cached_csv, Path("my_clip.mp4"))
+            )
+
+            # With mismatched summary file
+            summary.write_text(
+                json.dumps({"source_path": "/data/other_camera.mp4"}), encoding="utf-8"
+            )
+            self.assertFalse(
+                validate_cached_artifact_source(cached_csv, Path("my_clip.mp4"))
+            )
+            with self.assertRaises(ValueError):
+                validate_cached_artifact_source(
+                    cached_csv, Path("my_clip.mp4"), strict=True
+                )
+
+    def test_run_multi_camera_pipeline_and_cli(self) -> None:
+        """Verify multi-camera pipeline execution produces per-camera artifacts and unified DB."""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            root = Path(tmpdir)
+            cam1_vid = make_video(root, name="cam1.avi", count=6)
+            cam2_vid = make_video(root, name="cam2.avi", count=6)
+
+            scene_yaml = root / "scene.yaml"
+            save_scene_config(
+                scene_yaml,
+                SceneConfig(
+                    zones=[ZoneSpec("plaza", [(0, 0), (64, 0), (64, 48), (0, 48)])],
+                    lines=[],
+                ),
+            )
+
+            # Precomputed tracks for both cameras
+            c1_tracks = root / "c1_tracks.csv"
+            write_tracks_csv(
+                c1_tracks,
+                [
+                    FrameTracks(0, [TrackDetection(0, 1, 10.0, 10.0, 20.0, 30.0, 0.9)]),
+                    FrameTracks(1, [TrackDetection(1, 1, 12.0, 10.0, 22.0, 30.0, 0.9)]),
+                ],
+            )
+            c2_tracks = root / "c2_tracks.csv"
+            write_tracks_csv(
+                c2_tracks,
+                [
+                    FrameTracks(
+                        0, [TrackDetection(0, 2, 30.0, 20.0, 40.0, 40.0, 0.88)]
+                    ),
+                    FrameTracks(
+                        1, [TrackDetection(1, 2, 32.0, 20.0, 42.0, 40.0, 0.88)]
+                    ),
+                ],
+            )
+
+            cfg = PipelineConfig(
+                precomputed_tracks_csv=str(c1_tracks),
+                scene_config_path=str(scene_yaml),
+                min_dwell_seconds=0.1,
+                smoothing_window=1,
+                save_annotated_video=False,
+            )
+            out_root = root / "multicam_runs"
+
+            res = run_multi_camera_pipeline(
+                [cam1_vid, cam2_vid],
+                cfg,
+                camera_ids=["entrance", "lobby"],
+                output_root=out_root,
+                run_id="multi_run",
+                project_root=root,
+                precomputed_tracks_by_camera={
+                    "entrance": c1_tracks,
+                    "lobby": c2_tracks,
+                },
+            )
+            self.assertEqual(res.cameras_count, 2)
+            self.assertEqual(res.cameras, ["entrance", "lobby"])
+            self.assertTrue(Path(res.db_path).is_file())
+
+            master_dir = Path(res.run_dir)
+            self.assertTrue((master_dir / "multicam_summary.json").is_file())
+            self.assertTrue((master_dir / "run_config.yaml").is_file())
+            self.assertTrue(
+                (master_dir / "cameras" / "entrance" / "video_info.json").is_file()
+            )
+            self.assertTrue(
+                (master_dir / "cameras" / "lobby" / "video_info.json").is_file()
+            )
+
+            # Query the unified intelligence.db via search CLI
+            sbuf = io.StringIO()
+            with redirect_stdout(sbuf):
+                rc = search_main(
+                    [
+                        "--db",
+                        str(master_dir / "intelligence.db"),
+                        "--camera-summary",
+                        "--json",
+                    ]
+                )
+            self.assertEqual(rc, 0)
+            data = json.loads(sbuf.getvalue())
+            self.assertEqual(len(data), 2)
+
+            # Test execution via CLI
+            buf = io.StringIO()
+            with redirect_stdout(buf):
+                cli_rc = pipeline_main(
+                    [
+                        "--videos",
+                        str(cam1_vid),
+                        str(cam2_vid),
+                        "--cameras",
+                        "cam_a",
+                        "cam_b",
+                        "--config",
+                        str(save_pipeline_config(cfg, root / "pipeline.yaml")),
+                        "--output-root",
+                        str(out_root),
+                        "--run-id",
+                        "cli_multicam",
+                        "--no-video",
+                        "--json",
+                    ]
+                )
+            self.assertEqual(cli_rc, 0)
+            payload = json.loads(buf.getvalue())
+            self.assertEqual(payload["cameras_count"], 2)
+            self.assertEqual(payload["cameras"], ["cam_a", "cam_b"])
+            self.assertTrue((out_root / "cli_multicam" / "intelligence.db").is_file())
+
+    def test_src_package_has_no_sys_path_mutations_or_cv_projects_imports(self) -> None:
+        src_pkg = Path(__file__).resolve().parents[1] / "src" / "event_intelligence"
+        py_files = sorted(src_pkg.rglob("*.py"))
+        self.assertGreaterEqual(len(py_files), 25)
+        for py_file in py_files:
+            text = py_file.read_text(encoding="utf-8")
+            self.assertNotIn(
+                "sys.path.insert",
+                text,
+                f"Unexpected sys.path.insert in {py_file}",
+            )
 
 
 if __name__ == "__main__":
