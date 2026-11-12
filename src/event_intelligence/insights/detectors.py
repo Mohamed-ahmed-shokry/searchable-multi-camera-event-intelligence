@@ -445,3 +445,155 @@ def detect_stationary_and_drop_insights(
             idx += 1
 
     return insights
+
+
+def detect_cross_camera_transitions(
+    events_by_camera: Mapping[str, Sequence[Any]],
+    config: InsightConfig,
+    *,
+    start_index: int = 1,
+) -> list[InsightRecord]:
+    """Detect plausible entity transitions and temporal handoffs across multiple camera views."""
+    cams = list(events_by_camera.keys())
+    if len(cams) < 2:
+        return []
+
+    insights: list[InsightRecord] = []
+    idx = start_index
+
+    # Gather departures (zone exits or dwell event completions)
+    departures: list[
+        tuple[str, int, str, float, Any]
+    ] = []  # (cam, track_id, zone, t_exit, obj)
+    arrivals: list[
+        tuple[str, int, str, float, Any]
+    ] = []  # (cam, track_id, zone, t_entry, obj)
+
+    for cam, evs in events_by_camera.items():
+        for ev in evs:
+            t_id = int(getattr(ev, "track_id", 0))
+            z_id = str(getattr(ev, "zone_id", ""))
+            ev_type = str(getattr(ev, "event_type", ""))
+
+            if ev_type in ("zone_exit", "dwell_time_event"):
+                t_exit = float(getattr(ev, "end_time", 0.0))
+                departures.append((cam, t_id, z_id, t_exit, ev))
+            if ev_type in ("zone_entry", "dwell_time_event"):
+                t_entry = float(getattr(ev, "start_time", 0.0))
+                arrivals.append((cam, t_id, z_id, t_entry, ev))
+
+    for cam_a, t_a, z_a, t_dep, dep_obj in departures:
+        for cam_b, t_b, z_b, t_arr, arr_obj in arrivals:
+            if cam_a == cam_b:
+                continue
+
+            delta = t_arr - t_dep
+            if (
+                config.cross_camera_min_seconds
+                <= delta
+                <= config.cross_camera_max_seconds
+            ):
+                snap_path = getattr(arr_obj, "evidence_snapshot_path", None) or getattr(
+                    arr_obj, "snapshot_path", None
+                )
+                crop_path = getattr(arr_obj, "evidence_crop_path", None) or getattr(
+                    arr_obj, "crop_path", None
+                )
+
+                rec = InsightRecord(
+                    insight_id=f"ins_multicam_{idx:04d}",
+                    camera_id=f"{cam_a}->{cam_b}",
+                    insight_type=InsightType.CROSS_CAMERA_TRANSITION.value,
+                    severity=Severity.INFO.value,
+                    track_id=t_b,
+                    zone_id=f"{z_a}->{z_b}" if z_a and z_b else None,
+                    start_time=t_dep,
+                    end_time=t_arr,
+                    duration=round(delta, 2),
+                    description=(
+                        f"Cross-camera transition from '{cam_a}' (track {t_a}) "
+                        f"to '{cam_b}' (track {t_b}) in {delta:.2f}s"
+                    ),
+                    evidence_snapshot_path=str(snap_path) if snap_path else None,
+                    evidence_crop_path=str(crop_path) if crop_path else None,
+                    details={
+                        "from_camera": cam_a,
+                        "from_track_id": t_a,
+                        "from_zone": z_a,
+                        "to_camera": cam_b,
+                        "to_track_id": t_b,
+                        "to_zone": z_b,
+                        "transition_seconds": round(delta, 2),
+                    },
+                )
+                insights.append(rec)
+                idx += 1
+
+    return insights
+
+
+def generate_all_insights(
+    events: Sequence[Any],
+    trajectories: Mapping[int, Sequence[Any]],
+    config: InsightConfig | None = None,
+    *,
+    traces: Sequence[Any] | None = None,
+    camera_id: str = "default",
+    events_by_camera: Mapping[str, Sequence[Any]] | None = None,
+) -> list[InsightRecord]:
+    """Execute all behavioral detectors and return aggregated, chronologically ordered insights."""
+    cfg = config if config is not None else InsightConfig()
+    all_insights: list[InsightRecord] = []
+
+    # 1. Loitering
+    loitering = detect_loitering_insights(
+        events, cfg, camera_id=camera_id, start_index=len(all_insights) + 1
+    )
+    all_insights.extend(loitering)
+
+    # 2. Wrong-way
+    wrong_way = detect_wrong_way_insights(
+        events, cfg, camera_id=camera_id, start_index=len(all_insights) + 1
+    )
+    all_insights.extend(wrong_way)
+
+    # 3. High-speed
+    speed_insights = detect_speed_anomaly_insights(
+        trajectories, cfg, camera_id=camera_id, start_index=len(all_insights) + 1
+    )
+    all_insights.extend(speed_insights)
+
+    # 4. Stationary & track drop
+    stationary_and_drop = detect_stationary_and_drop_insights(
+        events,
+        trajectories,
+        cfg,
+        traces=traces,
+        camera_id=camera_id,
+        start_index=len(all_insights) + 1,
+    )
+    all_insights.extend(stationary_and_drop)
+
+    # 5. Cross-camera transitions (if multi-camera dictionary provided)
+    if events_by_camera and len(events_by_camera) > 1:
+        multicam_transitions = detect_cross_camera_transitions(
+            events_by_camera, cfg, start_index=len(all_insights) + 1
+        )
+        all_insights.extend(multicam_transitions)
+
+    # Sort deterministically by start_time, severity rank, insight_id
+    severity_order = {
+        Severity.CRITICAL.value: 0,
+        Severity.HIGH.value: 1,
+        Severity.MEDIUM.value: 2,
+        Severity.LOW.value: 3,
+        Severity.INFO.value: 4,
+    }
+    all_insights.sort(
+        key=lambda ins: (
+            ins.start_time,
+            severity_order.get(ins.severity, 5),
+            ins.insight_id,
+        )
+    )
+    return all_insights
