@@ -1736,7 +1736,7 @@ uv run --locked python -m event_intelligence.search \
 
 ---
 
-## Phase: 11d — Automated Behavior Insight & Anomaly Intelligence (2026-11-13)
+## Completed Phase: 11d — Automated Behavior Insight & Anomaly Intelligence (2026-11-13)
 
 ### Objective
 
@@ -1756,7 +1756,7 @@ This phase introduces an automated **Behavioral Insight Engine** (`src/event_int
 2. **Executive Intelligence Reporting:**
    - Generates `intelligence_report.md` and `insights.json` in pipeline run directories containing executive statistics, camera activity, detected anomalies with thumbnail evidence links, and hotspot zones.
 3. **Database Schema & Storage Support (`src/event_intelligence/storage/`):**
-   - New `insights` table in SQLite schema with composite keys `(insight_id, camera_id)` and foreign key references.
+   - New `insights` table in SQLite schema with composite keys `(camera_id, insight_id)` and foreign key references.
    - Automatic SQLite table migration for backward compatibility.
    - Storage queries: `insert_insights`, `query_insights` supporting filtering by camera, type, severity, track, and timestamp.
 4. **Search CLI Enhancement (`event_intelligence.search`):**
@@ -1771,13 +1771,13 @@ This phase introduces an automated **Behavioral Insight Engine** (`src/event_int
 
 | # | Criterion | Status | Evidence |
 |---|-----------|--------|----------|
-| 1 | `python -m event_intelligence.evaluation --help` executes cleanly as a runnable package CLI | ⏳ | To be verified |
-| 2 | Insight engine detects loitering, wrong-way, speed anomalies, stationary entities in restricted zones, and cross-camera handoffs | ⏳ | To be verified |
-| 3 | SQLite schema supports `insights` table with composite keys and automated schema migration | ⏳ | To be verified |
-| 4 | `run_pipeline` and `run_multi_camera_pipeline` emit `insights.json` and human-readable `intelligence_report.md` | ⏳ | To be verified |
-| 5 | `event_intelligence.search` supports `--insights`, `--insight-type`, and `--severity` filters | ⏳ | To be verified |
-| 6 | Comprehensive test suite passes with zero regressions | ⏳ | To be verified |
-| 7 | All local CI-parity checks and remote GitHub Actions CI runs pass 100% | ⏳ | To be verified |
+| 1 | `python -m event_intelligence.evaluation --help` executes cleanly as a runnable package CLI | ✅ | `66617d8`, verified in `test_module_main_cli_execution` (`11a2a7c`) |
+| 2 | Insight engine detects loitering, wrong-way, speed anomalies, stationary entities in restricted zones, and cross-camera handoffs | ✅ | `a1daa9e`, `acee611`, `3f05af6`, `2bc6c52`, `1334980`, verified in `tests/test_behavior_insights.py` (`51247b6`) |
+| 3 | SQLite schema supports `insights` table with composite keys and automated schema migration | ✅ | `8e9b36d`, `741db67`, verified in `test_insights_table_insertion_and_query_filtering` (`2b042cd`) |
+| 4 | `run_pipeline` and `run_multi_camera_pipeline` emit `insights.json`, `insights.csv`, and human-readable `intelligence_report.md` | ✅ | `120b846`, verified in `test_run_pipeline_and_cli_on_video_and_mot_sequence` (`06e785f`) |
+| 5 | `event_intelligence.search` supports `--insights`, `--insight-type`, and `--severity` filters | ✅ | `705cefe`, verified in `test_cli_query_insights_json` and `test_cli_filter_insights_by_type_and_severity` (`bbe3af4`) |
+| 6 | Comprehensive test suite passes with zero regressions | ✅ | `208 passed, 56 subtests passed` |
+| 7 | All local CI-parity checks and remote GitHub Actions CI runs pass 100% | ✅ | Remote runs 43317440557, 43317700214, 43318528322 green |
 
 ### Validation & CI Plan
 
@@ -1798,26 +1798,26 @@ uv run --locked python -m event_intelligence.search --db outputs/runs/multicam_t
 
 ### Micro-Task Breakdown
 
-- [ ] 1. `docs(roadmap): define Phase 11d behavior insight and anomaly intelligence scope`
-- [ ] 2. `feat(evaluation): add __main__.py CLI entrypoint to event_intelligence.evaluation`
-- [ ] 3. `test(evaluation): add test for python -m event_intelligence.evaluation CLI entrypoint`
-- [ ] 4. `types(insights): define InsightType, Severity, InsightRecord, and InsightConfig dataclasses`
-- [ ] 5. `feat(insights): implement loitering and prolonged dwell detector`
-- [ ] 6. `feat(insights): implement wrong-way and directional corridor violation detector`
-- [ ] 7. `feat(insights): implement high-velocity and rapid movement detector`
-- [ ] 8. `feat(insights): implement stationary entity and track loss in sensitive zone detector`
-- [ ] 9. `feat(insights): implement cross-camera temporal correlation detector`
-- [ ] 10. `test(insights): add unit tests for behavioral insight detectors`
-- [ ] 11. `feat(storage): add insights table and migration to SQLite schema`
-- [ ] 12. `feat(storage): implement insert_insights and query_insights in storage`
-- [ ] 13. `test(storage): add unit tests for insights table schema, ingestion, and querying`
-- [ ] 14. `feat(insights): implement executive summary and report generator (intelligence_report.md)`
-- [ ] 15. `feat(pipeline): wire insight detection and report generation into run_pipeline and run_multi_camera_pipeline`
-- [ ] 16. `feat(search): add --insights, --insight-type, and --severity query flags to event_intelligence.search`
-- [ ] 17. `test(search): add integration tests for search CLI insights filtering`
-- [ ] 18. `test(pipeline): add end-to-end pipeline tests verifying insights generation and intelligence_report.md`
-- [ ] 19. `docs(readme): document insight intelligence, report generation, and CLI search examples`
-- [ ] 20. `docs(roadmap): complete Phase 11d criteria, decision log, and CI log`
+- [x] 1. `docs(roadmap): define Phase 11d behavior insight and anomaly intelligence scope` (`2aefe47`)
+- [x] 2. `feat(evaluation): add __main__.py CLI entrypoint to event_intelligence.evaluation` (`66617d8`)
+- [x] 3. `test(evaluation): add test for python -m event_intelligence.evaluation CLI entrypoint` (`11a2a7c`)
+- [x] 4. `types(insights): define InsightType, Severity, InsightRecord, and InsightConfig dataclasses` (`15d0af5`)
+- [x] 5. `feat(insights): implement loitering and prolonged dwell detector` (`a1daa9e`)
+- [x] 6. `feat(insights): implement wrong-way and directional corridor violation detector` (`acee611`)
+- [x] 7. `feat(insights): implement high-velocity and rapid movement detector` (`3f05af6`)
+- [x] 8. `feat(insights): implement stationary entity and track loss in sensitive zone detector` (`2bc6c52`)
+- [x] 9. `feat(insights): implement cross-camera temporal correlation detector` (`1334980`)
+- [x] 10. `test(insights): add unit tests for behavioral insight detectors` (`51247b6`)
+- [x] 11. `feat(storage): add insights table and migration to SQLite schema` (`8e9b36d`)
+- [x] 12. `feat(storage): implement insert_insights and query_insights in storage` (`741db67`)
+- [x] 13. `test(storage): add unit tests for insights table schema, ingestion, and querying` (`2b042cd`)
+- [x] 14. `feat(insights): implement executive summary and report generator (intelligence_report.md)` (`5fdc259`)
+- [x] 15. `feat(pipeline): wire insight detection and report generation into run_pipeline and run_multi_camera_pipeline` (`120b846`)
+- [x] 16. `feat(search): add --insights, --insight-type, and --severity query flags to event_intelligence.search` (`705cefe`)
+- [x] 17. `test(search): add integration tests for search CLI insights filtering` (`bbe3af4`)
+- [x] 18. `test(pipeline): add end-to-end pipeline tests verifying insights generation and intelligence_report.md` (`06e785f`)
+- [x] 19. `docs(readme): document insight intelligence, report generation, and CLI search examples` (`39c92d5`)
+- [x] 20. `docs(roadmap): complete Phase 11d criteria, decision log, and CI log`
 
 ### Decision Log (Phase 11d)
 
@@ -1831,7 +1831,12 @@ uv run --locked python -m event_intelligence.search --db outputs/runs/multicam_t
 
 | Command | Result | Notes |
 |---------|--------|-------|
-| Baseline parity checks | ✅ all pass | 193 passed, 56 subtests, ruff clean |
+| `uv sync --locked` | ✅ exit 0 | clean locked editable environment |
+| `uv run --locked ruff check .` | ✅ `All checks passed!` | repo-wide lint gate (112 files clean) |
+| `uv run --locked ruff format --check .` | ✅ `112 files already formatted` | repo-wide format gate |
+| `uv run --locked pytest -v` | ✅ `208 passed, 56 subtests passed` | full test suite in 4.82s |
+| Remote CI (PR #13 runs 43317440557, 43317700214, 43318528322) | ✅ completed / success | GitHub Actions CI green across all jobs on `windows-latest` |
+
 
 
 
