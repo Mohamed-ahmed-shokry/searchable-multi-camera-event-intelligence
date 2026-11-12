@@ -10,6 +10,12 @@ from event_intelligence.insights.detectors import (
     detect_wrong_way_insights,
     generate_all_insights,
 )
+from event_intelligence.insights.report import (
+    generate_intelligence_report_markdown,
+    write_insights_csv,
+    write_insights_json,
+    write_intelligence_report,
+)
 from event_intelligence.insights.types import (
     VALID_INSIGHT_TYPES,
     VALID_SEVERITIES,
@@ -32,4 +38,8 @@ __all__ = [
     "detect_stationary_and_drop_insights",
     "detect_wrong_way_insights",
     "generate_all_insights",
+    "generate_intelligence_report_markdown",
+    "write_insights_csv",
+    "write_insights_json",
+    "write_intelligence_report",
 ]
