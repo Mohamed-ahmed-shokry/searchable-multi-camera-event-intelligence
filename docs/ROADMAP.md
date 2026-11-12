@@ -1619,7 +1619,7 @@ uv run --locked python -m event_intelligence.search \
 
 ---
 
-## Planned Phase: 11c — Multi-Camera Pipeline Integration & Cross-Camera Search Intelligence (2026-11-12)
+## Completed Phase: 11c — Multi-Camera Pipeline Integration & Cross-Camera Search Intelligence (2026-11-12)
 
 ### Objective
 
@@ -1664,13 +1664,13 @@ Deliver multi-camera video intelligence end-to-end across `src/event_intelligenc
 
 | # | Criterion | Status | Evidence |
 |---|-----------|--------|----------|
-| 1 | `output_root` and artifact paths in `run_pipeline` resolve to absolute paths, ensuring consistent ingestion regardless of working directory | ⏳ pending | `test_pipeline_integration.py` |
-| 2 | Cached detections and tracks are validated against source before reuse; mismatched caches do not contaminate other clips | ⏳ pending | `test_pipeline_integration.py` |
-| 3 | SQLite schema supports `cameras` table and `camera_id` attribute across all entity tables while maintaining backward compatibility | ⏳ pending | `test_storage_multicamera.py` |
-| 4 | `ingest_intelligence_db` and multi-camera ingestion populate `intelligence.db` with multiple cameras without key collisions | ⏳ pending | `test_storage_multicamera.py` |
-| 5 | `event_intelligence.search` supports `--camera` filter and `--camera-summary` cross-camera report | ⏳ pending | `test_search_multicamera.py` |
-| 6 | `event_intelligence.pipeline` can orchestrate multiple video sources into a unified multi-camera run and `intelligence.db` | ⏳ pending | `test_pipeline_integration.py` |
-| 7 | All local CI-parity checks (`uv sync --locked`, `ruff check .`, `ruff format --check .`, `pytest -v`) and remote GitHub Actions CI pass 100% | ⏳ pending | local checks + GitHub Actions run |
+| 1 | `output_root` and artifact paths in `run_pipeline` resolve to absolute paths, ensuring consistent ingestion regardless of working directory | ✅ | Verified by `test_run_pipeline_relative_output_root_populates_database` (`bb6f8f4`) |
+| 2 | Cached detections and tracks are validated against source before reuse; mismatched caches do not contaminate other clips | ✅ | Verified by `test_validate_cached_artifact_source_detects_mismatch` (`e51b4b6`) |
+| 3 | SQLite schema supports `cameras` table and `camera_id` attribute across all entity tables while maintaining backward compatibility | ✅ | Verified by `test_single_camera_ingestion_registers_camera` (`3183adb`, `e2694f9`) |
+| 4 | `ingest_intelligence_db` and multi-camera ingestion populate `intelligence.db` with multiple cameras without key collisions | ✅ | Verified by `test_multi_camera_ingestion_preserves_independent_tracks_and_events` (`c5fd598`, `e2694f9`) |
+| 5 | `event_intelligence.search` supports `--camera` filter and `--camera-summary` cross-camera report | ✅ | Verified by `test_cli_camera_summary_json` and `test_cli_filter_events_by_camera` (`d8264df`, `de09076`) |
+| 6 | `event_intelligence.pipeline` can orchestrate multiple video sources into a unified multi-camera run and `intelligence.db` | ✅ | Verified by `test_run_multi_camera_pipeline_and_cli` (`ecf8841`, `be9e1a8`) |
+| 7 | All local CI-parity checks (`uv sync --locked`, `ruff check .`, `ruff format --check .`, `pytest -v`) and remote GitHub Actions CI pass 100% | ✅ | `193 passed, 56 subtests passed`; GitHub Actions run 43231667710 passed in 38s |
 
 ### Validation & CI Plan
 
@@ -1697,24 +1697,43 @@ uv run --locked python -m event_intelligence.search \
 
 ### Micro-Task Breakdown
 
-- [ ] 1. `docs(roadmap): define Phase 11c multi-camera pipeline and search intelligence scope`
-- [ ] 2. `fix(pipeline): resolve output_root and artifact paths to absolute before database ingestion`
-- [ ] 3. `fix(pipeline): validate cached detections and tracks match source video before reuse`
-- [ ] 4. `types(storage): add camera_id and CameraMetadata support to search and storage schemas`
-- [ ] 5. `feat(storage): support camera_id and cameras table in SQLite schema and DDL`
-- [ ] 6. `feat(storage): update ingest_intelligence_db to record camera_id and metadata`
-- [ ] 7. `feat(storage): support multi-source ingestion into unified intelligence.db`
-- [ ] 8. `feat(storage): add camera_id filtering to query_events and query_tracks`
-- [ ] 9. `feat(storage): implement query_camera_activity_summary in storage`
-- [ ] 10. `test(storage): add unit tests for multi-camera schema, ingestion, and query filtering`
-- [ ] 11. `feat(search): add --camera and --camera-summary CLI flags to event_intelligence.search`
-- [ ] 12. `test(search): add integration tests for multi-camera search CLI flags and formatting`
-- [ ] 13. `feat(pipeline): add multi-source pipeline execution in run_pipeline and pipeline module`
-- [ ] 14. `feat(pipeline): wire CLI --videos flag into event_intelligence.pipeline`
-- [ ] 15. `feat(config): add configs/pipeline_multicam.yaml for multi-camera surveillance runs`
-- [ ] 16. `test(pipeline): add end-to-end multi-camera pipeline tests with unified intelligence.db`
-- [ ] 17. `docs(readme): document multi-camera pipeline and cross-camera search capabilities`
-- [ ] 18. `docs(roadmap): complete Phase 11c criteria, decision log, and CI log`
+- [x] 1. `docs(roadmap): define Phase 11c multi-camera pipeline and search intelligence scope` (`1365e0d`)
+- [x] 2. `fix(pipeline): resolve output_root and artifact paths to absolute before database ingestion` (`bb6f8f4`)
+- [x] 3. `fix(pipeline): validate cached detections and tracks match source video before reuse` (`e51b4b6`)
+- [x] 4. `types(storage): add camera_id and CameraMetadata support to search and storage schemas` (`4d4ae47`)
+- [x] 5. `feat(storage): support camera_id and cameras table in SQLite schema and DDL` (`3183adb`)
+- [x] 6. `feat(storage): update ingest_intelligence_db to record camera_id and metadata` (`c5fd598`)
+- [x] 7. `feat(storage): support multi-source ingestion into unified intelligence.db` (`c5fd598`)
+- [x] 8. `feat(storage): add camera_id filtering to query_events and query_tracks` (`c5fd598`)
+- [x] 9. `feat(storage): implement query_camera_activity_summary in storage` (`c5fd598`)
+- [x] 10. `test(storage): add unit tests for multi-camera schema, ingestion, and query filtering` (`e2694f9`, `ef7b102`)
+- [x] 11. `feat(search): add --camera and --camera-summary CLI flags to event_intelligence.search` (`d8264df`)
+- [x] 12. `test(search): add integration tests for multi-camera search CLI flags and formatting` (`de09076`)
+- [x] 13. `feat(pipeline): add multi-source pipeline execution in run_pipeline and pipeline module` (`ecf8841`)
+- [x] 14. `feat(pipeline): wire CLI --videos flag into event_intelligence.pipeline` (`ecf8841`)
+- [x] 15. `feat(config): add configs/pipeline_multicam.yaml for multi-camera surveillance runs` (`884769c`)
+- [x] 16. `test(pipeline): add end-to-end multi-camera pipeline tests with unified intelligence.db` (`be9e1a8`)
+- [x] 17. `docs(readme): document multi-camera pipeline and cross-camera search capabilities` (`a611ad1`)
+- [x] 18. `docs(roadmap): complete Phase 11c criteria, decision log, and CI log`
+
+### Decision Log (Phase 11c)
+
+| Decision | Options Considered | Chosen & Rationale |
+|----------|-------------------|--------------------|
+| Multi-camera entity identity in SQLite schema | (a) Keep single-table primary keys and assign globally unique synthetic IDs; (b) Add `camera_id` column and composite primary keys `(camera_id, track_id)`, `(camera_id, event_id)`, etc., with `cameras` registry table | **(b) Composite keys with `camera_id`** — preserves native per-camera integer track IDs and event IDs without collisions, matches relational multi-camera database models, and provides automatic migration for older databases. |
+| Cache validation strategy | (a) Remove all cached CSV support and force live inference; (b) Inspect companion `*_summary.json` files and video source name before reusing cached CSVs | **(b) Source-validated cache reuse** — prevents accidental cross-video cache contamination when users run `--video another_clip.mp4` with default configs, while preserving fast deterministic CI execution. |
+| Multi-camera run output directory layout | (a) Flat directory with prefixed files; (b) Root master run directory containing unified `intelligence.db`, `run_config.yaml`, `multicam_summary.json`, and per-camera artifact subdirectories under `cameras/<cam_id>/` | **(b) Structured master directory with `cameras/<cam_id>/`** — keeps each camera's 19 visual and CSV artifacts completely organized and isolated while consolidating searchable records into one root `intelligence.db`. |
+
+### CI & Validation Log (Phase 11c)
+
+| Command | Result | Notes |
+|---------|--------|-------|
+| `uv sync --locked` | ✅ exit 0 | clean locked editable environment |
+| `uv run --locked ruff check .` | ✅ `All checks passed!` | repo-wide lint gate (106 files) |
+| `uv run --locked ruff format --check .` | ✅ `106 files already formatted` | repo-wide format gate |
+| `uv run --locked pytest -v` | ✅ `193 passed, 56 subtests passed` | full unit + integration test suite |
+| Remote CI (PR #12 & push): run 43231667710 | ✅ completed / success (38s) | GitHub Actions CI green across all jobs on `windows-latest` |
+
 
 
 
