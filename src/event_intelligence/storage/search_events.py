@@ -121,6 +121,28 @@ CREATE TABLE IF NOT EXISTS line_counts (
     total INTEGER NOT NULL,
     PRIMARY KEY (camera_id, line_id)
 );
+
+CREATE TABLE IF NOT EXISTS insights (
+    insight_id TEXT NOT NULL,
+    camera_id TEXT NOT NULL DEFAULT '',
+    insight_type TEXT NOT NULL,
+    severity TEXT NOT NULL,
+    track_id INTEGER,
+    zone_id TEXT,
+    start_time REAL NOT NULL,
+    end_time REAL NOT NULL,
+    duration REAL NOT NULL,
+    description TEXT NOT NULL,
+    evidence_snapshot_path TEXT,
+    evidence_crop_path TEXT,
+    details_json TEXT NOT NULL DEFAULT '{}',
+    PRIMARY KEY (camera_id, insight_id)
+);
+CREATE INDEX IF NOT EXISTS idx_insights_type ON insights (insight_type);
+CREATE INDEX IF NOT EXISTS idx_insights_severity ON insights (severity);
+CREATE INDEX IF NOT EXISTS idx_insights_camera_type ON insights (camera_id, insight_type);
+CREATE INDEX IF NOT EXISTS idx_insights_camera_track_id ON insights (camera_id, track_id);
+CREATE INDEX IF NOT EXISTS idx_insights_time_range ON insights (start_time, end_time);
 """
 
 
@@ -451,6 +473,7 @@ def _migrate_multi_camera_columns(conn: sqlite3.Connection) -> None:
         "events",
         "zone_counts",
         "line_counts",
+        "insights",
     ]
     for table in tables:
         try:
