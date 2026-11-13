@@ -9,11 +9,13 @@ import unittest
 from contextlib import redirect_stdout
 from pathlib import Path
 
+from event_intelligence.insights import InsightRecord
 from event_intelligence.search import main as search_main
 from event_intelligence.storage import (
     CameraMetadata,
     SearchConfig,
     ingest_multi_camera_intelligence_db,
+    insert_insights,
 )
 
 
@@ -88,6 +90,36 @@ class TestSearchMultiCameraCli(unittest.TestCase):
             ],
         )
 
+        insert_insights(
+            self.db_path,
+            [
+                InsightRecord(
+                    insight_id="ins_lob_01",
+                    camera_id="lobby",
+                    insight_type="loitering",
+                    severity="high",
+                    track_id=1,
+                    zone_id="lobby",
+                    start_time=1.0,
+                    end_time=15.0,
+                    duration=14.0,
+                    description="Loitering detected in lobby",
+                ),
+                InsightRecord(
+                    insight_id="ins_cor_01",
+                    camera_id="corridor",
+                    insight_type="wrong_way",
+                    severity="medium",
+                    track_id=1,
+                    zone_id="corridor_line:B->A",
+                    start_time=20.0,
+                    end_time=20.0,
+                    duration=0.0,
+                    description="Wrong way line crossing in corridor",
+                ),
+            ],
+        )
+
     def tearDown(self) -> None:
         self.tmpdir.cleanup()
 
@@ -138,6 +170,46 @@ class TestSearchMultiCameraCli(unittest.TestCase):
         data = json.loads(buf.getvalue())
         self.assertEqual(len(data), 1)
         self.assertEqual(data[0]["camera_id"], "corridor")
+
+    def test_cli_query_insights_json(self) -> None:
+        buf = io.StringIO()
+        with redirect_stdout(buf):
+            rc = search_main(["--db", str(self.db_path), "--insights", "--json"])
+        self.assertEqual(rc, 0)
+        data = json.loads(buf.getvalue())
+        self.assertEqual(len(data), 2)
+        types = {item["insight_type"] for item in data}
+        self.assertEqual(types, {"loitering", "wrong_way"})
+
+    def test_cli_filter_insights_by_type_and_severity(self) -> None:
+        buf = io.StringIO()
+        with redirect_stdout(buf):
+            rc = search_main(
+                [
+                    "--db",
+                    str(self.db_path),
+                    "--insight-type",
+                    "loitering",
+                    "--severity",
+                    "high",
+                    "--json",
+                ]
+            )
+        self.assertEqual(rc, 0)
+        data = json.loads(buf.getvalue())
+        self.assertEqual(len(data), 1)
+        self.assertEqual(data[0]["insight_id"], "ins_lob_01")
+        self.assertEqual(data[0]["camera_id"], "lobby")
+
+    def test_cli_query_insights_text_formatting(self) -> None:
+        buf = io.StringIO()
+        with redirect_stdout(buf):
+            rc = search_main(["--db", str(self.db_path), "--insights"])
+        self.assertEqual(rc, 0)
+        output = buf.getvalue()
+        self.assertIn("Matched 2 insight(s):", output)
+        self.assertIn("[ins_lob_01] cam=lobby type=loitering sev=high", output)
+        self.assertIn("[ins_cor_01] cam=corridor type=wrong_way sev=medium", output)
 
 
 if __name__ == "__main__":

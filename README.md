@@ -358,7 +358,7 @@ These can be valuable later, but the first priority is a working CV intelligence
 
 ## Repository Status
 
-The repository has completed **Phase 0 (Foundation)**, **Phase 1 (Video Inspection & Dataset Validation)**, **Phase 2 (Person Detection)**, **Phase 3 (Person Tracking & Early Quantitative MOT17 Checkpoint)**, **Phase 4 (Trajectory Extraction)**, **Phase 5 (Zone and Line Reasoning)**, **Phase 6 (Dwell-Time Events)**, **Phase 7 (Visual Evidence)**, **Phase 8 (Heatmaps and Analytics)**, **Phase 9 (CV Evaluation)**, **Phase 10 (Searchable Outputs)**, and **Phase 11/11c (CV Pipeline Integration & Multi-Camera Search Intelligence)**.
+The repository has completed **Phase 0 (Foundation)**, **Phase 1 (Video Inspection & Dataset Validation)**, **Phase 2 (Person Detection)**, **Phase 3 (Person Tracking & Early Quantitative MOT17 Checkpoint)**, **Phase 4 (Trajectory Extraction)**, **Phase 5 (Zone and Line Reasoning)**, **Phase 6 (Dwell-Time Events)**, **Phase 7 (Visual Evidence)**, **Phase 8 (Heatmaps and Analytics)**, **Phase 9 (CV Evaluation)**, **Phase 10 (Searchable Outputs)**, and **Phase 11/11c/11d (CV Pipeline Integration, Multi-Camera Intelligence & Automated Behavioral Insights)**.
 
 Completed capabilities:
 
@@ -372,11 +372,14 @@ Completed capabilities:
 - `cv_projects/08_heatmaps_analytics/` — 2D spatial trajectory density accumulation with per-track-cell stationary capping, Gaussian smoothing, reference-frame heatmap overlay (`heatmap.png`), per-zone counts (`zone_counts.csv`), per-line directional counts (`line_counts.csv`), track duration distributions, and `analytics_summary.json`
 - `cv_projects/09_cv_evaluation/` — quantitative MOT17 evaluation (`Precision`, `Recall`, `F1`, `MOTA`, `IDF1`, `IDSW`), runtime FPS benchmark, qualitative surveillance clip error taxonomy (`false_positive`, `false_negative`, `id_switch`, `boundary_jitter`, `event_rule_edge_case`), annotated failure examples (`failure_examples/`), and structured `evaluation_report.md`
 - `cv_projects/10_searchable_outputs/` — normalized 7-table SQLite database (`intelligence.db`), CLI and programmatic query engine (`search_events.py`), schema documentation (`schema.md`), and worked query examples (`search_examples.md`)
-- `src/event_intelligence/` — consolidated end-to-end CV package (`video`, `detection`, `tracking`, `trajectories`, `spatial`, `events`, `evidence`, `analytics`, `evaluation`, `storage`, `pipeline`, `search`) runnable end-to-end:
+- `src/event_intelligence/` — consolidated end-to-end CV package (`video`, `detection`, `tracking`, `trajectories`, `spatial`, `events`, `evidence`, `analytics`, `evaluation`, `insights`, `storage`, `pipeline`, `search`) runnable end-to-end:
   - **Single camera:** `uv run --locked python -m event_intelligence.pipeline --video data/fallback_clips/people-detection.mp4 --config configs/pipeline.yaml`
   - **Multi-camera:** `uv run --locked python -m event_intelligence.pipeline --videos data/fallback_clips/people-detection.mp4 data/fallback_clips/store-aisle-detection.mp4 --cameras entrance concourse --config configs/pipeline_multicam.yaml`
   - **Cross-camera search:** `uv run --locked python -m event_intelligence.search --db outputs/runs/<run_id>/intelligence.db --camera-summary`
+  - **Behavior insights search:** `uv run --locked python -m event_intelligence.search --db outputs/runs/<run_id>/intelligence.db --insights --insight-type loitering --severity high`
   - **Camera filtering:** `uv run --locked python -m event_intelligence.search --db outputs/runs/<run_id>/intelligence.db --camera entrance --tracks --json`
+  - **Evaluation benchmark CLI:** `uv run --locked python -m event_intelligence.evaluation --help`
+  - **Surveillance Intelligence Report:** Automatically generates `intelligence_report.md` with executive metrics, high/critical security alerts, and clickable visual evidence links.
 
 Next recommended step:
 

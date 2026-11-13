@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import subprocess
+import sys
 import tempfile
 import unittest
 from pathlib import Path
@@ -542,6 +544,21 @@ class TestRunCvEvaluationAndCli(unittest.TestCase):
             rc = main(["--config", str(cfg_yaml), "--output-dir", str(cli_out)])
             self.assertEqual(rc, 0)
             self.assertTrue((cli_out / "metrics.json").is_file())
+
+    def test_module_main_cli_execution(self) -> None:
+        """Verify python -m event_intelligence.evaluation --help executes cleanly."""
+        res = subprocess.run(
+            [sys.executable, "-m", "event_intelligence.evaluation", "--help"],
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        self.assertEqual(res.returncode, 0)
+        self.assertIn(
+            "Run Phase 9 quantitative MOT17 and qualitative surveillance CV evaluation",
+            res.stdout,
+        )
+        self.assertIn("--output-dir", res.stdout)
 
 
 if __name__ == "__main__":

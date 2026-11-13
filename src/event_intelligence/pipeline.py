@@ -44,6 +44,16 @@ from event_intelligence.evidence import (
     VALID_BEST_FRAME_STRATEGIES,
     run_visual_evidence,
 )
+from event_intelligence.insights import (
+    InsightConfig,
+    InsightRecord,
+    detect_cross_camera_transitions,
+    generate_all_insights,
+    generate_intelligence_report_markdown,
+    write_insights_csv,
+    write_insights_json,
+    write_intelligence_report,
+)
 from event_intelligence.spatial import (
     SceneConfig,
     evaluate_scene_signals,
@@ -55,6 +65,10 @@ from event_intelligence.storage import (
     SearchConfig,
     ingest_intelligence_db,
     ingest_multi_camera_intelligence_db,
+    insert_insights,
+    query_camera_summary,
+    query_events,
+    query_insights,
 )
 from event_intelligence.tracking import (
     FrameTracks,
@@ -117,6 +131,7 @@ class PipelineConfig:
     inspection_sample_count: int = 12
     save_annotated_video: bool = True
     max_frames: int | None = None
+    insight_config: InsightConfig | None = None
 
     def __post_init__(self) -> None:
         if not self.model_name.strip():
@@ -174,6 +189,9 @@ class PipelineConfig:
             "inspection_sample_count": self.inspection_sample_count,
             "save_annotated_video": self.save_annotated_video,
             "max_frames": self.max_frames,
+            "insight_config": (
+                self.insight_config.to_dict() if self.insight_config else None
+            ),
         }
 
 
@@ -195,6 +213,7 @@ class PipelineRunResult:
     db_path: str
     run_config_path: str
     elapsed_seconds: float
+    insights_count: int = 0
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -209,6 +228,7 @@ class PipelineRunResult:
             "events_count": self.events_count,
             "zones_count": self.zones_count,
             "lines_count": self.lines_count,
+            "insights_count": self.insights_count,
             "db_path": self.db_path,
             "run_config_path": self.run_config_path,
             "elapsed_seconds": round(self.elapsed_seconds, 4),
@@ -229,6 +249,7 @@ class MultiCameraPipelineRunResult:
     total_tracks: int
     total_events: int
     elapsed_seconds: float
+    total_insights: int = 0
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -239,6 +260,7 @@ class MultiCameraPipelineRunResult:
             "total_detections": self.total_detections,
             "total_tracks": self.total_tracks,
             "total_events": self.total_events,
+            "total_insights": self.total_insights,
             "camera_results": [r.to_dict() for r in self.camera_results],
             "db_path": self.db_path,
             "elapsed_seconds": round(self.elapsed_seconds, 4),
@@ -268,6 +290,40 @@ def load_pipeline_config(path: Path | str | None = None) -> PipelineConfig:
     det_csv = raw.get("precomputed_detections_csv", defaults.precomputed_detections_csv)
     trk_csv = raw.get("precomputed_tracks_csv", defaults.precomputed_tracks_csv)
     dev_val = raw.get("device", defaults.device)
+
+    ins_raw = raw.get("insights")
+    ins_cfg: InsightConfig | None = None
+    if isinstance(ins_raw, dict):
+        ins_cfg = InsightConfig(
+            loitering_factor=float(ins_raw.get("loitering_factor", 2.5)),
+            min_loitering_seconds=float(ins_raw.get("min_loitering_seconds", 15.0)),
+            per_zone_loitering_seconds={
+                str(k): float(v)
+                for k, v in (ins_raw.get("per_zone_loitering_seconds") or {}).items()
+            },
+            speed_anomaly_threshold_px_s=float(
+                ins_raw.get("speed_anomaly_threshold_px_s", 180.0)
+            ),
+            min_speed_anomaly_frames=int(ins_raw.get("min_speed_anomaly_frames", 5)),
+            stationary_speed_threshold_px_s=float(
+                ins_raw.get("stationary_speed_threshold_px_s", 5.0)
+            ),
+            stationary_min_seconds=float(ins_raw.get("stationary_min_seconds", 10.0)),
+            restricted_zones=tuple(str(z) for z in ins_raw.get("restricted_zones", ())),
+            allowed_line_directions={
+                str(k): str(v)
+                for k, v in (ins_raw.get("allowed_line_directions") or {}).items()
+            },
+            disallowed_line_crossings=tuple(
+                str(d) for d in ins_raw.get("disallowed_line_crossings", ())
+            ),
+            cross_camera_min_seconds=float(
+                ins_raw.get("cross_camera_min_seconds", 0.5)
+            ),
+            cross_camera_max_seconds=float(
+                ins_raw.get("cross_camera_max_seconds", 60.0)
+            ),
+        )
 
     return PipelineConfig(
         model_name=str(raw.get("model_name", defaults.model_name)),
@@ -324,6 +380,7 @@ def load_pipeline_config(path: Path | str | None = None) -> PipelineConfig:
             raw.get("save_annotated_video", defaults.save_annotated_video)
         ),
         max_frames=int(max_frames_val) if max_frames_val is not None else None,
+        insight_config=ins_cfg,
     )
 
 
@@ -702,6 +759,31 @@ def run_pipeline(
         finally:
             writer.release()
 
+    # Phase 11d: Generate behavioral insights & anomaly intelligence
+    ins_cfg = cfg.insight_config if cfg.insight_config is not None else InsightConfig()
+    insights = generate_all_insights(
+        events=raw_events,
+        trajectories=trajectories,
+        config=ins_cfg,
+        traces=traces,
+        camera_id=src_path.stem,
+    )
+    insights_json_path = write_insights_json(insights, run_dir / "insights.json")
+    write_insights_csv(insights, run_dir / "insights.csv")
+
+    report_md = generate_intelligence_report_markdown(
+        insights,
+        run_id=resolved_run_id,
+        source_info={
+            "source_path": str(src_path),
+            "total_frames": total_frames,
+            "elapsed_seconds": time.perf_counter() - t0,
+        },
+        zone_counts=zone_counts,
+        line_counts=line_counts,
+    )
+    write_intelligence_report(report_md, run_dir / "intelligence_report.md")
+
     # Phase 10: Ingest into SQLite intelligence.db
     search_cfg = SearchConfig(
         source_name=src_path.name,
@@ -714,6 +796,7 @@ def run_pipeline(
         evidence_root=str(run_dir.resolve()),
         zone_counts_csv=str(zone_counts_csv_path.resolve()),
         line_counts_csv=str(line_counts_csv_path.resolve()),
+        insights_json=str(insights_json_path.resolve()),
         write_subproject_docs=False,
     )
     db_path = (run_dir / "intelligence.db").resolve()
@@ -732,6 +815,7 @@ def run_pipeline(
         events_count=db_summary.events_count,
         zones_count=db_summary.zone_counts_rows,
         lines_count=db_summary.line_counts_rows,
+        insights_count=len(insights),
         db_path=str(db_path),
         run_config_path=str(run_config_path),
         elapsed_seconds=elapsed,
@@ -838,6 +922,7 @@ def run_multi_camera_pipeline(
             inspection_sample_count=cfg.inspection_sample_count,
             save_annotated_video=cfg.save_annotated_video,
             max_frames=cfg.max_frames,
+            insight_config=cfg.insight_config,
         )
 
         res = run_pipeline(
@@ -891,6 +976,11 @@ def run_multi_camera_pipeline(
                 evidence_root=str(cam_run_path.resolve()),
                 zone_counts_csv=str((cam_run_path / "zone_counts.csv").resolve()),
                 line_counts_csv=str((cam_run_path / "line_counts.csv").resolve()),
+                insights_json=(
+                    str((cam_run_path / "insights.json").resolve())
+                    if (cam_run_path / "insights.json").is_file()
+                    else None
+                ),
                 write_subproject_docs=False,
             )
         )
@@ -902,6 +992,69 @@ def run_multi_camera_pipeline(
         project_root=root,
         clear_existing=True,
         cameras_metadata=cameras_meta,
+    )
+
+    events_by_cam: dict[str, list[Any]] = {}
+    for c_name in cam_names:
+        events_by_cam[c_name] = query_events(master_db, camera_id=c_name, limit=5000)
+
+    ins_cfg = cfg.insight_config if cfg.insight_config is not None else InsightConfig()
+    if len(events_by_cam) > 1:
+        cross_cam_insights = detect_cross_camera_transitions(events_by_cam, ins_cfg)
+        if cross_cam_insights:
+            insert_insights(master_db, cross_cam_insights)
+
+    all_master_insights = query_insights(master_db, limit=1000)
+    master_report_md = generate_intelligence_report_markdown(
+        [
+            InsightRecord(
+                insight_id=i.insight_id,
+                camera_id=i.camera_id,
+                insight_type=i.insight_type,
+                severity=i.severity,
+                track_id=i.track_id,
+                zone_id=i.zone_id,
+                start_time=i.start_time,
+                end_time=i.end_time,
+                duration=i.duration,
+                description=i.description,
+                evidence_snapshot_path=i.evidence_snapshot_path,
+                evidence_crop_path=i.evidence_crop_path,
+                details=i.details,
+            )
+            for i in all_master_insights
+        ],
+        run_id=resolved_run_id,
+        source_info={
+            "source_path": f"{len(cam_names)} multi-camera streams ({', '.join(cam_names)})",
+            "total_frames": sum(r.processed_frames for r in results),
+            "elapsed_seconds": time.perf_counter() - t0,
+        },
+        camera_summaries=query_camera_summary(master_db),
+    )
+    write_intelligence_report(
+        master_report_md, master_run_dir / "intelligence_report.md"
+    )
+    write_insights_json(
+        [
+            InsightRecord(
+                insight_id=i.insight_id,
+                camera_id=i.camera_id,
+                insight_type=i.insight_type,
+                severity=i.severity,
+                track_id=i.track_id,
+                zone_id=i.zone_id,
+                start_time=i.start_time,
+                end_time=i.end_time,
+                duration=i.duration,
+                description=i.description,
+                evidence_snapshot_path=i.evidence_snapshot_path,
+                evidence_crop_path=i.evidence_crop_path,
+                details=i.details,
+            )
+            for i in all_master_insights
+        ],
+        master_run_dir / "insights.json",
     )
 
     elapsed = time.perf_counter() - t0
@@ -917,6 +1070,7 @@ def run_multi_camera_pipeline(
         "total_detections": total_dets,
         "total_tracks": total_trks,
         "total_events": total_evs,
+        "total_insights": len(all_master_insights),
         "db_path": str(master_db),
         "elapsed_seconds": round(elapsed, 4),
     }
@@ -934,6 +1088,7 @@ def run_multi_camera_pipeline(
         total_detections=total_dets,
         total_tracks=total_trks,
         total_events=total_evs,
+        total_insights=len(all_master_insights),
         elapsed_seconds=elapsed,
     )
 
