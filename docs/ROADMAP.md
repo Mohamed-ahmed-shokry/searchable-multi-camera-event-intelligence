@@ -2008,13 +2008,13 @@ uv run --locked python -m event_intelligence.search --help
 ### Micro-Task Breakdown
 
 - [x] 1. `docs(roadmap): define Phase 11f crowd occupancy and trajectory search scope`
-- [ ] 2. `fix(pipeline): parse video clip and storyboard fields in load_pipeline_config`
-- [ ] 3. `fix(pipeline): propagate clip and storyboard settings in run_multi_camera_pipeline`
-- [ ] 4. `feat(pipeline): add --clips and --storyboards CLI flags and preserve insight_config in main`
-- [ ] 5. `test(pipeline): add unit tests for pipeline config clip/storyboard YAML loading and CLI propagation`
-- [ ] 6. `feat(storage): add has_clip and has_storyboard filtering to query_insights`
-- [ ] 7. `feat(search): wire --clips and --storyboards into insights CLI search and output`
-- [ ] 8. `test(search): add unit tests for insights clip and storyboard filtering`
+- [x] 2. `fix(pipeline): parse video clip and storyboard fields in load_pipeline_config`
+- [x] 3. `fix(pipeline): propagate clip and storyboard settings in run_multi_camera_pipeline`
+- [x] 4. `feat(pipeline): add --clips and --storyboards CLI flags and preserve insight_config in main`
+- [x] 5. `test(pipeline): add unit tests for pipeline config clip/storyboard YAML loading and CLI propagation`
+- [x] 6. `feat(storage): add has_clip and has_storyboard filtering to query_insights`
+- [x] 7. `feat(search): wire --clips and --storyboards into insights CLI search and output`
+- [x] 8. `test(search): add unit tests for insights clip and storyboard filtering`
 - [ ] 9. `types(insights): add CROWDING, TAILGATING, and PROXIMITY_GROUPING to InsightType`
 - [ ] 10. `types(insights): extend InsightConfig with crowding, tailgating, and proximity thresholds`
 - [ ] 11. `feat(pipeline): parse crowding, tailgating, and proximity insight fields in load_pipeline_config`
