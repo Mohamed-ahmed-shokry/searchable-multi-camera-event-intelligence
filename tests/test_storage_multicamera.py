@@ -397,6 +397,50 @@ class TestMultiCameraStorage(unittest.TestCase):
             self.assertEqual(lookup.storyboard_size_bytes, 10)
             self.assertIn("resolved_video_clip_path", lookup.to_dict())
 
+    def test_query_trajectories_spatial_and_temporal_filtering(self) -> None:
+        from event_intelligence.storage.search_events import query_trajectories
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            tmp = Path(tmpdir)
+            db_path = tmp / "intelligence.db"
+            traj_csv = tmp / "trajectories.csv"
+            traj_csv.write_text(
+                "track_id,frame_id,timestamp,x,y\n"
+                "1,0,0.0,10.0,20.0\n"
+                "1,1,1.0,50.0,60.0\n"
+                "2,2,2.0,200.0,300.0\n",
+                encoding="utf-8",
+            )
+            cfg = SearchConfig(
+                source_name="cam_traj.mp4",
+                camera_id="cam_traj",
+                trajectories_csv=str(traj_csv),
+                events_csv="",
+                tracks_csv="",
+                detections_csv="",
+                tracking_summary_csv="",
+                trajectory_summary_csv="",
+                zone_counts_csv="",
+                line_counts_csv="",
+            )
+            ingest_intelligence_db(db_path, cfg, project_root=tmp)
+
+            all_pts = query_trajectories(db_path, camera_id="cam_traj")
+            self.assertEqual(len(all_pts), 3)
+
+            bbox_pts = query_trajectories(
+                db_path,
+                bbox=(0.0, 0.0, 100.0, 100.0),
+                min_time=0.5,
+            )
+            self.assertEqual(len(bbox_pts), 1)
+            self.assertEqual(bbox_pts[0].track_id, 1)
+            self.assertEqual(bbox_pts[0].frame_id, 1)
+            self.assertEqual(bbox_pts[0].to_dict()["x"], 50.0)
+
+            with self.assertRaises(ValueError):
+                query_trajectories(db_path, bbox=(100.0, 0.0, 50.0, 100.0))
+
 
 if __name__ == "__main__":
     unittest.main()
