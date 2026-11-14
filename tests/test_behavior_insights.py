@@ -11,6 +11,7 @@ from event_intelligence.insights import (
     InsightType,
     Severity,
     detect_cross_camera_transitions,
+    detect_crowding_insights,
     detect_loitering_insights,
     detect_speed_anomaly_insights,
     detect_stationary_and_drop_insights,
@@ -310,6 +311,31 @@ class TestInsightDetectors(unittest.TestCase):
         self.assertEqual(ins.details["leader_track_id"], 1)
         self.assertEqual(ins.details["follower_track_id"], 2)
         self.assertAlmostEqual(ins.details["gap_seconds"], 1.1)
+
+    def test_detect_crowding_insights(self) -> None:
+        cfg = InsightConfig(
+            max_zone_occupancy=3,
+            per_zone_max_occupancy={"vault": 2},
+            min_crowding_seconds=2.0,
+            restricted_zones=("vault",),
+        )
+        events = [
+            # 3 people in lobby from t=2.0 to t=6.0 (4.0s >= 2.0s)
+            DummyEvent("e1", "dwell_time_event", 1, "lobby", 0.0, 8.0, 8.0),
+            DummyEvent("e2", "dwell_time_event", 2, "lobby", 1.0, 7.0, 6.0),
+            DummyEvent("e3", "dwell_time_event", 3, "lobby", 2.0, 6.0, 4.0),
+            # 2 people in vault from t=10.0 to t=13.5 (3.5s >= 2.0s, restricted)
+            DummyEvent("e4", "dwell_time_event", 4, "vault", 9.0, 14.0, 5.0),
+            DummyEvent("e5", "dwell_time_event", 5, "vault", 10.0, 13.5, 3.5),
+        ]
+        insights = detect_crowding_insights(events, cfg, camera_id="cam_crowd")
+        self.assertEqual(len(insights), 2)
+        by_zone = {ins.zone_id: ins for ins in insights}
+        self.assertEqual(by_zone["lobby"].insight_type, "crowding")
+        self.assertEqual(by_zone["lobby"].details["peak_occupancy"], 3)
+        self.assertEqual(by_zone["lobby"].details["involved_track_ids"], [1, 2, 3])
+        self.assertEqual(by_zone["vault"].severity, "critical")
+        self.assertAlmostEqual(by_zone["vault"].duration, 3.5)
 
     def test_generate_all_insights_aggregates_and_sorts(self) -> None:
         cfg = InsightConfig(
