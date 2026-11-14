@@ -882,6 +882,141 @@ def extract_event_video_clip(
     )
 
 
+def extract_event_storyboard(
+    video_source: Path | str | VideoSource,
+    output_storyboard_path: Path | str,
+    *,
+    event: EventRecord | EvidenceEventRecord,
+    fps: float,
+    total_source_frames: int,
+    scene_config: SceneConfig | None = None,
+    track_detections_by_frame: Mapping[int, TrackDetection] | None = None,
+    trajectory_points_by_frame: Mapping[int, tuple[float, float]] | None = None,
+    camera_id: str = "",
+    stages: tuple[str, ...] = ("start", "peak", "end"),
+    tile_size: tuple[int, int] = (360, 240),
+) -> str:
+    """Generate a multi-stage composite keyframe storyboard image (Start / Peak / End)."""
+    out_p = Path(output_storyboard_path)
+    out_p.parent.mkdir(parents=True, exist_ok=True)
+
+    if total_source_frames <= 0 or fps <= 0.0:
+        raise ValueError(
+            f"Invalid source video parameters: total_frames={total_source_frames}, fps={fps}"
+        )
+
+    stage_moments: list[tuple[str, float]] = []
+    mid_time = (event.start_time + event.end_time) / 2.0
+    for stage in stages:
+        if stage == "start":
+            stage_moments.append(("ENTRY / START", event.start_time))
+        elif stage == "peak":
+            stage_moments.append(("PEAK DWELL", mid_time))
+        elif stage == "end":
+            stage_moments.append(("EXIT / RESOLUTION", event.end_time))
+        else:
+            stage_moments.append((stage.upper(), mid_time))
+
+    close_vs = False
+    if isinstance(video_source, VideoSource):
+        vs = video_source
+    else:
+        vs = VideoSource(video_source)
+        close_vs = True
+
+    tiles: list[np.ndarray] = []
+    tw, th = tile_size
+
+    try:
+        for stage_name, t_sec in stage_moments:
+            fid = max(0, min(total_source_frames - 1, int(round(t_sec * fps))))
+            frame = vs.read_frame(fid)
+            if frame is None or frame.size == 0:
+                tile = np.zeros((th, tw, 3), dtype=np.uint8)
+            else:
+                det = (
+                    track_detections_by_frame.get(fid)
+                    if track_detections_by_frame is not None
+                    else None
+                )
+                traj_pts = None
+                if trajectory_points_by_frame is not None:
+                    traj_pts = [
+                        pt
+                        for f_idx, pt in sorted(
+                            trajectory_points_by_frame.items()
+                        )
+                        if f_idx <= fid
+                    ]
+                rendered = render_clip_frame_overlay(
+                    frame,
+                    event=event,
+                    track_detection=det,
+                    current_frame_id=fid,
+                    current_timestamp=fid / fps,
+                    scene_config=scene_config,
+                    trajectory_points=traj_pts,
+                    camera_id=camera_id,
+                    alert_text=stage_name,
+                )
+                tile = cv2.resize(rendered, (tw, th), interpolation=cv2.INTER_AREA)
+
+            # Sub-banner at bottom of tile
+            label_h = 24
+            cv2.rectangle(
+                tile,
+                (0, th - label_h),
+                (tw, th),
+                (10, 10, 10),
+                -1,
+            )
+            stage_sub = f"{stage_name} | t={fid / fps:.2f}s"
+            cv2.putText(
+                tile,
+                stage_sub,
+                (6, th - 7),
+                cv2.FONT_HERSHEY_SIMPLEX,
+                0.38,
+                (0, 220, 255),
+                1,
+                cv2.LINE_AA,
+            )
+            tiles.append(tile)
+    finally:
+        if close_vs:
+            vs.close()
+
+    if not tiles:
+        raise RuntimeError("No storyboard tiles could be rendered")
+
+    composite_tiles = np.hstack(tiles)
+    comp_w = composite_tiles.shape[1]
+    header_h = 36
+    canvas = np.zeros((th + header_h, comp_w, 3), dtype=np.uint8)
+    canvas[header_h:, :] = composite_tiles
+
+    header_text = (
+        f"EVENT STORYBOARD: {event.event_id} ({event.event_type}) | "
+        f"Track {event.track_id} | Zone {event.zone_id} | Duration: {event.duration_seconds:.2f}s"
+    )
+    cv2.putText(
+        canvas,
+        header_text,
+        (10, header_h - 12),
+        cv2.FONT_HERSHEY_SIMPLEX,
+        0.48,
+        (255, 255, 255),
+        1,
+        cv2.LINE_AA,
+    )
+
+    success = cv2.imwrite(str(out_p), canvas, [int(cv2.IMWRITE_JPEG_QUALITY), 92])
+    if not success or not out_p.is_file():
+        raise RuntimeError(f"Failed to write storyboard JPEG: {out_p}")
+
+    return str(out_p)
+
+
 def render_evidence_contact_sheet(
     items: Sequence[tuple[np.ndarray, str]],
     *,

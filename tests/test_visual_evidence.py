@@ -15,6 +15,7 @@ from extract_visual_evidence import (
     FrameTracks,
     TrackDetection,
     extract_event_video_clip,
+    extract_event_storyboard,
     extract_person_crop,
     index_track_detections,
     load_evidence_config,
@@ -557,6 +558,35 @@ def test_extract_event_video_clip_creates_playable_clip(tmp_path: Path) -> None:
     assert ret is True
     assert frame is not None
     cap.release()
+
+
+def test_extract_event_storyboard_creates_composite_jpeg(tmp_path: Path) -> None:
+    video_path = make_video(tmp_path, name="source_story.avi", count=15)
+    event = EventRecord(
+        event_id="evt_0020",
+        event_type="dwell_time_event",
+        track_id=2,
+        zone_id="restricted_zone",
+        start_time=0.2,
+        end_time=1.0,
+        duration_seconds=0.8,
+    )
+    storyboard_path = tmp_path / "storyboards" / "evt_0020_storyboard.jpg"
+    out_file = extract_event_storyboard(
+        video_path,
+        storyboard_path,
+        event=event,
+        fps=10.0,
+        total_source_frames=15,
+        camera_id="cam_east",
+        tile_size=(200, 150),
+    )
+    assert Path(out_file).is_file()
+    img = cv2.imread(out_file)
+    assert img is not None
+    # 3 tiles of width 200 => composite width 600, height = 150 + 36 (header) = 186
+    assert img.shape[1] == 600
+    assert img.shape[0] == 186
 
 
 def test_run_visual_evidence_pipeline_and_cli_end_to_end(tmp_path: Path) -> None:
