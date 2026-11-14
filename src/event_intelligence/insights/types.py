@@ -49,6 +49,8 @@ class InsightRecord:
     description: str
     evidence_snapshot_path: str | None = None
     evidence_crop_path: str | None = None
+    video_clip_path: str | None = None
+    storyboard_path: str | None = None
     details: dict[str, Any] = field(default_factory=dict)
 
     def __post_init__(self) -> None:
@@ -100,6 +102,12 @@ class InsightRecord:
                 str(data["evidence_crop_path"])
                 if data.get("evidence_crop_path")
                 else None
+            ),
+            video_clip_path=(
+                str(data["video_clip_path"]) if data.get("video_clip_path") else None
+            ),
+            storyboard_path=(
+                str(data["storyboard_path"]) if data.get("storyboard_path") else None
             ),
             details=dict(data.get("details", {})),
         )
