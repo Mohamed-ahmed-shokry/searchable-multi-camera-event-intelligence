@@ -597,6 +597,136 @@ def render_event_snapshot(
     return canvas
 
 
+def render_clip_frame_overlay(
+    frame: np.ndarray,
+    *,
+    event: EventRecord | EvidenceEventRecord | None = None,
+    track_detection: TrackDetection | None = None,
+    current_frame_id: int = 0,
+    current_timestamp: float = 0.0,
+    scene_config: SceneConfig | None = None,
+    trajectory_points: Sequence[tuple[float, float]] | None = None,
+    camera_id: str = "",
+    alert_text: str = "",
+) -> np.ndarray:
+    """Render synchronized telemetry, trajectory trail, and event badges onto a video clip frame."""
+    if frame.ndim < 2 or frame.shape[0] == 0 or frame.shape[1] == 0:
+        raise ValueError(f"Invalid frame shape: {frame.shape}")
+
+    canvas = (
+        draw_zones_and_lines(frame, scene_config)
+        if scene_config is not None
+        else frame.copy()
+    )
+    height, width = canvas.shape[:2]
+
+    # Trajectory breadcrumbs
+    if trajectory_points and len(trajectory_points) >= 2:
+        pts = np.array(
+            [[round(x), round(y)] for x, y in trajectory_points], dtype=np.int32
+        ).reshape((-1, 1, 2))
+        cv2.polylines(
+            canvas,
+            [pts],
+            isClosed=False,
+            color=(0, 215, 255),
+            thickness=2,
+            lineType=cv2.LINE_AA,
+        )
+
+    # Active entity bounding box
+    color = (
+        _event_type_color(event.event_type) if event is not None else (0, 255, 255)
+    )
+    if track_detection is not None:
+        pt1 = (round(track_detection.x1), round(track_detection.y1))
+        pt2 = (round(track_detection.x2), round(track_detection.y2))
+        cv2.rectangle(canvas, pt1, pt2, color, 2, cv2.LINE_AA)
+        anchor = (
+            round((track_detection.x1 + track_detection.x2) / 2.0),
+            round(track_detection.y2),
+        )
+        cv2.circle(canvas, anchor, 4, color, -1, cv2.LINE_AA)
+
+        # Compact track badge
+        badge = f"T{track_detection.track_id} ({track_detection.confidence:.2f})"
+        font = cv2.FONT_HERSHEY_SIMPLEX
+        scale = 0.42
+        (bw, bh), bl = cv2.getTextSize(badge, font, scale, 1)
+        bx1 = max(2, min(width - bw - 8, pt1[0]))
+        by2 = max(bh + bl + 6, pt1[1] - 4)
+        by1 = max(2, by2 - bh - bl - 4)
+        cv2.rectangle(canvas, (bx1, by1), (bx1 + bw + 6, by2), (20, 20, 20), -1)
+        cv2.putText(
+            canvas,
+            badge,
+            (bx1 + 3, by2 - bl - 2),
+            font,
+            scale,
+            (255, 255, 255),
+            1,
+            cv2.LINE_AA,
+        )
+
+    # Top telemetry header bar
+    header_h = 28
+    overlay = canvas[:header_h, :].copy()
+    cv2.rectangle(canvas, (0, 0), (width, header_h), (15, 15, 15), -1)
+    cv2.addWeighted(canvas[:header_h, :], 0.75, overlay, 0.25, 0, canvas[:header_h, :])
+
+    font = cv2.FONT_HERSHEY_SIMPLEX
+    scale = 0.44
+    prefix = f"[{camera_id}] " if camera_id else ""
+    event_str = (
+        f"{event.event_id} | {event.event_type} | {event.zone_id}"
+        if event is not None
+        else (alert_text or "EVIDENCE CLIP")
+    )
+    title = f"{prefix}{event_str}"
+    cv2.putText(
+        canvas,
+        title,
+        (8, header_h - 9),
+        font,
+        scale,
+        (255, 255, 255),
+        1,
+        cv2.LINE_AA,
+    )
+
+    timecode = f"t={current_timestamp:.2f}s | f={current_frame_id}"
+    (tw, th), bl = cv2.getTextSize(timecode, font, scale, 1)
+    cv2.putText(
+        canvas,
+        timecode,
+        (max(8, width - tw - 10), header_h - 9),
+        font,
+        scale,
+        (0, 220, 255),
+        1,
+        cv2.LINE_AA,
+    )
+
+    # Alert badge if alert_text is present
+    if alert_text and event is not None:
+        alert_w = min(width - 20, 240)
+        cv2.rectangle(
+            canvas, (8, header_h + 4), (8 + alert_w, header_h + 26), (0, 0, 180), -1
+        )
+        cv2.putText(
+            canvas,
+            alert_text.upper(),
+            (14, header_h + 20),
+            font,
+            0.42,
+            (255, 255, 255),
+            1,
+            cv2.LINE_AA,
+        )
+
+    return canvas
+
+
 def render_evidence_contact_sheet(
     items: Sequence[tuple[np.ndarray, str]],
     *,

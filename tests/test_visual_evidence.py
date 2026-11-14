@@ -16,6 +16,7 @@ from extract_visual_evidence import (
     index_track_detections,
     load_evidence_config,
     read_evidence_events_csv,
+    render_clip_frame_overlay,
     render_event_snapshot,
     render_evidence_contact_sheet,
     run_visual_evidence,
@@ -473,6 +474,48 @@ def test_verify_evidence_records_valid_and_missing(tmp_path: Path) -> None:
     assert report_bad["all_paths_valid"] is False
     assert report_bad["missing_or_empty_snapshots"] == ["snapshots/evt_0002_1.jpg"]
     assert report_bad["missing_or_empty_crops"] == ["crops/evt_0002_1.jpg"]
+
+
+def test_render_clip_frame_overlay_telemetry_and_breadcrumbs() -> None:
+    frame = np.full((300, 400, 3), 50, dtype=np.uint8)
+    event = EventRecord(
+        event_id="evt_0001",
+        event_type="dwell_time_event",
+        track_id=3,
+        zone_id="restricted_zone",
+        start_time=1.0,
+        end_time=4.0,
+        duration_seconds=3.0,
+    )
+    det = TrackDetection(
+        frame_id=30,
+        track_id=3,
+        x1=50.0,
+        y1=60.0,
+        x2=120.0,
+        y2=200.0,
+        confidence=0.91,
+    )
+    traj = [(50.0, 180.0), (70.0, 190.0), (85.0, 200.0)]
+
+    rendered = render_clip_frame_overlay(
+        frame,
+        event=event,
+        track_detection=det,
+        current_frame_id=30,
+        current_timestamp=1.5,
+        trajectory_points=traj,
+        camera_id="cam_north",
+        alert_text="LOITERING ALERT",
+    )
+    assert rendered.shape == frame.shape
+    assert rendered.dtype == np.uint8
+    # Canvas should not be identical to original blank frame
+    assert not np.array_equal(rendered, frame)
+
+    # Empty frame raises ValueError
+    with pytest.raises(ValueError, match="Invalid frame shape"):
+        render_clip_frame_overlay(np.zeros((0, 0, 3), dtype=np.uint8))
 
 
 def test_run_visual_evidence_pipeline_and_cli_end_to_end(tmp_path: Path) -> None:
