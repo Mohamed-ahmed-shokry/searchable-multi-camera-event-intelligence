@@ -1194,9 +1194,13 @@ def run_visual_evidence(
     frame_tracks = read_tracks_csv(tracks_csv_path)
     indexed_tracks = index_track_detections(frame_tracks)
 
+    total_frames = 1
+    fps = 12.0
+
     with VideoSource(source_path) as vs:
         meta = vs.metadata
         fps = float(meta.fps) if meta.fps > 0 else 12.0
+        total_frames = int(meta.frame_count) if meta.frame_count > 0 else 1
 
         selections: list[BestFrameSelection] = [
             select_best_frame_for_event(
@@ -1273,30 +1277,40 @@ def run_visual_evidence(
     # Extract dynamic video clips and storyboards if requested
     for idx, ev in enumerate(events):
         rec = enriched_by_idx[idx]
+        track_dets = indexed_tracks.get(ev.track_id, {})
+        traj_pts = {f: ((d.x1 + d.x2) / 2.0, d.y2) for f, d in track_dets.items()}
         rel_clip = ""
         if cfg.extract_video_clips:
             rel_clip = f"clips/{ev.event_id}_{ev.track_id}.mp4"
             extract_event_video_clip(
-                source_path=source_path,
+                video_source=source_path,
+                output_clip_path=output_dir / rel_clip,
                 event=ev,
-                frame_tracks=frame_tracks,
-                output_path=output_dir / rel_clip,
+                fps=fps,
+                total_source_frames=total_frames,
                 pre_roll_seconds=cfg.clip_pre_roll_seconds,
                 post_roll_seconds=cfg.clip_post_roll_seconds,
                 scene_config=scene_cfg,
+                track_detections_by_frame=track_dets,
+                trajectory_points_by_frame=traj_pts,
                 camera_id=camera_id,
-                draw_telemetry=cfg.render_clip_telemetry,
+                render_telemetry=cfg.render_clip_telemetry,
             )
 
         rel_sb = ""
         if cfg.extract_storyboards:
             rel_sb = f"storyboards/{ev.event_id}_{ev.track_id}_storyboard.jpg"
             extract_event_storyboard(
-                source_path=source_path,
+                video_source=source_path,
+                output_storyboard_path=output_dir / rel_sb,
                 event=ev,
-                frame_tracks=frame_tracks,
-                output_path=output_dir / rel_sb,
+                fps=fps,
+                total_source_frames=total_frames,
                 scene_config=scene_cfg,
+                track_detections_by_frame=track_dets,
+                trajectory_points_by_frame=traj_pts,
+                camera_id=camera_id,
+                stages=cfg.storyboard_stages,
             )
 
         if rel_clip or rel_sb:

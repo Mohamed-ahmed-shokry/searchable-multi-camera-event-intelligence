@@ -8,14 +8,13 @@ import pytest
 from extract_visual_evidence import (
     EVIDENCE_EVENTS_CSV_HEADER,
     BestFrameSelection,
-    EventClipRecord,
     EventRecord,
     EvidenceConfig,
     EvidenceEventRecord,
     FrameTracks,
     TrackDetection,
-    extract_event_video_clip,
     extract_event_storyboard,
+    extract_event_video_clip,
     extract_person_crop,
     index_track_detections,
     load_evidence_config,
@@ -589,7 +588,9 @@ def test_extract_event_storyboard_creates_composite_jpeg(tmp_path: Path) -> None
     assert img.shape[0] == 186
 
 
-def test_extract_event_video_clip_boundary_clamping_and_validation(tmp_path: Path) -> None:
+def test_extract_event_video_clip_boundary_clamping_and_validation(
+    tmp_path: Path,
+) -> None:
     video_path = make_video(tmp_path, name="source_clamp.avi", count=10)
     event_start = EventRecord(
         event_id="evt_start",
@@ -745,3 +746,105 @@ def test_run_visual_evidence_pipeline_and_cli_end_to_end(tmp_path: Path) -> None
     )
     assert rc == 0
     assert (cli_out / "events.csv").is_file()
+
+
+def test_run_visual_evidence_with_clips_and_storyboards_end_to_end(
+    tmp_path: Path,
+) -> None:
+    """Verify run_visual_evidence generates MP4 clips, storyboard JPEGs, and enriched CSV."""
+    video_path = make_video(tmp_path, name="evidence_full.avi", count=10)
+    tracks_csv = tmp_path / "tracks_full.csv"
+    events_csv = tmp_path / "input_events_full.csv"
+    out_dir = tmp_path / "evidence_clips_out"
+
+    frame_tracks = [
+        FrameTracks(
+            frame_id=i,
+            tracks=[
+                TrackDetection(
+                    frame_id=i,
+                    track_id=2,
+                    x1=15.0,
+                    y1=12.0,
+                    x2=40.0,
+                    y2=45.0,
+                    confidence=0.85,
+                )
+            ],
+        )
+        for i in range(10)
+    ]
+    write_tracks_csv(tracks_csv, frame_tracks)
+
+    events = [
+        EventRecord(
+            event_id="evt_clip_01",
+            event_type="zone_entry",
+            track_id=2,
+            zone_id="entry_zone",
+            start_time=0.1,
+            end_time=0.2,
+            duration_seconds=0.1,
+        ),
+        EventRecord(
+            event_id="evt_clip_02",
+            event_type="dwell_time_event",
+            track_id=2,
+            zone_id="entry_zone",
+            start_time=0.2,
+            end_time=0.7,
+            duration_seconds=0.5,
+        ),
+    ]
+    write_events_csv(events_csv, events)
+
+    summary = run_visual_evidence(
+        source_path=video_path,
+        events_csv_path=events_csv,
+        tracks_csv_path=tracks_csv,
+        output_dir=out_dir,
+        extract_video_clips_override=True,
+        extract_storyboards_override=True,
+        clip_pre_roll_seconds_override=0.1,
+        clip_post_roll_seconds_override=0.1,
+    )
+
+    assert summary["extract_video_clips"] is True
+    assert summary["extract_storyboards"] is True
+    assert summary["video_clips_count"] == 2
+    assert summary["storyboards_count"] == 2
+    assert summary["verification"]["all_paths_valid"] is True
+
+    assert (out_dir / "clips" / "evt_clip_01_2.mp4").is_file()
+    assert (out_dir / "clips" / "evt_clip_02_2.mp4").is_file()
+    assert (out_dir / "storyboards" / "evt_clip_01_2_storyboard.jpg").is_file()
+    assert (out_dir / "storyboards" / "evt_clip_02_2_storyboard.jpg").is_file()
+
+    enriched = read_evidence_events_csv(out_dir / "events.csv")
+    assert len(enriched) == 2
+    assert enriched[0].video_clip_path == "clips/evt_clip_01_2.mp4"
+    assert enriched[0].storyboard_path == "storyboards/evt_clip_01_2_storyboard.jpg"
+
+    # Test CLI invocation with flags
+    cli_out = tmp_path / "cli_clips_out"
+    rc = extract_visual_evidence_main(
+        [
+            "--source",
+            str(video_path),
+            "--events",
+            str(events_csv),
+            "--tracks",
+            str(tracks_csv),
+            "--output-dir",
+            str(cli_out),
+            "--extract-clips",
+            "--extract-storyboards",
+            "--clip-pre-roll",
+            "0.1",
+            "--clip-post-roll",
+            "0.1",
+        ]
+    )
+    assert rc == 0
+    assert (cli_out / "clips" / "evt_clip_01_2.mp4").is_file()
+    assert (cli_out / "storyboards" / "evt_clip_01_2_storyboard.jpg").is_file()
