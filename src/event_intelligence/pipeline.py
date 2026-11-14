@@ -1053,6 +1053,11 @@ def run_multi_camera_pipeline(
             save_annotated_video=cfg.save_annotated_video,
             max_frames=cfg.max_frames,
             insight_config=cfg.insight_config,
+            extract_video_clips=cfg.extract_video_clips,
+            clip_pre_roll_seconds=cfg.clip_pre_roll_seconds,
+            clip_post_roll_seconds=cfg.clip_post_roll_seconds,
+            render_clip_telemetry=cfg.render_clip_telemetry,
+            extract_storyboards=cfg.extract_storyboards,
         )
 
         res = run_pipeline(
