@@ -16,6 +16,7 @@ from event_intelligence.storage import (
     ingest_multi_camera_intelligence_db,
     init_intelligence_db,
     insert_insights,
+    lookup_event_evidence,
     query_camera_summary,
     query_events,
     query_insights,
@@ -284,6 +285,117 @@ class TestMultiCameraStorage(unittest.TestCase):
             self.assertEqual(len(res), 1)
             self.assertEqual(res[0].insight_id, "ins_json_01")
             self.assertEqual(res[0].severity, "critical")
+
+    def test_schema_migration_adds_video_clip_and_storyboard_columns(self) -> None:
+        """Verify older databases without clip columns are safely migrated."""
+        import sqlite3
+        from contextlib import closing
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            db_path = Path(tmpdir) / "legacy.db"
+            # Create a bare legacy table without video_clip_path or storyboard_path
+            with closing(sqlite3.connect(db_path)) as conn:
+                conn.execute(
+                    "CREATE TABLE events (event_id TEXT PRIMARY KEY, event_type TEXT, track_id INTEGER, "
+                    "zone_id TEXT, start_time REAL, end_time REAL, duration_seconds REAL, "
+                    "snapshot_path TEXT, crop_path TEXT)"
+                )
+                conn.execute(
+                    "INSERT INTO events VALUES ('evt_legacy', 'dwell', 1, 'zone_a', 0.0, 1.0, 1.0, 's.jpg', 'c.jpg')"
+                )
+                conn.commit()
+
+            # init_intelligence_db must migrate the columns non-destructively
+            init_intelligence_db(db_path)
+
+            with closing(sqlite3.connect(db_path)) as conn:
+                cursor = conn.execute("PRAGMA table_info(events)")
+                cols = [row[1] for row in cursor.fetchall()]
+                self.assertIn("video_clip_path", cols)
+                self.assertIn("storyboard_path", cols)
+                row = conn.execute(
+                    "SELECT video_clip_path, storyboard_path FROM events WHERE event_id = 'evt_legacy'"
+                ).fetchone()
+                self.assertEqual(row, ("", ""))
+
+    def test_ingest_and_query_events_with_clips_and_storyboards(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            tmp = Path(tmpdir)
+            db_path = tmp / "intelligence.db"
+            events_csv = tmp / "events.csv"
+            events_csv.write_text(
+                "event_id,event_type,track_id,zone_id,start_time,end_time,duration_seconds,"
+                "snapshot_path,crop_path,video_clip_path,storyboard_path\n"
+                "evt_clip_01,dwell_time_event,3,zone_east,1.0,4.0,3.0,snapshots/e01.jpg,crops/e01.jpg,"
+                "clips/e01.mp4,storyboards/e01_sb.jpg\n",
+                encoding="utf-8",
+            )
+            cfg = SearchConfig(
+                source_name="cam_east.mp4",
+                camera_id="cam_east",
+                events_csv=str(events_csv),
+                tracks_csv="",
+                detections_csv="",
+                tracking_summary_csv="",
+                trajectories_csv="",
+                trajectory_summary_csv="",
+                zone_counts_csv="",
+                line_counts_csv="",
+            )
+            summary = ingest_intelligence_db(db_path, cfg, project_root=tmp)
+            self.assertEqual(summary.events_count, 1)
+
+            events = query_events(db_path, event_type="dwell_time_event")
+            self.assertEqual(len(events), 1)
+            ev = events[0]
+            self.assertEqual(ev.video_clip_path, "clips/e01.mp4")
+            self.assertEqual(ev.storyboard_path, "storyboards/e01_sb.jpg")
+            self.assertEqual(ev.to_dict()["video_clip_path"], "clips/e01.mp4")
+
+    def test_lookup_event_evidence_resolves_clips_and_storyboards(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            tmp = Path(tmpdir)
+            db_path = tmp / "intelligence.db"
+            events_csv = tmp / "events.csv"
+
+            # Create physical evidence files
+            (tmp / "snapshots").mkdir(parents=True)
+            (tmp / "crops").mkdir(parents=True)
+            (tmp / "clips").mkdir(parents=True)
+            (tmp / "storyboards").mkdir(parents=True)
+            (tmp / "snapshots" / "e02.jpg").write_bytes(b"jpeg")
+            (tmp / "crops" / "e02.jpg").write_bytes(b"crop")
+            (tmp / "clips" / "e02.mp4").write_bytes(b"mp4")
+            (tmp / "storyboards" / "e02_sb.jpg").write_bytes(b"storyboard")
+
+            events_csv.write_text(
+                "event_id,event_type,track_id,zone_id,start_time,end_time,duration_seconds,"
+                "snapshot_path,crop_path,video_clip_path,storyboard_path\n"
+                "evt_clip_02,zone_entry,5,zone_west,2.0,2.0,0.0,snapshots/e02.jpg,crops/e02.jpg,"
+                "clips/e02.mp4,storyboards/e02_sb.jpg\n",
+                encoding="utf-8",
+            )
+            cfg = SearchConfig(
+                source_name="cam_west.mp4",
+                camera_id="cam_west",
+                events_csv=str(events_csv),
+                tracks_csv="",
+                detections_csv="",
+                tracking_summary_csv="",
+                trajectories_csv="",
+                trajectory_summary_csv="",
+                zone_counts_csv="",
+                line_counts_csv="",
+            )
+            ingest_intelligence_db(db_path, cfg, project_root=tmp)
+
+            lookup = lookup_event_evidence(db_path, "evt_clip_02", evidence_root=tmp)
+            self.assertTrue(lookup.is_valid)
+            self.assertTrue(lookup.video_clip_exists)
+            self.assertTrue(lookup.storyboard_exists)
+            self.assertEqual(lookup.video_clip_size_bytes, 3)
+            self.assertEqual(lookup.storyboard_size_bytes, 10)
+            self.assertIn("resolved_video_clip_path", lookup.to_dict())
 
 
 if __name__ == "__main__":

@@ -588,6 +588,8 @@ def init_intelligence_db(db_path: Path | str) -> Path:
     out_db = Path(db_path)
     out_db.parent.mkdir(parents=True, exist_ok=True)
     with closing(sqlite3.connect(out_db)) as conn:
+        _migrate_multi_camera_columns(conn)
+        _migrate_evidence_clip_columns(conn)
         conn.executescript(SCHEMA_DDL)
         _migrate_multi_camera_columns(conn)
         _migrate_evidence_clip_columns(conn)
