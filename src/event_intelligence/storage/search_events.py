@@ -1681,6 +1681,104 @@ def query_trajectories(
     return results
 
 
+def query_zone_counts(
+    db_path: Path | str,
+    *,
+    camera_id: str | None = None,
+    zone_id: str | None = None,
+    limit: int = 100,
+) -> list[ZoneCountSearchResult]:
+    """Query aggregated zone activity metrics from intelligence.db."""
+    if limit <= 0:
+        raise ValueError("limit must be positive")
+    path = Path(db_path)
+    if not path.is_file():
+        raise FileNotFoundError(f"SQLite database not found: {path}")
+
+    clauses: list[str] = []
+    params: list[Any] = []
+
+    if camera_id is not None and camera_id.strip():
+        clauses.append("camera_id = ?")
+        params.append(camera_id.strip())
+
+    if zone_id is not None and zone_id.strip():
+        clauses.append("zone_id = ?")
+        params.append(zone_id.strip())
+
+    where_sql = f"WHERE {' AND '.join(clauses)}" if clauses else ""
+    sql = (
+        "SELECT camera_id, zone_id, entry_count, exit_count, "
+        "total_dwell_seconds, peak_occupancy "
+        f"FROM zone_counts {where_sql} "
+        "ORDER BY camera_id ASC, zone_id ASC LIMIT ?"
+    )
+    params.append(int(limit))
+
+    results: list[ZoneCountSearchResult] = []
+    with closing(sqlite3.connect(path)) as conn:
+        for row in conn.execute(sql, params):
+            results.append(
+                ZoneCountSearchResult(
+                    camera_id=str(row[0] or ""),
+                    zone_id=str(row[1]),
+                    entry_count=int(row[2]),
+                    exit_count=int(row[3]),
+                    total_dwell_seconds=float(row[4]),
+                    peak_occupancy=int(row[5]),
+                )
+            )
+    return results
+
+
+def query_line_counts(
+    db_path: Path | str,
+    *,
+    camera_id: str | None = None,
+    line_id: str | None = None,
+    limit: int = 100,
+) -> list[LineCountSearchResult]:
+    """Query aggregated line directional crossings from intelligence.db."""
+    if limit <= 0:
+        raise ValueError("limit must be positive")
+    path = Path(db_path)
+    if not path.is_file():
+        raise FileNotFoundError(f"SQLite database not found: {path}")
+
+    clauses: list[str] = []
+    params: list[Any] = []
+
+    if camera_id is not None and camera_id.strip():
+        clauses.append("camera_id = ?")
+        params.append(camera_id.strip())
+
+    if line_id is not None and line_id.strip():
+        clauses.append("line_id = ?")
+        params.append(line_id.strip())
+
+    where_sql = f"WHERE {' AND '.join(clauses)}" if clauses else ""
+    sql = (
+        "SELECT camera_id, line_id, crossings_ab, crossings_ba, total "
+        f"FROM line_counts {where_sql} "
+        "ORDER BY camera_id ASC, line_id ASC LIMIT ?"
+    )
+    params.append(int(limit))
+
+    results: list[LineCountSearchResult] = []
+    with closing(sqlite3.connect(path)) as conn:
+        for row in conn.execute(sql, params):
+            results.append(
+                LineCountSearchResult(
+                    camera_id=str(row[0] or ""),
+                    line_id=str(row[1]),
+                    crossings_ab=int(row[2]),
+                    crossings_ba=int(row[3]),
+                    total=int(row[4]),
+                )
+            )
+    return results
+
+
 def lookup_event_evidence(
     db_path: Path | str,
     event_id: str,
