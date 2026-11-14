@@ -763,6 +763,125 @@ def render_clip_frame_overlay(
     return canvas
 
 
+def create_video_writer(
+    output_path: str | Path,
+    fps: float,
+    width: int,
+    height: int,
+    fourcc: str = "mp4v",
+) -> cv2.VideoWriter:
+    """Create a cv2.VideoWriter with fallback from mp4v to MJPG."""
+    path = Path(output_path)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    fourcc_code = cv2.VideoWriter_fourcc(*fourcc)
+    writer = cv2.VideoWriter(str(path), fourcc_code, fps, (width, height))
+    if not writer.isOpened():
+        fallback_fourcc = cv2.VideoWriter_fourcc(*"MJPG")
+        writer = cv2.VideoWriter(str(path), fallback_fourcc, fps, (width, height))
+    if not writer.isOpened():
+        raise RuntimeError(f"Could not open VideoWriter for {path}")
+    return writer
+
+
+def extract_event_video_clip(
+    video_source: Path | str | VideoSource,
+    output_clip_path: Path | str,
+    *,
+    event: EventRecord | EvidenceEventRecord,
+    fps: float,
+    total_source_frames: int,
+    pre_roll_seconds: float = 1.0,
+    post_roll_seconds: float = 1.0,
+    scene_config: SceneConfig | None = None,
+    track_detections_by_frame: Mapping[int, TrackDetection] | None = None,
+    trajectory_points_by_frame: Mapping[int, tuple[float, float]] | None = None,
+    camera_id: str = "",
+    alert_text: str = "",
+    render_telemetry: bool = True,
+) -> EventClipRecord:
+    """Extract a synchronized video clip with pre/post-roll frames and telemetry overlays."""
+    out_p = Path(output_clip_path)
+    out_p.parent.mkdir(parents=True, exist_ok=True)
+
+    if total_source_frames <= 0 or fps <= 0.0:
+        raise ValueError(
+            f"Invalid source video parameters: total_frames={total_source_frames}, fps={fps}"
+        )
+
+    start_frame = max(0, int(round((event.start_time - pre_roll_seconds) * fps)))
+    end_frame = min(
+        total_source_frames - 1,
+        int(round((event.end_time + post_roll_seconds) * fps)),
+    )
+    if end_frame < start_frame:
+        end_frame = start_frame
+
+    clip_frames_count = end_frame - start_frame + 1
+
+    close_vs = False
+    if isinstance(video_source, VideoSource):
+        vs = video_source
+    else:
+        vs = VideoSource(video_source)
+        close_vs = True
+
+    try:
+        w = int(vs.metadata.width)
+        h = int(vs.metadata.height)
+        writer = create_video_writer(out_p, fps=fps, width=w, height=h)
+        try:
+            for fid in range(start_frame, end_frame + 1):
+                frame = vs.read_frame(fid)
+                if frame is None or frame.size == 0:
+                    continue
+                if render_telemetry:
+                    det = (
+                        track_detections_by_frame.get(fid)
+                        if track_detections_by_frame is not None
+                        else None
+                    )
+                    traj_pts = None
+                    if trajectory_points_by_frame is not None:
+                        traj_pts = [
+                            pt
+                            for f_idx, pt in sorted(
+                                trajectory_points_by_frame.items()
+                            )
+                            if f_idx <= fid
+                        ]
+                    frame_to_write = render_clip_frame_overlay(
+                        frame,
+                        event=event,
+                        track_detection=det,
+                        current_frame_id=fid,
+                        current_timestamp=fid / fps,
+                        scene_config=scene_config,
+                        trajectory_points=traj_pts,
+                        camera_id=camera_id,
+                        alert_text=alert_text,
+                    )
+                else:
+                    frame_to_write = frame
+                writer.write(frame_to_write)
+        finally:
+            writer.release()
+    finally:
+        if close_vs:
+            vs.close()
+
+    return EventClipRecord(
+        event_id=event.event_id,
+        track_id=event.track_id,
+        video_clip_path=str(out_p),
+        storyboard_path="",
+        start_frame=start_frame,
+        end_frame=end_frame,
+        total_frames=clip_frames_count,
+        fps=fps,
+        duration_seconds=clip_frames_count / fps,
+    )
+
+
 def render_evidence_contact_sheet(
     items: Sequence[tuple[np.ndarray, str]],
     *,

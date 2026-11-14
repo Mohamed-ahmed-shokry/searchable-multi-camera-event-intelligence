@@ -2,16 +2,19 @@ from __future__ import annotations
 
 from pathlib import Path
 
+import cv2
 import numpy as np
 import pytest
 from extract_visual_evidence import (
     EVIDENCE_EVENTS_CSV_HEADER,
     BestFrameSelection,
+    EventClipRecord,
     EventRecord,
     EvidenceConfig,
     EvidenceEventRecord,
     FrameTracks,
     TrackDetection,
+    extract_event_video_clip,
     extract_person_crop,
     index_track_detections,
     load_evidence_config,
@@ -516,6 +519,44 @@ def test_render_clip_frame_overlay_telemetry_and_breadcrumbs() -> None:
     # Empty frame raises ValueError
     with pytest.raises(ValueError, match="Invalid frame shape"):
         render_clip_frame_overlay(np.zeros((0, 0, 3), dtype=np.uint8))
+
+
+def test_extract_event_video_clip_creates_playable_clip(tmp_path: Path) -> None:
+    video_path = make_video(tmp_path, name="source_test.avi", count=15)
+    event = EventRecord(
+        event_id="evt_0010",
+        event_type="dwell_time_event",
+        track_id=1,
+        zone_id="zone_main",
+        start_time=0.4,
+        end_time=0.8,
+        duration_seconds=0.4,
+    )
+    clip_path = tmp_path / "clips" / "evt_0010.mp4"
+    record = extract_event_video_clip(
+        video_path,
+        clip_path,
+        event=event,
+        fps=10.0,
+        total_source_frames=15,
+        pre_roll_seconds=0.2,
+        post_roll_seconds=0.2,
+        camera_id="cam_01",
+        alert_text="DWELL",
+    )
+    assert Path(record.video_clip_path).is_file()
+    assert record.event_id == "evt_0010"
+    assert record.track_id == 1
+    assert record.total_frames > 0
+    assert record.duration_seconds > 0.0
+
+    # Verify clip can be opened and decoded
+    cap = cv2.VideoCapture(str(clip_path))
+    assert cap.isOpened()
+    ret, frame = cap.read()
+    assert ret is True
+    assert frame is not None
+    cap.release()
 
 
 def test_run_visual_evidence_pipeline_and_cli_end_to_end(tmp_path: Path) -> None:
