@@ -458,8 +458,7 @@ class TestMultiCameraStorage(unittest.TestCase):
             )
             lc_csv = tmp / "line_counts.csv"
             lc_csv.write_text(
-                "line_id,crossings_ab,crossings_ba,total\n"
-                "gate,5,2,7\n",
+                "line_id,crossings_ab,crossings_ba,total\ngate,5,2,7\n",
                 encoding="utf-8",
             )
             cfg = SearchConfig(
