@@ -755,6 +755,95 @@ class TestEndToEndPipelineAndCli(unittest.TestCase):
             self.assertEqual(payload["cameras"], ["cam_a", "cam_b"])
             self.assertTrue((out_root / "cli_multicam" / "intelligence.db").is_file())
 
+    def test_run_pipeline_extracts_video_clips_and_storyboards_end_to_end(self) -> None:
+        """Verify run_pipeline with clips enabled produces MP4 clips, storyboards, and searchable db."""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            root = Path(tmpdir)
+            vid_path = make_video(root, name="cam_clips.avi", count=12)
+            tracks_csv = root / "tracks.csv"
+            write_tracks_csv(
+                tracks_csv,
+                [
+                    FrameTracks(
+                        i,
+                        [
+                            TrackDetection(
+                                i,
+                                1,
+                                15.0,
+                                15.0,
+                                35.0,
+                                45.0,
+                                0.90,
+                            )
+                        ],
+                    )
+                    for i in range(12)
+                ],
+            )
+            scene_yaml = root / "scene.yaml"
+            scene_yaml.write_text(
+                "zones:\n"
+                "  - id: zone_safe\n"
+                "    polygon: [[0, 0], [100, 0], [100, 100], [0, 100]]\n"
+                "lines: []\n",
+                encoding="utf-8",
+            )
+            cfg = PipelineConfig(
+                precomputed_tracks_csv=str(tracks_csv),
+                scene_config_path=str(scene_yaml),
+                min_dwell_seconds=0.1,
+                extract_video_clips=True,
+                extract_storyboards=True,
+                clip_pre_roll_seconds=0.1,
+                clip_post_roll_seconds=0.1,
+                save_annotated_video=False,
+            )
+            out_root = root / "runs"
+            res = run_pipeline(
+                vid_path,
+                cfg,
+                output_root=out_root,
+                run_id="run_clips_e2e",
+                project_root=root,
+            )
+            run_dir = Path(res.run_dir)
+            self.assertTrue((run_dir / "clips").is_dir())
+            self.assertTrue((run_dir / "storyboards").is_dir())
+
+            clips = list((run_dir / "clips").glob("*.mp4"))
+            storyboards = list((run_dir / "storyboards").glob("*.jpg"))
+            self.assertGreaterEqual(len(clips), 1)
+            self.assertGreaterEqual(len(storyboards), 1)
+
+            # Check events.csv
+            events_csv = run_dir / "events.csv"
+            self.assertTrue(events_csv.is_file())
+            content = events_csv.read_text(encoding="utf-8")
+            self.assertIn("video_clip_path", content)
+            self.assertIn("storyboard_path", content)
+            self.assertIn("clips/", content)
+            self.assertIn("storyboards/", content)
+
+            # Query the database with --clips CLI flag
+            sbuf = io.StringIO()
+            with redirect_stdout(sbuf):
+                src_rc = search_main(
+                    [
+                        "--db",
+                        str(run_dir / "intelligence.db"),
+                        "--clips",
+                        "--json",
+                    ]
+                )
+            self.assertEqual(src_rc, 0)
+            search_rows = json.loads(sbuf.getvalue())
+            self.assertGreaterEqual(len(search_rows), 1)
+            self.assertTrue(search_rows[0]["video_clip_path"].startswith("clips/"))
+            self.assertTrue(
+                search_rows[0]["storyboard_path"].startswith("storyboards/")
+            )
+
     def test_src_package_has_no_sys_path_mutations_or_cv_projects_imports(self) -> None:
         src_pkg = Path(__file__).resolve().parents[1] / "src" / "event_intelligence"
         py_files = sorted(src_pkg.rglob("*.py"))

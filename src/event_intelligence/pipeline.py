@@ -820,7 +820,7 @@ def run_pipeline(
             )
             ins_ev = EventRecord(
                 event_id=ins.insight_id,
-                event_type=ins.insight_type,
+                event_type="dwell_time_event",
                 track_id=max(0, ins_track_id),
                 zone_id=ins.zone_id or "scene",
                 start_time=ins.start_time,
