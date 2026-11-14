@@ -9,8 +9,9 @@ import csv
 import json
 import math
 import sqlite3
+from collections.abc import Sequence
 from contextlib import closing
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from itertools import pairwise
 from pathlib import Path
 from typing import Any
@@ -20,8 +21,19 @@ import yaml
 _PROJECT_ROOT = Path(__file__).resolve().parents[3]
 
 SCHEMA_DDL = """
+CREATE TABLE IF NOT EXISTS cameras (
+    camera_id TEXT PRIMARY KEY,
+    source_name TEXT NOT NULL,
+    fps REAL NOT NULL DEFAULT 30.0,
+    width INTEGER NOT NULL DEFAULT 1920,
+    height INTEGER NOT NULL DEFAULT 1080,
+    total_frames INTEGER NOT NULL DEFAULT 0,
+    created_at TEXT NOT NULL DEFAULT ''
+);
+
 CREATE TABLE IF NOT EXISTS detections (
     detection_id INTEGER PRIMARY KEY AUTOINCREMENT,
+    camera_id TEXT NOT NULL DEFAULT '',
     frame_id INTEGER NOT NULL,
     x1 REAL NOT NULL,
     y1 REAL NOT NULL,
@@ -31,9 +43,11 @@ CREATE TABLE IF NOT EXISTS detections (
     class_name TEXT NOT NULL
 );
 CREATE INDEX IF NOT EXISTS idx_detections_frame_id ON detections (frame_id);
+CREATE INDEX IF NOT EXISTS idx_detections_camera_frame ON detections (camera_id, frame_id);
 
 CREATE TABLE IF NOT EXISTS track_observations (
     observation_id INTEGER PRIMARY KEY AUTOINCREMENT,
+    camera_id TEXT NOT NULL DEFAULT '',
     frame_id INTEGER NOT NULL,
     track_id INTEGER NOT NULL,
     x1 REAL NOT NULL,
@@ -43,30 +57,37 @@ CREATE TABLE IF NOT EXISTS track_observations (
     confidence REAL NOT NULL
 );
 CREATE INDEX IF NOT EXISTS idx_track_obs_track_frame ON track_observations (track_id, frame_id);
+CREATE INDEX IF NOT EXISTS idx_track_obs_cam_trk_frame ON track_observations (camera_id, track_id, frame_id);
 
 CREATE TABLE IF NOT EXISTS tracks (
-    track_id INTEGER PRIMARY KEY,
+    track_id INTEGER NOT NULL,
+    camera_id TEXT NOT NULL DEFAULT '',
     start_frame INTEGER NOT NULL,
     end_frame INTEGER NOT NULL,
     duration_frames INTEGER NOT NULL,
     duration_seconds REAL NOT NULL,
     observed_frames INTEGER NOT NULL,
-    path_length_px REAL NOT NULL
+    path_length_px REAL NOT NULL,
+    PRIMARY KEY (camera_id, track_id)
 );
 CREATE INDEX IF NOT EXISTS idx_tracks_duration ON tracks (duration_seconds DESC);
+CREATE INDEX IF NOT EXISTS idx_tracks_camera ON tracks (camera_id);
 
 CREATE TABLE IF NOT EXISTS trajectories (
     track_id INTEGER NOT NULL,
+    camera_id TEXT NOT NULL DEFAULT '',
     frame_id INTEGER NOT NULL,
     timestamp REAL NOT NULL,
     x REAL NOT NULL,
     y REAL NOT NULL,
-    PRIMARY KEY (track_id, frame_id)
+    PRIMARY KEY (camera_id, track_id, frame_id)
 );
 CREATE INDEX IF NOT EXISTS idx_trajectories_timestamp ON trajectories (timestamp);
+CREATE INDEX IF NOT EXISTS idx_trajectories_camera_ts ON trajectories (camera_id, timestamp);
 
 CREATE TABLE IF NOT EXISTS events (
-    event_id TEXT PRIMARY KEY,
+    event_id TEXT NOT NULL,
+    camera_id TEXT NOT NULL DEFAULT '',
     event_type TEXT NOT NULL,
     track_id INTEGER NOT NULL,
     zone_id TEXT NOT NULL,
@@ -76,26 +97,57 @@ CREATE TABLE IF NOT EXISTS events (
     snapshot_path TEXT NOT NULL,
     crop_path TEXT NOT NULL,
     video_clip_path TEXT NOT NULL DEFAULT '',
-    storyboard_path TEXT NOT NULL DEFAULT ''
+    storyboard_path TEXT NOT NULL DEFAULT '',
+    PRIMARY KEY (camera_id, event_id)
 );
 CREATE INDEX IF NOT EXISTS idx_events_type_zone ON events (event_type, zone_id);
 CREATE INDEX IF NOT EXISTS idx_events_track_id ON events (track_id);
 CREATE INDEX IF NOT EXISTS idx_events_time_range ON events (start_time, end_time);
+CREATE INDEX IF NOT EXISTS idx_events_camera_type_zone ON events (camera_id, event_type, zone_id);
+CREATE INDEX IF NOT EXISTS idx_events_camera_track_id ON events (camera_id, track_id);
 
 CREATE TABLE IF NOT EXISTS zone_counts (
-    zone_id TEXT PRIMARY KEY,
+    zone_id TEXT NOT NULL,
+    camera_id TEXT NOT NULL DEFAULT '',
     entry_count INTEGER NOT NULL,
     exit_count INTEGER NOT NULL,
     total_dwell_seconds REAL NOT NULL,
-    peak_occupancy INTEGER NOT NULL
+    peak_occupancy INTEGER NOT NULL,
+    PRIMARY KEY (camera_id, zone_id)
 );
 
 CREATE TABLE IF NOT EXISTS line_counts (
-    line_id TEXT PRIMARY KEY,
+    line_id TEXT NOT NULL,
+    camera_id TEXT NOT NULL DEFAULT '',
     crossings_ab INTEGER NOT NULL,
     crossings_ba INTEGER NOT NULL,
-    total INTEGER NOT NULL
+    total INTEGER NOT NULL,
+    PRIMARY KEY (camera_id, line_id)
 );
+
+CREATE TABLE IF NOT EXISTS insights (
+    insight_id TEXT NOT NULL,
+    camera_id TEXT NOT NULL DEFAULT '',
+    insight_type TEXT NOT NULL,
+    severity TEXT NOT NULL,
+    track_id INTEGER,
+    zone_id TEXT,
+    start_time REAL NOT NULL,
+    end_time REAL NOT NULL,
+    duration REAL NOT NULL,
+    description TEXT NOT NULL,
+    evidence_snapshot_path TEXT,
+    evidence_crop_path TEXT,
+    video_clip_path TEXT NOT NULL DEFAULT '',
+    storyboard_path TEXT NOT NULL DEFAULT '',
+    details_json TEXT NOT NULL DEFAULT '{}',
+    PRIMARY KEY (camera_id, insight_id)
+);
+CREATE INDEX IF NOT EXISTS idx_insights_type ON insights (insight_type);
+CREATE INDEX IF NOT EXISTS idx_insights_severity ON insights (severity);
+CREATE INDEX IF NOT EXISTS idx_insights_camera_type ON insights (camera_id, insight_type);
+CREATE INDEX IF NOT EXISTS idx_insights_camera_track_id ON insights (camera_id, track_id);
+CREATE INDEX IF NOT EXISTS idx_insights_time_range ON insights (start_time, end_time);
 """
 
 
@@ -104,6 +156,7 @@ class SearchConfig:
     """Configuration for Phase 10 SQLite ingestion and query execution."""
 
     source_name: str = "people-detection.mp4"
+    camera_id: str = ""
     detections_csv: str = (
         "cv_projects/02_person_detection/outputs/people_detection_run/detections.csv"
     )
@@ -131,6 +184,7 @@ class SearchConfig:
     line_counts_csv: str = (
         "cv_projects/08_heatmaps_analytics/outputs/people_detection/line_counts.csv"
     )
+    insights_json: str | None = None
     default_query_limit: int = 50
     write_subproject_docs: bool = True
 
@@ -139,6 +193,62 @@ class SearchConfig:
             raise ValueError("source_name must be non-empty")
         if self.default_query_limit <= 0:
             raise ValueError("default_query_limit must be positive")
+
+
+@dataclass(frozen=True, slots=True)
+class CameraMetadata:
+    """Metadata for a registered video camera feed."""
+
+    camera_id: str
+    source_name: str
+    fps: float = 30.0
+    width: int = 1920
+    height: int = 1080
+    total_frames: int = 0
+    created_at: str = ""
+
+    def __post_init__(self) -> None:
+        if not self.camera_id.strip():
+            raise ValueError("camera_id must be non-empty")
+        if not self.source_name.strip():
+            raise ValueError("source_name must be non-empty")
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "camera_id": self.camera_id,
+            "source_name": self.source_name,
+            "fps": round(self.fps, 2),
+            "width": self.width,
+            "height": self.height,
+            "total_frames": self.total_frames,
+            "created_at": self.created_at,
+        }
+
+
+@dataclass(frozen=True, slots=True)
+class CameraActivitySummary:
+    """Aggregated activity metrics for one camera stream in intelligence.db."""
+
+    camera_id: str
+    source_name: str
+    total_detections: int
+    total_tracks: int
+    total_events: int
+    total_dwell_seconds: float
+    zones_active: int
+    lines_active: int
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "camera_id": self.camera_id,
+            "source_name": self.source_name,
+            "total_detections": self.total_detections,
+            "total_tracks": self.total_tracks,
+            "total_events": self.total_events,
+            "total_dwell_seconds": round(self.total_dwell_seconds, 4),
+            "zones_active": self.zones_active,
+            "lines_active": self.lines_active,
+        }
 
 
 @dataclass(frozen=True, slots=True)
@@ -154,6 +264,7 @@ class EventSearchResult:
     duration_seconds: float
     snapshot_path: str
     crop_path: str
+    camera_id: str = ""
     video_clip_path: str = ""
     storyboard_path: str = ""
 
@@ -167,6 +278,7 @@ class EventSearchResult:
 
     def to_dict(self) -> dict[str, Any]:
         return {
+            "camera_id": self.camera_id,
             "event_id": self.event_id,
             "event_type": self.event_type,
             "track_id": self.track_id,
@@ -193,6 +305,7 @@ class TrackSearchResult:
     observed_frames: int
     path_length_px: float
     event_count: int = 0
+    camera_id: str = ""
 
     def __post_init__(self) -> None:
         if self.track_id < 0:
@@ -206,6 +319,7 @@ class TrackSearchResult:
 
     def to_dict(self) -> dict[str, Any]:
         return {
+            "camera_id": self.camera_id,
             "track_id": self.track_id,
             "start_frame": self.start_frame,
             "end_frame": self.end_frame,
@@ -264,6 +378,46 @@ class EvidenceLookupResult:
 
 
 @dataclass(frozen=True, slots=True)
+class InsightSearchResult:
+    """Row returned by query_insights."""
+
+    camera_id: str
+    insight_id: str
+    insight_type: str
+    severity: str
+    track_id: int | None
+    zone_id: str | None
+    start_time: float
+    end_time: float
+    duration: float
+    description: str
+    evidence_snapshot_path: str | None = None
+    evidence_crop_path: str | None = None
+    video_clip_path: str = ""
+    storyboard_path: str = ""
+    details: dict[str, Any] = field(default_factory=dict)
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "camera_id": self.camera_id,
+            "insight_id": self.insight_id,
+            "insight_type": self.insight_type,
+            "severity": self.severity,
+            "track_id": self.track_id,
+            "zone_id": self.zone_id,
+            "start_time": round(self.start_time, 4),
+            "end_time": round(self.end_time, 4),
+            "duration": round(self.duration, 4),
+            "description": self.description,
+            "evidence_snapshot_path": self.evidence_snapshot_path,
+            "evidence_crop_path": self.evidence_crop_path,
+            "video_clip_path": self.video_clip_path,
+            "storyboard_path": self.storyboard_path,
+            "details": self.details,
+        }
+
+
+@dataclass(frozen=True, slots=True)
 class DatabaseSummary:
     """Row counts across all tables in intelligence.db."""
 
@@ -276,6 +430,8 @@ class DatabaseSummary:
     events_count: int
     zone_counts_rows: int
     line_counts_rows: int
+    cameras_count: int = 1
+    insights_count: int = 0
 
     def __post_init__(self) -> None:
         for name, val in (
@@ -286,6 +442,8 @@ class DatabaseSummary:
             ("events_count", self.events_count),
             ("zone_counts_rows", self.zone_counts_rows),
             ("line_counts_rows", self.line_counts_rows),
+            ("cameras_count", self.cameras_count),
+            ("insights_count", self.insights_count),
         ):
             if val < 0:
                 raise ValueError(f"{name} must be non-negative")
@@ -294,6 +452,7 @@ class DatabaseSummary:
         return {
             "db_path": self.db_path,
             "source_name": self.source_name,
+            "cameras_count": self.cameras_count,
             "detections_count": self.detections_count,
             "track_observations_count": self.track_observations_count,
             "tracks_count": self.tracks_count,
@@ -301,6 +460,7 @@ class DatabaseSummary:
             "events_count": self.events_count,
             "zone_counts_rows": self.zone_counts_rows,
             "line_counts_rows": self.line_counts_rows,
+            "insights_count": self.insights_count,
         }
 
 
@@ -368,12 +528,71 @@ def save_search_config(config: SearchConfig, path: Path | str) -> Path:
     return out_path
 
 
+def _migrate_multi_camera_columns(conn: sqlite3.Connection) -> None:
+    """Add camera_id column to tables if migrating from older single-camera schemas."""
+    tables = [
+        "detections",
+        "track_observations",
+        "tracks",
+        "trajectories",
+        "events",
+        "zone_counts",
+        "line_counts",
+        "insights",
+    ]
+    for table in tables:
+        try:
+            cursor = conn.execute(f"PRAGMA table_info({table})")
+            cols = [row[1] for row in cursor.fetchall()]
+            if cols and "camera_id" not in cols:
+                conn.execute(
+                    f"ALTER TABLE {table} ADD COLUMN camera_id TEXT NOT NULL DEFAULT ''"
+                )
+        except sqlite3.OperationalError:
+            pass
+
+
+def _migrate_evidence_clip_columns(conn: sqlite3.Connection) -> None:
+    """Add video_clip_path and storyboard_path to events and insights if migrating from older schemas."""
+    try:
+        cursor = conn.execute("PRAGMA table_info(events)")
+        cols = [row[1] for row in cursor.fetchall()]
+        if cols and "video_clip_path" not in cols:
+            conn.execute(
+                "ALTER TABLE events ADD COLUMN video_clip_path TEXT NOT NULL DEFAULT ''"
+            )
+        if cols and "storyboard_path" not in cols:
+            conn.execute(
+                "ALTER TABLE events ADD COLUMN storyboard_path TEXT NOT NULL DEFAULT ''"
+            )
+    except sqlite3.OperationalError:
+        pass
+
+    try:
+        cursor = conn.execute("PRAGMA table_info(insights)")
+        cols = [row[1] for row in cursor.fetchall()]
+        if cols and "video_clip_path" not in cols:
+            conn.execute(
+                "ALTER TABLE insights ADD COLUMN video_clip_path TEXT NOT NULL DEFAULT ''"
+            )
+        if cols and "storyboard_path" not in cols:
+            conn.execute(
+                "ALTER TABLE insights ADD COLUMN storyboard_path TEXT NOT NULL DEFAULT ''"
+            )
+    except sqlite3.OperationalError:
+        pass
+
+
 def init_intelligence_db(db_path: Path | str) -> Path:
     """Create intelligence.db and execute SCHEMA_DDL idempotently."""
     out_db = Path(db_path)
     out_db.parent.mkdir(parents=True, exist_ok=True)
     with closing(sqlite3.connect(out_db)) as conn:
+        _migrate_multi_camera_columns(conn)
+        _migrate_evidence_clip_columns(conn)
         conn.executescript(SCHEMA_DDL)
+        _migrate_multi_camera_columns(conn)
+        _migrate_evidence_clip_columns(conn)
         conn.commit()
     return out_db
 
@@ -388,10 +607,18 @@ def ingest_intelligence_db(
     config: SearchConfig,
     *,
     project_root: Path | str | None = None,
+    clear_existing: bool = False,
+    camera_metadata: CameraMetadata | None = None,
 ) -> DatabaseSummary:
     """Load detections, tracks, trajectories, events, and zone/line counts into intelligence.db."""
     root = Path(project_root) if project_root is not None else _PROJECT_ROOT
     out_db = init_intelligence_db(db_path)
+
+    cam_id = (
+        (config.camera_id.strip() if config.camera_id else "")
+        or Path(config.source_name).stem
+        or "default"
+    )
 
     det_path = _resolve_optional_path(config.detections_csv, root)
     trk_path = _resolve_optional_path(config.tracks_csv, root)
@@ -402,7 +629,7 @@ def ingest_intelligence_db(
     zc_path = _resolve_optional_path(config.zone_counts_csv, root)
     lc_path = _resolve_optional_path(config.line_counts_csv, root)
 
-    det_rows: list[tuple[int, float, float, float, float, float, str]] = []
+    det_rows: list[tuple[str, int, float, float, float, float, float, str]] = []
     if det_path.is_file():
         with det_path.open("r", encoding="utf-8", newline="") as handle:
             reader = csv.DictReader(handle)
@@ -411,6 +638,7 @@ def ingest_intelligence_db(
                     continue
                 det_rows.append(
                     (
+                        cam_id,
                         int(row["frame_id"]),
                         float(row["x1"]),
                         float(row["y1"]),
@@ -421,7 +649,7 @@ def ingest_intelligence_db(
                     )
                 )
 
-    obs_rows: list[tuple[int, int, float, float, float, float, float]] = []
+    obs_rows: list[tuple[str, int, int, float, float, float, float, float]] = []
     if trk_path.is_file():
         with trk_path.open("r", encoding="utf-8", newline="") as handle:
             reader = csv.DictReader(handle)
@@ -430,6 +658,7 @@ def ingest_intelligence_db(
                     continue
                 obs_rows.append(
                     (
+                        cam_id,
                         int(row["frame_id"]),
                         int(row["track_id"]),
                         float(row["x1"]),
@@ -440,7 +669,7 @@ def ingest_intelligence_db(
                     )
                 )
 
-    traj_rows: list[tuple[int, int, float, float, float]] = []
+    traj_rows: list[tuple[str, int, int, float, float, float]] = []
     traj_points_by_track: dict[int, list[tuple[int, float, float, float]]] = {}
     if traj_path.is_file():
         with traj_path.open("r", encoding="utf-8", newline="") as handle:
@@ -453,7 +682,7 @@ def ingest_intelligence_db(
                 ts = float(row["timestamp"])
                 x = float(row["x"])
                 y = float(row["y"])
-                traj_rows.append((tid, fid, ts, x, y))
+                traj_rows.append((cam_id, tid, fid, ts, x, y))
                 traj_points_by_track.setdefault(tid, []).append((fid, ts, x, y))
 
     path_len_by_track: dict[int, float] = {}
@@ -472,7 +701,7 @@ def ingest_intelligence_db(
             )
             path_len_by_track[tid] = round(dist, 2)
 
-    track_rows: list[tuple[int, int, int, int, float, int, float]] = []
+    track_rows: list[tuple[str, int, int, int, int, float, int, float]] = []
     if trk_sum_path.is_file():
         with trk_sum_path.open("r", encoding="utf-8", newline="") as handle:
             reader = csv.DictReader(handle)
@@ -482,6 +711,7 @@ def ingest_intelligence_db(
                 tid = int(row["track_id"])
                 track_rows.append(
                     (
+                        cam_id,
                         tid,
                         int(row["start_frame"]),
                         int(row["end_frame"]),
@@ -491,7 +721,7 @@ def ingest_intelligence_db(
                         float(path_len_by_track.get(tid, 0.0)),
                     )
                 )
-    else:
+    elif traj_points_by_track:
         for tid in sorted(traj_points_by_track):
             ordered = sorted(traj_points_by_track[tid], key=lambda item: item[0])
             sf = ordered[0][0]
@@ -500,6 +730,7 @@ def ingest_intelligence_db(
             dur_s = max(0.0, ordered[-1][1] - ordered[0][1])
             track_rows.append(
                 (
+                    cam_id,
                     tid,
                     sf,
                     ef,
@@ -509,8 +740,43 @@ def ingest_intelligence_db(
                     float(path_len_by_track.get(tid, 0.0)),
                 )
             )
+    elif obs_rows:
+        obs_by_tid: dict[int, list[int]] = {}
+        for r in obs_rows:
+            obs_by_tid.setdefault(r[2], []).append(r[1])
+        for tid, fids in sorted(obs_by_tid.items()):
+            sf = min(fids)
+            ef = max(fids)
+            dur_f = max(1, ef - sf + 1)
+            track_rows.append(
+                (
+                    cam_id,
+                    tid,
+                    sf,
+                    ef,
+                    dur_f,
+                    round(dur_f / 30.0, 4),
+                    len(fids),
+                    0.0,
+                )
+            )
 
-    event_rows: list[tuple[str, str, int, str, float, float, float, str, str]] = []
+    event_rows: list[
+        tuple[
+            str,
+            str,
+            str,
+            int,
+            str,
+            float,
+            float,
+            float,
+            str,
+            str,
+            str,
+            str,
+        ]
+    ] = []
     if ev_path.is_file():
         with ev_path.open("r", encoding="utf-8", newline="") as handle:
             reader = csv.DictReader(handle)
@@ -522,8 +788,11 @@ def ingest_intelligence_db(
                 ).strip()
                 snap = str(row.get("snapshot_path") or "").strip()
                 crop = str(row.get("crop_path") or "").strip()
+                clip = str(row.get("video_clip_path") or "").strip()
+                story = str(row.get("storyboard_path") or "").strip()
                 event_rows.append(
                     (
+                        cam_id,
                         str(row["event_id"]).strip(),
                         str(row["event_type"]).strip(),
                         int(row["track_id"]),
@@ -533,10 +802,12 @@ def ingest_intelligence_db(
                         float(row["duration_seconds"]),
                         snap,
                         crop,
+                        clip,
+                        story,
                     )
                 )
 
-    zc_rows: list[tuple[str, int, int, float, int]] = []
+    zc_rows: list[tuple[str, str, int, int, float, int]] = []
     if zc_path.is_file():
         with zc_path.open("r", encoding="utf-8", newline="") as handle:
             reader = csv.DictReader(handle)
@@ -545,6 +816,7 @@ def ingest_intelligence_db(
                     continue
                 zc_rows.append(
                     (
+                        cam_id,
                         str(row["zone_id"]).strip(),
                         int(row["entry_count"]),
                         int(row["exit_count"]),
@@ -553,7 +825,7 @@ def ingest_intelligence_db(
                     )
                 )
 
-    lc_rows: list[tuple[str, int, int, int]] = []
+    lc_rows: list[tuple[str, str, int, int, int]] = []
     if lc_path.is_file():
         with lc_path.open("r", encoding="utf-8", newline="") as handle:
             reader = csv.DictReader(handle)
@@ -562,6 +834,7 @@ def ingest_intelligence_db(
                     continue
                 lc_rows.append(
                     (
+                        cam_id,
                         str(row["line_id"]).strip(),
                         int(row["crossings_ab"]),
                         int(row["crossings_ba"]),
@@ -570,6 +843,25 @@ def ingest_intelligence_db(
                 )
 
     with closing(sqlite3.connect(out_db)) as conn:
+        meta = camera_metadata or CameraMetadata(
+            camera_id=cam_id,
+            source_name=config.source_name,
+        )
+        conn.execute(
+            "INSERT OR REPLACE INTO cameras "
+            "(camera_id, source_name, fps, width, height, total_frames, created_at) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?)",
+            (
+                meta.camera_id,
+                meta.source_name,
+                meta.fps,
+                meta.width,
+                meta.height,
+                meta.total_frames,
+                meta.created_at,
+            ),
+        )
+
         for tbl in (
             "detections",
             "track_observations",
@@ -578,72 +870,206 @@ def ingest_intelligence_db(
             "events",
             "zone_counts",
             "line_counts",
+            "insights",
         ):
-            conn.execute(f"DELETE FROM {tbl}")
+            if clear_existing:
+                conn.execute(f"DELETE FROM {tbl}")
+            else:
+                conn.execute(f"DELETE FROM {tbl} WHERE camera_id = ?", (cam_id,))
+
+        insight_rows: list[tuple[Any, ...]] = []
+        if config.insights_json:
+            ins_p = _resolve_optional_path(config.insights_json, project_root)
+            if ins_p.is_file():
+                try:
+                    raw_items = json.loads(ins_p.read_text(encoding="utf-8"))
+                    if isinstance(raw_items, list):
+                        for item in raw_items:
+                            if isinstance(item, dict):
+                                i_id = str(item.get("insight_id", ""))
+                                c_id = str(item.get("camera_id", cam_id) or cam_id)
+                                i_type = str(item.get("insight_type", ""))
+                                sev = str(item.get("severity", "medium"))
+                                t_id = (
+                                    int(item["track_id"])
+                                    if item.get("track_id") is not None
+                                    else None
+                                )
+                                z_id = (
+                                    str(item["zone_id"])
+                                    if item.get("zone_id") is not None
+                                    else None
+                                )
+                                s_t = float(item.get("start_time", 0.0))
+                                e_t = float(item.get("end_time", 0.0))
+                                dur = float(item.get("duration", e_t - s_t))
+                                desc = str(item.get("description", ""))
+                                snap = (
+                                    str(item["evidence_snapshot_path"])
+                                    if item.get("evidence_snapshot_path")
+                                    else None
+                                )
+                                crop = (
+                                    str(item["evidence_crop_path"])
+                                    if item.get("evidence_crop_path")
+                                    else None
+                                )
+                                clip = (
+                                    str(item["video_clip_path"])
+                                    if item.get("video_clip_path")
+                                    else ""
+                                )
+                                story = (
+                                    str(item["storyboard_path"])
+                                    if item.get("storyboard_path")
+                                    else ""
+                                )
+                                det_json = json.dumps(item.get("details", {}))
+                                insight_rows.append(
+                                    (
+                                        i_id,
+                                        c_id,
+                                        i_type,
+                                        sev,
+                                        t_id,
+                                        z_id,
+                                        s_t,
+                                        e_t,
+                                        dur,
+                                        desc,
+                                        snap,
+                                        crop,
+                                        clip,
+                                        story,
+                                        det_json,
+                                    )
+                                )
+                except (json.JSONDecodeError, OSError):
+                    pass
 
         conn.executemany(
-            "INSERT INTO detections (frame_id, x1, y1, x2, y2, confidence, class_name) "
-            "VALUES (?, ?, ?, ?, ?, ?, ?)",
+            "INSERT INTO detections (camera_id, frame_id, x1, y1, x2, y2, confidence, class_name) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
             det_rows,
         )
         conn.executemany(
-            "INSERT INTO track_observations (frame_id, track_id, x1, y1, x2, y2, confidence) "
-            "VALUES (?, ?, ?, ?, ?, ?, ?)",
+            "INSERT INTO track_observations (camera_id, frame_id, track_id, x1, y1, x2, y2, confidence) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
             obs_rows,
         )
         conn.executemany(
-            "INSERT INTO tracks (track_id, start_frame, end_frame, duration_frames, "
-            "duration_seconds, observed_frames, path_length_px) VALUES (?, ?, ?, ?, ?, ?, ?)",
+            "INSERT OR REPLACE INTO tracks (camera_id, track_id, start_frame, end_frame, duration_frames, "
+            "duration_seconds, observed_frames, path_length_px) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
             track_rows,
         )
         conn.executemany(
-            "INSERT INTO trajectories (track_id, frame_id, timestamp, x, y) "
-            "VALUES (?, ?, ?, ?, ?)",
+            "INSERT OR REPLACE INTO trajectories (camera_id, track_id, frame_id, timestamp, x, y) "
+            "VALUES (?, ?, ?, ?, ?, ?)",
             traj_rows,
         )
         conn.executemany(
-            "INSERT INTO events (event_id, event_type, track_id, zone_id, start_time, "
-            "end_time, duration_seconds, snapshot_path, crop_path) "
-            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            "INSERT OR REPLACE INTO events (camera_id, event_id, event_type, track_id, zone_id, start_time, "
+            "end_time, duration_seconds, snapshot_path, crop_path, video_clip_path, storyboard_path) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
             event_rows,
         )
         conn.executemany(
-            "INSERT INTO zone_counts (zone_id, entry_count, exit_count, "
-            "total_dwell_seconds, peak_occupancy) VALUES (?, ?, ?, ?, ?)",
+            "INSERT OR REPLACE INTO zone_counts (camera_id, zone_id, entry_count, exit_count, "
+            "total_dwell_seconds, peak_occupancy) VALUES (?, ?, ?, ?, ?, ?)",
             zc_rows,
         )
         conn.executemany(
-            "INSERT INTO line_counts (line_id, crossings_ab, crossings_ba, total) "
-            "VALUES (?, ?, ?, ?)",
+            "INSERT OR REPLACE INTO line_counts (camera_id, line_id, crossings_ab, crossings_ba, total) "
+            "VALUES (?, ?, ?, ?, ?)",
             lc_rows,
         )
+        if insight_rows:
+            conn.executemany(
+                "INSERT OR REPLACE INTO insights (insight_id, camera_id, insight_type, severity, "
+                "track_id, zone_id, start_time, end_time, duration, description, "
+                "evidence_snapshot_path, evidence_crop_path, video_clip_path, storyboard_path, details_json) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                insight_rows,
+            )
         conn.commit()
+
+        cam_count = conn.execute("SELECT count(*) FROM cameras").fetchone()[0]
+        total_dets = conn.execute("SELECT count(*) FROM detections").fetchone()[0]
+        total_obs = conn.execute("SELECT count(*) FROM track_observations").fetchone()[
+            0
+        ]
+        total_trks = conn.execute("SELECT count(*) FROM tracks").fetchone()[0]
+        total_trajs = conn.execute("SELECT count(*) FROM trajectories").fetchone()[0]
+        total_evs = conn.execute("SELECT count(*) FROM events").fetchone()[0]
+        total_zc = conn.execute("SELECT count(*) FROM zone_counts").fetchone()[0]
+        total_lc = conn.execute("SELECT count(*) FROM line_counts").fetchone()[0]
+        total_ins = conn.execute("SELECT count(*) FROM insights").fetchone()[0]
 
     return DatabaseSummary(
         db_path=str(out_db),
         source_name=config.source_name,
-        detections_count=len(det_rows),
-        track_observations_count=len(obs_rows),
-        tracks_count=len(track_rows),
-        trajectories_count=len(traj_rows),
-        events_count=len(event_rows),
-        zone_counts_rows=len(zc_rows),
-        line_counts_rows=len(lc_rows),
+        detections_count=total_dets,
+        track_observations_count=total_obs,
+        tracks_count=total_trks,
+        trajectories_count=total_trajs,
+        events_count=total_evs,
+        zone_counts_rows=total_zc,
+        line_counts_rows=total_lc,
+        cameras_count=max(1, cam_count),
+        insights_count=total_ins,
     )
+
+
+def ingest_multi_camera_intelligence_db(
+    db_path: Path | str,
+    configs: list[SearchConfig],
+    *,
+    project_root: Path | str | None = None,
+    clear_existing: bool = True,
+    cameras_metadata: list[CameraMetadata] | None = None,
+) -> DatabaseSummary:
+    """Ingest multiple camera runs into one unified intelligence.db."""
+    if not configs:
+        raise ValueError("configs must be non-empty")
+    summary: DatabaseSummary | None = None
+    meta_by_cam: dict[str, CameraMetadata] = {}
+    if cameras_metadata:
+        for m in cameras_metadata:
+            meta_by_cam[m.camera_id] = m
+
+    for i, cfg in enumerate(configs):
+        c_clear = clear_existing and (i == 0)
+        cam_id = (
+            (cfg.camera_id.strip() if cfg.camera_id else "")
+            or Path(cfg.source_name).stem
+            or f"cam_{i + 1}"
+        )
+        summary = ingest_intelligence_db(
+            db_path,
+            cfg,
+            project_root=project_root,
+            clear_existing=c_clear,
+            camera_metadata=meta_by_cam.get(cam_id),
+        )
+    assert summary is not None
+    return summary
 
 
 def query_events(
     db_path: Path | str,
     *,
+    camera_id: str | None = None,
     event_type: str | None = None,
     zone_id: str | None = None,
     track_id: int | None = None,
     min_time: float | None = None,
     max_time: float | None = None,
     min_duration: float | None = None,
+    has_clip: bool | None = None,
+    has_storyboard: bool | None = None,
     limit: int = 50,
 ) -> list[EventSearchResult]:
-    """Query events from intelligence.db by type, zone/line, track_id, time range, or duration."""
+    """Query events from intelligence.db by type, zone/line, track_id, time range, duration, camera, or clip presence."""
     if limit <= 0:
         raise ValueError("limit must be positive")
     path = Path(db_path)
@@ -652,6 +1078,10 @@ def query_events(
 
     clauses: list[str] = []
     params: list[Any] = []
+
+    if camera_id is not None and camera_id.strip():
+        clauses.append("camera_id = ?")
+        params.append(camera_id.strip())
 
     if event_type is not None and event_type.strip():
         clauses.append("event_type = ?")
@@ -678,10 +1108,20 @@ def query_events(
         clauses.append("duration_seconds >= ?")
         params.append(float(min_duration))
 
+    if has_clip is True:
+        clauses.append("(video_clip_path IS NOT NULL AND video_clip_path != '')")
+    elif has_clip is False:
+        clauses.append("(video_clip_path IS NULL OR video_clip_path = '')")
+
+    if has_storyboard is True:
+        clauses.append("(storyboard_path IS NOT NULL AND storyboard_path != '')")
+    elif has_storyboard is False:
+        clauses.append("(storyboard_path IS NULL OR storyboard_path = '')")
+
     where_sql = f"WHERE {' AND '.join(clauses)}" if clauses else ""
     sql = (
-        "SELECT event_id, event_type, track_id, zone_id, start_time, end_time, "
-        "duration_seconds, snapshot_path, crop_path "
+        "SELECT camera_id, event_id, event_type, track_id, zone_id, start_time, end_time, "
+        "duration_seconds, snapshot_path, crop_path, video_clip_path, storyboard_path "
         f"FROM events {where_sql} "
         "ORDER BY start_time ASC, event_id ASC LIMIT ?"
     )
@@ -692,15 +1132,18 @@ def query_events(
         for row in conn.execute(sql, params).fetchall():
             results.append(
                 EventSearchResult(
-                    event_id=str(row[0]),
-                    event_type=str(row[1]),
-                    track_id=int(row[2]),
-                    zone_id=str(row[3]),
-                    start_time=float(row[4]),
-                    end_time=float(row[5]),
-                    duration_seconds=float(row[6]),
-                    snapshot_path=str(row[7]),
-                    crop_path=str(row[8]),
+                    camera_id=str(row[0] or ""),
+                    event_id=str(row[1]),
+                    event_type=str(row[2]),
+                    track_id=int(row[3]),
+                    zone_id=str(row[4]),
+                    start_time=float(row[5]),
+                    end_time=float(row[6]),
+                    duration_seconds=float(row[7]),
+                    snapshot_path=str(row[8]),
+                    crop_path=str(row[9]),
+                    video_clip_path=str(row[10] or "") if len(row) > 10 else "",
+                    storyboard_path=str(row[11] or "") if len(row) > 11 else "",
                 )
             )
     return results
@@ -709,13 +1152,14 @@ def query_events(
 def query_tracks(
     db_path: Path | str,
     *,
+    camera_id: str | None = None,
     min_duration: float | None = None,
     max_duration: float | None = None,
     min_path_length_px: float | None = None,
     track_id: int | None = None,
     limit: int = 50,
 ) -> list[TrackSearchResult]:
-    """Query tracks from intelligence.db by duration range, path length, or track_id."""
+    """Query tracks from intelligence.db by duration range, path length, track_id, or camera."""
     if limit <= 0:
         raise ValueError("limit must be positive")
     path = Path(db_path)
@@ -724,6 +1168,10 @@ def query_tracks(
 
     clauses: list[str] = []
     params: list[Any] = []
+
+    if camera_id is not None and camera_id.strip():
+        clauses.append("t.camera_id = ?")
+        params.append(camera_id.strip())
 
     if min_duration is not None:
         clauses.append("t.duration_seconds >= ?")
@@ -743,13 +1191,13 @@ def query_tracks(
 
     where_sql = f"WHERE {' AND '.join(clauses)}" if clauses else ""
     sql = (
-        "SELECT t.track_id, t.start_frame, t.end_frame, t.duration_frames, "
+        "SELECT t.camera_id, t.track_id, t.start_frame, t.end_frame, t.duration_frames, "
         "t.duration_seconds, t.observed_frames, t.path_length_px, "
         "COUNT(e.event_id) AS event_count "
         "FROM tracks t "
-        "LEFT JOIN events e ON e.track_id = t.track_id "
+        "LEFT JOIN events e ON e.camera_id = t.camera_id AND e.track_id = t.track_id "
         f"{where_sql} "
-        "GROUP BY t.track_id "
+        "GROUP BY t.camera_id, t.track_id "
         "ORDER BY t.duration_seconds DESC, t.track_id ASC LIMIT ?"
     )
     params.append(int(limit))
@@ -759,14 +1207,275 @@ def query_tracks(
         for row in conn.execute(sql, params).fetchall():
             results.append(
                 TrackSearchResult(
-                    track_id=int(row[0]),
-                    start_frame=int(row[1]),
-                    end_frame=int(row[2]),
-                    duration_frames=int(row[3]),
-                    duration_seconds=float(row[4]),
-                    observed_frames=int(row[5]),
-                    path_length_px=float(row[6]),
-                    event_count=int(row[7]),
+                    camera_id=str(row[0] or ""),
+                    track_id=int(row[1]),
+                    start_frame=int(row[2]),
+                    end_frame=int(row[3]),
+                    duration_frames=int(row[4]),
+                    duration_seconds=float(row[5]),
+                    observed_frames=int(row[6]),
+                    path_length_px=float(row[7]),
+                    event_count=int(row[8]),
+                )
+            )
+    return results
+
+
+def query_camera_summary(
+    db_path: Path | str,
+) -> list[CameraActivitySummary]:
+    """Query activity breakdown grouped by registered camera stream."""
+    path = Path(db_path)
+    if not path.is_file():
+        raise FileNotFoundError(f"SQLite database not found: {path}")
+
+    summaries: list[CameraActivitySummary] = []
+    with closing(sqlite3.connect(path)) as conn:
+        cameras = conn.execute(
+            "SELECT camera_id, source_name FROM cameras ORDER BY camera_id"
+        ).fetchall()
+        if not cameras:
+            cameras = conn.execute(
+                "SELECT DISTINCT camera_id, camera_id FROM tracks ORDER BY camera_id"
+            ).fetchall()
+
+        for cam_id, src_name in cameras:
+            cid = str(cam_id)
+            dets = conn.execute(
+                "SELECT count(*) FROM detections WHERE camera_id = ?", (cid,)
+            ).fetchone()[0]
+            trks = conn.execute(
+                "SELECT count(*) FROM tracks WHERE camera_id = ?", (cid,)
+            ).fetchone()[0]
+            evs = conn.execute(
+                "SELECT count(*), coalesce(sum(duration_seconds), 0.0) FROM events WHERE camera_id = ?",
+                (cid,),
+            ).fetchone()
+            total_evs = int(evs[0])
+            total_dwell = float(evs[1])
+            zc = conn.execute(
+                "SELECT count(*) FROM zone_counts WHERE camera_id = ?", (cid,)
+            ).fetchone()[0]
+            lc = conn.execute(
+                "SELECT count(*) FROM line_counts WHERE camera_id = ?", (cid,)
+            ).fetchone()[0]
+            summaries.append(
+                CameraActivitySummary(
+                    camera_id=cid,
+                    source_name=str(src_name or cid),
+                    total_detections=dets,
+                    total_tracks=trks,
+                    total_events=total_evs,
+                    total_dwell_seconds=round(total_dwell, 4),
+                    zones_active=zc,
+                    lines_active=lc,
+                )
+            )
+    return summaries
+
+
+def insert_insights(
+    db_path: Path | str,
+    insights: Sequence[Any],
+    *,
+    camera_id: str | None = None,
+) -> int:
+    """Insert or replace insight records into the intelligence database."""
+    path = Path(db_path)
+    if not path.is_file():
+        init_intelligence_db(path)
+
+    rows: list[tuple[Any, ...]] = []
+    for ins in insights:
+        if isinstance(ins, dict):
+            i_id = str(ins["insight_id"])
+            c_id = (
+                str(camera_id)
+                if camera_id is not None
+                else str(ins.get("camera_id", ""))
+            )
+            i_type = str(ins["insight_type"])
+            sev = str(ins.get("severity", "medium"))
+            t_id = int(ins["track_id"]) if ins.get("track_id") is not None else None
+            z_id = str(ins["zone_id"]) if ins.get("zone_id") is not None else None
+            t_start = float(ins["start_time"])
+            t_end = float(ins["end_time"])
+            dur = float(ins.get("duration", t_end - t_start))
+            desc = str(ins.get("description", ""))
+            snap = (
+                str(ins["evidence_snapshot_path"])
+                if ins.get("evidence_snapshot_path")
+                else None
+            )
+            crop = (
+                str(ins["evidence_crop_path"])
+                if ins.get("evidence_crop_path")
+                else None
+            )
+            clip = str(ins.get("video_clip_path", "") or "")
+            story = str(ins.get("storyboard_path", "") or "")
+            det_json = json.dumps(ins.get("details", {}))
+        else:
+            i_id = str(ins.insight_id)
+            c_id = (
+                str(camera_id)
+                if camera_id is not None
+                else str(getattr(ins, "camera_id", ""))
+            )
+            i_type = str(ins.insight_type)
+            sev = str(getattr(ins, "severity", "medium"))
+            t_id = (
+                int(ins.track_id)
+                if getattr(ins, "track_id", None) is not None
+                else None
+            )
+            z_id = (
+                str(ins.zone_id) if getattr(ins, "zone_id", None) is not None else None
+            )
+            t_start = float(ins.start_time)
+            t_end = float(ins.end_time)
+            dur = float(getattr(ins, "duration", t_end - t_start))
+            desc = str(getattr(ins, "description", ""))
+            snap = (
+                str(ins.evidence_snapshot_path)
+                if getattr(ins, "evidence_snapshot_path", None)
+                else None
+            )
+            crop = (
+                str(ins.evidence_crop_path)
+                if getattr(ins, "evidence_crop_path", None)
+                else None
+            )
+            clip = str(getattr(ins, "video_clip_path", "") or "")
+            story = str(getattr(ins, "storyboard_path", "") or "")
+            details_obj = getattr(ins, "details", {})
+            det_json = (
+                json.dumps(details_obj) if isinstance(details_obj, dict) else "{}"
+            )
+
+        rows.append(
+            (
+                i_id,
+                c_id,
+                i_type,
+                sev,
+                t_id,
+                z_id,
+                t_start,
+                t_end,
+                dur,
+                desc,
+                snap,
+                crop,
+                clip,
+                story,
+                det_json,
+            )
+        )
+
+    if not rows:
+        return 0
+
+    with closing(sqlite3.connect(path)) as conn:
+        conn.executemany(
+            """
+            INSERT OR REPLACE INTO insights (
+                insight_id, camera_id, insight_type, severity, track_id, zone_id,
+                start_time, end_time, duration, description,
+                evidence_snapshot_path, evidence_crop_path, video_clip_path, storyboard_path, details_json
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            rows,
+        )
+        conn.commit()
+    return len(rows)
+
+
+def query_insights(
+    db_path: Path | str,
+    *,
+    camera_id: str | None = None,
+    insight_type: str | None = None,
+    severity: str | None = None,
+    track_id: int | None = None,
+    zone_id: str | None = None,
+    min_time: float | None = None,
+    max_time: float | None = None,
+    limit: int = 50,
+) -> list[InsightSearchResult]:
+    """Query behavioral insights from intelligence.db by type, severity, camera, zone, track, or time."""
+    if limit <= 0:
+        raise ValueError("limit must be positive")
+    path = Path(db_path)
+    if not path.is_file():
+        raise FileNotFoundError(f"SQLite database not found: {path}")
+
+    clauses: list[str] = []
+    params: list[Any] = []
+
+    if camera_id is not None and camera_id.strip():
+        clauses.append("camera_id = ?")
+        params.append(camera_id.strip())
+
+    if insight_type is not None and insight_type.strip():
+        clauses.append("insight_type = ?")
+        params.append(insight_type.strip())
+
+    if severity is not None and severity.strip():
+        clauses.append("severity = ?")
+        params.append(severity.strip().lower())
+
+    if track_id is not None:
+        clauses.append("track_id = ?")
+        params.append(int(track_id))
+
+    if zone_id is not None and zone_id.strip():
+        z = zone_id.strip()
+        clauses.append("(zone_id = ? OR zone_id LIKE ?)")
+        params.extend([z, f"{z}:%"])
+
+    if min_time is not None:
+        clauses.append("end_time >= ?")
+        params.append(float(min_time))
+
+    if max_time is not None:
+        clauses.append("start_time <= ?")
+        params.append(float(max_time))
+
+    where_sql = f"WHERE {' AND '.join(clauses)}" if clauses else ""
+    sql = (
+        "SELECT camera_id, insight_id, insight_type, severity, track_id, zone_id, "
+        "start_time, end_time, duration, description, evidence_snapshot_path, "
+        "evidence_crop_path, video_clip_path, storyboard_path, details_json "
+        f"FROM insights {where_sql} "
+        "ORDER BY start_time ASC, insight_id ASC LIMIT ?"
+    )
+    params.append(int(limit))
+
+    results: list[InsightSearchResult] = []
+    with closing(sqlite3.connect(path)) as conn:
+        for row in conn.execute(sql, params):
+            try:
+                details = json.loads(row[14]) if row[14] else {}
+            except (json.JSONDecodeError, TypeError, IndexError):
+                details = {}
+            results.append(
+                InsightSearchResult(
+                    camera_id=row[0],
+                    insight_id=row[1],
+                    insight_type=row[2],
+                    severity=row[3],
+                    track_id=row[4],
+                    zone_id=row[5],
+                    start_time=row[6],
+                    end_time=row[7],
+                    duration=row[8],
+                    description=row[9],
+                    evidence_snapshot_path=row[10],
+                    evidence_crop_path=row[11],
+                    video_clip_path=str(row[12] or "") if len(row) > 12 else "",
+                    storyboard_path=str(row[13] or "") if len(row) > 13 else "",
+                    details=details,
                 )
             )
     return results
@@ -778,7 +1487,7 @@ def lookup_event_evidence(
     *,
     evidence_root: Path | str | None = None,
 ) -> EvidenceLookupResult:
-    """Look up an event by event_id and resolve/verify its snapshot_path and crop_path on disk."""
+    """Look up an event by event_id and resolve/verify its snapshot_path, crop_path, video_clip_path, and storyboard_path on disk."""
     if not event_id.strip():
         raise ValueError("event_id must be non-empty")
     path = Path(db_path)
@@ -787,8 +1496,8 @@ def lookup_event_evidence(
 
     with closing(sqlite3.connect(path)) as conn:
         row = conn.execute(
-            "SELECT event_id, event_type, track_id, zone_id, start_time, end_time, "
-            "duration_seconds, snapshot_path, crop_path "
+            "SELECT camera_id, event_id, event_type, track_id, zone_id, start_time, end_time, "
+            "duration_seconds, snapshot_path, crop_path, video_clip_path, storyboard_path "
             "FROM events WHERE event_id = ?",
             (event_id.strip(),),
         ).fetchone()
@@ -797,15 +1506,18 @@ def lookup_event_evidence(
         raise KeyError(f"Event ID not found in intelligence.db: {event_id!r}")
 
     ev = EventSearchResult(
-        event_id=str(row[0]),
-        event_type=str(row[1]),
-        track_id=int(row[2]),
-        zone_id=str(row[3]),
-        start_time=float(row[4]),
-        end_time=float(row[5]),
-        duration_seconds=float(row[6]),
-        snapshot_path=str(row[7]),
-        crop_path=str(row[8]),
+        camera_id=str(row[0] or ""),
+        event_id=str(row[1]),
+        event_type=str(row[2]),
+        track_id=int(row[3]),
+        zone_id=str(row[4]),
+        start_time=float(row[5]),
+        end_time=float(row[6]),
+        duration_seconds=float(row[7]),
+        snapshot_path=str(row[8]),
+        crop_path=str(row[9]),
+        video_clip_path=str(row[10] or "") if len(row) > 10 else "",
+        storyboard_path=str(row[11] or "") if len(row) > 11 else "",
     )
 
     root = (
@@ -829,11 +1541,34 @@ def lookup_event_evidence(
         if Path(ev.crop_path).is_absolute()
         else (root / ev.crop_path)
     )
+    clip_file = (
+        (
+            Path(ev.video_clip_path)
+            if Path(ev.video_clip_path).is_absolute()
+            else (root / ev.video_clip_path)
+        )
+        if ev.video_clip_path
+        else None
+    )
+    story_file = (
+        (
+            Path(ev.storyboard_path)
+            if Path(ev.storyboard_path).is_absolute()
+            else (root / ev.storyboard_path)
+        )
+        if ev.storyboard_path
+        else None
+    )
 
     snap_exists = snap_file.is_file()
     crop_exists = crop_file.is_file()
     snap_size = snap_file.stat().st_size if snap_exists else 0
     crop_size = crop_file.stat().st_size if crop_exists else 0
+
+    clip_exists = clip_file.is_file() if clip_file else False
+    story_exists = story_file.is_file() if story_file else False
+    clip_size = clip_file.stat().st_size if clip_exists and clip_file else 0
+    story_size = story_file.stat().st_size if story_exists and story_file else 0
 
     return EvidenceLookupResult(
         event=ev,
@@ -843,6 +1578,12 @@ def lookup_event_evidence(
         crop_exists=crop_exists,
         snapshot_size_bytes=snap_size,
         crop_size_bytes=crop_size,
+        resolved_video_clip_path=str(clip_file) if clip_file else "",
+        resolved_storyboard_path=str(story_file) if story_file else "",
+        video_clip_exists=clip_exists,
+        storyboard_exists=story_exists,
+        video_clip_size_bytes=clip_size,
+        storyboard_size_bytes=story_size,
     )
 
 
@@ -1178,6 +1919,37 @@ def build_parser() -> argparse.ArgumentParser:
         help="Query tracks table instead of events table.",
     )
     parser.add_argument(
+        "--insights",
+        action="store_true",
+        help="Query behavioral insights table instead of events.",
+    )
+    parser.add_argument(
+        "--insight-type",
+        type=str,
+        default=None,
+        help="Filter insights by type (e.g. loitering, wrong_way, high_speed, stationary_in_zone, cross_camera_transition).",
+    )
+    parser.add_argument(
+        "--severity",
+        type=str,
+        default=None,
+        help="Filter insights by severity (e.g. info, low, medium, high, critical).",
+    )
+    parser.add_argument(
+        "-c",
+        "--camera",
+        "--camera-id",
+        dest="camera_id",
+        type=str,
+        default=None,
+        help="Filter events or tracks by camera identifier (e.g. entrance, concourse).",
+    )
+    parser.add_argument(
+        "--camera-summary",
+        action="store_true",
+        help="Query activity breakdown grouped by registered camera stream.",
+    )
+    parser.add_argument(
         "--evidence-event-id",
         type=str,
         default=None,
@@ -1188,6 +1960,16 @@ def build_parser() -> argparse.ArgumentParser:
         type=Path,
         default=None,
         help="Optional root directory to resolve relative snapshot_path and crop_path.",
+    )
+    parser.add_argument(
+        "--clips",
+        action="store_true",
+        help="Filter events having an associated MP4 video evidence clip.",
+    )
+    parser.add_argument(
+        "--storyboards",
+        action="store_true",
+        help="Filter events having an associated composite storyboard image.",
     )
     parser.add_argument(
         "--limit",
@@ -1249,6 +2031,21 @@ def main(argv: list[str] | None = None) -> int:
 
     db_path = args.db if args.db is not None else (args.output_dir / "intelligence.db")
 
+    if args.camera_summary:
+        summaries = query_camera_summary(db_path)
+        if args.json:
+            print(json.dumps([s.to_dict() for s in summaries], indent=2))
+        else:
+            print(f"=== Camera Activity Summary ({len(summaries)} cameras) ===")
+            for s in summaries:
+                print(
+                    f"Camera [{s.camera_id}] (Source: {s.source_name}): "
+                    f"{s.total_detections} detections, {s.total_tracks} tracks, "
+                    f"{s.total_events} events ({s.total_dwell_seconds:.2f}s dwell), "
+                    f"{s.zones_active} zones active, {s.lines_active} lines active"
+                )
+        return 0
+
     if args.evidence_event_id is not None:
         ev_root = (
             args.evidence_root
@@ -1263,19 +2060,32 @@ def main(argv: list[str] | None = None) -> int:
         if args.json:
             print(json.dumps(result.to_dict(), indent=2))
         else:
+            clip_str = (
+                f", clip={result.event.video_clip_path} (exists={result.video_clip_exists}, "
+                f"{result.video_clip_size_bytes}B)"
+                if result.event.video_clip_path
+                else ""
+            )
+            sb_str = (
+                f", storyboard={result.event.storyboard_path} (exists={result.storyboard_exists}, "
+                f"{result.storyboard_size_bytes}B)"
+                if result.event.storyboard_path
+                else ""
+            )
             print(
                 f"Event {result.event.event_id} ({result.event.event_type}, "
                 f"track={result.event.track_id}, zone={result.event.zone_id}): "
                 f"snapshot={result.event.snapshot_path} (exists={result.snapshot_exists}, "
                 f"{result.snapshot_size_bytes}B), "
                 f"crop={result.event.crop_path} (exists={result.crop_exists}, "
-                f"{result.crop_size_bytes}B)"
+                f"{result.crop_size_bytes}B){clip_str}{sb_str}"
             )
         return 0
 
     if args.tracks:
         tracks = query_tracks(
             db_path,
+            camera_id=args.camera_id,
             min_duration=args.min_duration,
             max_duration=args.max_duration,
             min_path_length_px=args.min_path_length,
@@ -1286,21 +2096,55 @@ def main(argv: list[str] | None = None) -> int:
         else:
             print(f"Matched {len(tracks)} track(s):")
             for t in tracks:
+                cam_label = f" cam={t.camera_id}" if t.camera_id else ""
                 print(
-                    f"  track_id={t.track_id} frames={t.start_frame}..{t.end_frame} "
+                    f"  track_id={t.track_id}{cam_label} frames={t.start_frame}..{t.end_frame} "
                     f"duration={t.duration_seconds:.4f}s "
                     f"path_length={t.path_length_px:.2f}px events={t.event_count}"
                 )
         return 0
 
+    if args.insights or args.insight_type or args.severity:
+        insights_res = query_insights(
+            db_path,
+            camera_id=args.camera_id,
+            insight_type=args.insight_type,
+            severity=args.severity,
+            track_id=args.track_id,
+            zone_id=args.zone,
+            min_time=args.min_time,
+            max_time=args.max_time,
+            limit=args.limit,
+        )
+        if args.json:
+            print(json.dumps([ins.to_dict() for ins in insights_res], indent=2))
+        else:
+            print(f"Matched {len(insights_res)} insight(s):")
+            for ins in insights_res:
+                cam_label = f" cam={ins.camera_id}" if ins.camera_id else ""
+                track_label = (
+                    f" track={ins.track_id}" if ins.track_id is not None else ""
+                )
+                zone_label = f" zone={ins.zone_id}" if ins.zone_id else ""
+                print(
+                    f"  [{ins.insight_id}]{cam_label} type={ins.insight_type} "
+                    f"sev={ins.severity}{track_label}{zone_label} "
+                    f"time={ins.start_time:.2f}..{ins.end_time:.2f}s "
+                    f"desc='{ins.description}'"
+                )
+        return 0
+
     events = query_events(
         db_path,
+        camera_id=args.camera_id,
         event_type=args.event_type,
         zone_id=args.zone,
         track_id=args.track_id,
         min_time=args.min_time,
         max_time=args.max_time,
         min_duration=args.min_duration,
+        has_clip=True if args.clips else None,
+        has_storyboard=True if args.storyboards else None,
         limit=args.limit,
     )
     if args.json:
@@ -1308,10 +2152,13 @@ def main(argv: list[str] | None = None) -> int:
     else:
         print(f"Matched {len(events)} event(s):")
         for e in events:
+            cam_label = f" cam={e.camera_id}" if e.camera_id else ""
+            clip_label = f" clip={e.video_clip_path}" if e.video_clip_path else ""
+            sb_label = f" sb={e.storyboard_path}" if e.storyboard_path else ""
             print(
-                f"  {e.event_id} [{e.event_type}] track={e.track_id} zone={e.zone_id} "
+                f"  {e.event_id} [{e.event_type}]{cam_label} track={e.track_id} zone={e.zone_id} "
                 f"time={e.start_time:.4f}..{e.end_time:.4f}s "
-                f"(dur={e.duration_seconds:.4f}s) snap={e.snapshot_path}"
+                f"(dur={e.duration_seconds:.4f}s) snap={e.snapshot_path}{clip_label}{sb_label}"
             )
     return 0
 

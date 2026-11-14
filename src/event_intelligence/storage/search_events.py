@@ -1065,9 +1065,11 @@ def query_events(
     min_time: float | None = None,
     max_time: float | None = None,
     min_duration: float | None = None,
+    has_clip: bool | None = None,
+    has_storyboard: bool | None = None,
     limit: int = 50,
 ) -> list[EventSearchResult]:
-    """Query events from intelligence.db by type, zone/line, track_id, time range, duration, or camera."""
+    """Query events from intelligence.db by type, zone/line, track_id, time range, duration, camera, or clip presence."""
     if limit <= 0:
         raise ValueError("limit must be positive")
     path = Path(db_path)
@@ -1105,6 +1107,16 @@ def query_events(
     if min_duration is not None:
         clauses.append("duration_seconds >= ?")
         params.append(float(min_duration))
+
+    if has_clip is True:
+        clauses.append("(video_clip_path IS NOT NULL AND video_clip_path != '')")
+    elif has_clip is False:
+        clauses.append("(video_clip_path IS NULL OR video_clip_path = '')")
+
+    if has_storyboard is True:
+        clauses.append("(storyboard_path IS NOT NULL AND storyboard_path != '')")
+    elif has_storyboard is False:
+        clauses.append("(storyboard_path IS NULL OR storyboard_path = '')")
 
     where_sql = f"WHERE {' AND '.join(clauses)}" if clauses else ""
     sql = (
@@ -1950,6 +1962,16 @@ def build_parser() -> argparse.ArgumentParser:
         help="Optional root directory to resolve relative snapshot_path and crop_path.",
     )
     parser.add_argument(
+        "--clips",
+        action="store_true",
+        help="Filter events having an associated MP4 video evidence clip.",
+    )
+    parser.add_argument(
+        "--storyboards",
+        action="store_true",
+        help="Filter events having an associated composite storyboard image.",
+    )
+    parser.add_argument(
         "--limit",
         type=int,
         default=100,
@@ -2038,13 +2060,25 @@ def main(argv: list[str] | None = None) -> int:
         if args.json:
             print(json.dumps(result.to_dict(), indent=2))
         else:
+            clip_str = (
+                f", clip={result.event.video_clip_path} (exists={result.video_clip_exists}, "
+                f"{result.video_clip_size_bytes}B)"
+                if result.event.video_clip_path
+                else ""
+            )
+            sb_str = (
+                f", storyboard={result.event.storyboard_path} (exists={result.storyboard_exists}, "
+                f"{result.storyboard_size_bytes}B)"
+                if result.event.storyboard_path
+                else ""
+            )
             print(
                 f"Event {result.event.event_id} ({result.event.event_type}, "
                 f"track={result.event.track_id}, zone={result.event.zone_id}): "
                 f"snapshot={result.event.snapshot_path} (exists={result.snapshot_exists}, "
                 f"{result.snapshot_size_bytes}B), "
                 f"crop={result.event.crop_path} (exists={result.crop_exists}, "
-                f"{result.crop_size_bytes}B)"
+                f"{result.crop_size_bytes}B){clip_str}{sb_str}"
             )
         return 0
 
@@ -2109,6 +2143,8 @@ def main(argv: list[str] | None = None) -> int:
         min_time=args.min_time,
         max_time=args.max_time,
         min_duration=args.min_duration,
+        has_clip=True if args.clips else None,
+        has_storyboard=True if args.storyboards else None,
         limit=args.limit,
     )
     if args.json:
@@ -2117,10 +2153,12 @@ def main(argv: list[str] | None = None) -> int:
         print(f"Matched {len(events)} event(s):")
         for e in events:
             cam_label = f" cam={e.camera_id}" if e.camera_id else ""
+            clip_label = f" clip={e.video_clip_path}" if e.video_clip_path else ""
+            sb_label = f" sb={e.storyboard_path}" if e.storyboard_path else ""
             print(
                 f"  {e.event_id} [{e.event_type}]{cam_label} track={e.track_id} zone={e.zone_id} "
                 f"time={e.start_time:.4f}..{e.end_time:.4f}s "
-                f"(dur={e.duration_seconds:.4f}s) snap={e.snapshot_path}"
+                f"(dur={e.duration_seconds:.4f}s) snap={e.snapshot_path}{clip_label}{sb_label}"
             )
     return 0
 
