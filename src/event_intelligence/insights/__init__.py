@@ -7,6 +7,7 @@ from event_intelligence.insights.detectors import (
     detect_loitering_insights,
     detect_speed_anomaly_insights,
     detect_stationary_and_drop_insights,
+    detect_tailgating_insights,
     detect_wrong_way_insights,
     generate_all_insights,
 )
@@ -36,6 +37,7 @@ __all__ = [
     "detect_loitering_insights",
     "detect_speed_anomaly_insights",
     "detect_stationary_and_drop_insights",
+    "detect_tailgating_insights",
     "detect_wrong_way_insights",
     "generate_all_insights",
     "generate_intelligence_report_markdown",

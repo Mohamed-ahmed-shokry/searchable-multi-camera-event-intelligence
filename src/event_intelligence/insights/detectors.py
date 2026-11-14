@@ -533,6 +533,103 @@ def detect_cross_camera_transitions(
     return insights
 
 
+def detect_tailgating_insights(
+    events: Sequence[Any],
+    config: InsightConfig,
+    *,
+    camera_id: str = "default",
+    start_index: int = 1,
+) -> list[InsightRecord]:
+    """Detect rapid consecutive multi-person crossings on the same tripwire line (tailgating)."""
+    line_events = [
+        ev
+        for ev in events
+        if getattr(ev, "event_type", None) == "line_crossing"
+        and getattr(ev, "zone_id", None)
+    ]
+    if len(line_events) < 2:
+        return []
+
+    by_line_spec: dict[str, list[Any]] = {}
+    for ev in line_events:
+        spec = str(ev.zone_id)
+        by_line_spec.setdefault(spec, []).append(ev)
+
+    insights: list[InsightRecord] = []
+    idx = start_index
+
+    for full_spec in sorted(by_line_spec):
+        ordered = sorted(
+            by_line_spec[full_spec],
+            key=lambda e: (
+                float(getattr(e, "start_time", 0.0)),
+                int(getattr(e, "track_id", 0)),
+            ),
+        )
+        line_id, sep, direction = full_spec.partition(":")
+        if not sep:
+            line_id = full_spec
+            direction = ""
+
+        is_restricted = (
+            line_id in config.restricted_zones or full_spec in config.restricted_zones
+        )
+
+        for ev1, ev2 in itertools.pairwise(ordered):
+            t1 = int(getattr(ev1, "track_id", 0))
+            t2 = int(getattr(ev2, "track_id", 0))
+            if t1 == t2:
+                continue
+
+            ts1 = float(getattr(ev1, "start_time", 0.0))
+            ts2 = float(getattr(ev2, "start_time", 0.0))
+            gap = ts2 - ts1
+            if 0.0 <= gap <= config.tailgating_max_gap_seconds:
+                if is_restricted or gap <= 0.5 * config.tailgating_max_gap_seconds:
+                    sev = Severity.HIGH.value
+                else:
+                    sev = Severity.MEDIUM.value
+
+                snap_path = getattr(ev2, "evidence_snapshot_path", None) or getattr(
+                    ev2, "snapshot_path", None
+                )
+                crop_path = getattr(ev2, "evidence_crop_path", None) or getattr(
+                    ev2, "crop_path", None
+                )
+
+                insights.append(
+                    InsightRecord(
+                        insight_id=f"ins_{camera_id}_{idx:04d}",
+                        camera_id=camera_id,
+                        insight_type=InsightType.TAILGATING.value,
+                        severity=sev,
+                        track_id=t2,
+                        zone_id=full_spec,
+                        start_time=ts1,
+                        end_time=ts2,
+                        duration=round(gap, 4),
+                        description=(
+                            f"Track {t2} tailgated track {t1} across '{full_spec}' "
+                            f"after {gap:.2f}s (max gap {config.tailgating_max_gap_seconds:.1f}s)"
+                        ),
+                        evidence_snapshot_path=str(snap_path) if snap_path else None,
+                        evidence_crop_path=str(crop_path) if crop_path else None,
+                        details={
+                            "leader_track_id": t1,
+                            "follower_track_id": t2,
+                            "line_id": line_id,
+                            "direction": direction,
+                            "gap_seconds": round(gap, 4),
+                            "threshold_seconds": config.tailgating_max_gap_seconds,
+                            "is_restricted": is_restricted,
+                        },
+                    )
+                )
+                idx += 1
+
+    return insights
+
+
 def generate_all_insights(
     events: Sequence[Any],
     trajectories: Mapping[int, Sequence[Any]],
