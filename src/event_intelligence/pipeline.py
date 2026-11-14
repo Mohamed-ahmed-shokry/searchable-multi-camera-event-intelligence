@@ -1290,6 +1290,16 @@ def build_parser() -> argparse.ArgumentParser:
         help="Skip writing annotated_video.mp4.",
     )
     parser.add_argument(
+        "--clips",
+        action="store_true",
+        help="Enable dynamic MP4 video evidence clip extraction for events and insights.",
+    )
+    parser.add_argument(
+        "--storyboards",
+        action="store_true",
+        help="Enable 3-stage composite storyboard extraction for events and insights.",
+    )
+    parser.add_argument(
         "--json",
         action="store_true",
         help="Print PipelineRunResult as JSON.",
@@ -1342,6 +1352,12 @@ def main(argv: list[str] | None = None) -> int:
         max_frames=(
             args.max_frames if args.max_frames is not None else base_cfg.max_frames
         ),
+        insight_config=base_cfg.insight_config,
+        extract_video_clips=True if args.clips else base_cfg.extract_video_clips,
+        clip_pre_roll_seconds=base_cfg.clip_pre_roll_seconds,
+        clip_post_roll_seconds=base_cfg.clip_post_roll_seconds,
+        render_clip_telemetry=base_cfg.render_clip_telemetry,
+        extract_storyboards=True if args.storyboards else base_cfg.extract_storyboards,
     )
 
     videos: list[Path] = []
