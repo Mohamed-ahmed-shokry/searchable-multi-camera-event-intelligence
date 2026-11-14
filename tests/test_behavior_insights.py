@@ -364,16 +364,35 @@ class TestInsightDetectors(unittest.TestCase):
         cfg = InsightConfig(
             min_loitering_seconds=5.0,
             allowed_line_directions={"gate": "A->B"},
+            tailgating_max_gap_seconds=1.5,
+            max_zone_occupancy=2,
+            min_crowding_seconds=2.0,
+            proximity_distance_px=30.0,
+            min_proximity_seconds=2.0,
         )
         events = [
             DummyEvent("e1", "line_crossing", 2, "gate:B->A", 10.0, 10.0),
             DummyEvent("e2", "dwell_time_event", 1, "lounge", 2.0, 9.0, 7.0),
+            DummyEvent("e3", "dwell_time_event", 3, "lounge", 3.0, 6.0, 3.0),
+            DummyEvent("e4", "line_crossing", 4, "gate:A->B", 12.0, 12.0),
+            DummyEvent("e5", "line_crossing", 5, "gate:A->B", 12.8, 12.8),
         ]
-        insights = generate_all_insights(events, {}, cfg, camera_id="cam_main")
-        self.assertEqual(len(insights), 2)
-        # Should be sorted chronologically by start_time: e2 (t=2.0) before e1 (t=10.0)
-        self.assertEqual(insights[0].start_time, 2.0)
-        self.assertEqual(insights[1].start_time, 10.0)
+        trajectories = {
+            1: [DummyPoint(1, i, float(i), 50.0, 50.0) for i in range(4)],
+            3: [DummyPoint(3, i, float(i), 60.0, 50.0) for i in range(4)],
+        }
+        insights = generate_all_insights(
+            events, trajectories, cfg, camera_id="cam_main"
+        )
+        types = {ins.insight_type for ins in insights}
+        self.assertIn("loitering", types)
+        self.assertIn("wrong_way", types)
+        self.assertIn("crowding", types)
+        self.assertIn("tailgating", types)
+        self.assertIn("proximity_grouping", types)
+        # Should be sorted chronologically by start_time
+        start_times = [ins.start_time for ins in insights]
+        self.assertEqual(start_times, sorted(start_times))
 
 
 if __name__ == "__main__":
