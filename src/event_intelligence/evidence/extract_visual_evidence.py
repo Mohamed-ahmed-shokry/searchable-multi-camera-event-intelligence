@@ -322,9 +322,7 @@ def write_evidence_events_csv(
         else any(rec.video_clip_path or rec.storyboard_path for rec in records)
     )
     header = (
-        EVIDENCE_EVENTS_CSV_CLIPS_HEADER
-        if with_clips
-        else EVIDENCE_EVENTS_CSV_HEADER
+        EVIDENCE_EVENTS_CSV_CLIPS_HEADER if with_clips else EVIDENCE_EVENTS_CSV_HEADER
     )
     with path.open("w", encoding="utf-8", newline="") as handle:
         writer = csv.writer(handle)
@@ -618,7 +616,7 @@ def render_clip_frame_overlay(
         if scene_config is not None
         else frame.copy()
     )
-    height, width = canvas.shape[:2]
+    _height, width = canvas.shape[:2]
 
     # Trajectory breadcrumbs
     if trajectory_points and len(trajectory_points) >= 2:
@@ -635,9 +633,7 @@ def render_clip_frame_overlay(
         )
 
     # Active entity bounding box
-    color = (
-        _event_type_color(event.event_type) if event is not None else (0, 255, 255)
-    )
+    color = _event_type_color(event.event_type) if event is not None else (0, 255, 255)
     if track_detection is not None:
         pt1 = (round(track_detection.x1), round(track_detection.y1))
         pt2 = (round(track_detection.x2), round(track_detection.y2))
@@ -695,7 +691,7 @@ def render_clip_frame_overlay(
     )
 
     timecode = f"t={current_timestamp:.2f}s | f={current_frame_id}"
-    (tw, th), bl = cv2.getTextSize(timecode, font, scale, 1)
+    (tw, _th), _bl = cv2.getTextSize(timecode, font, scale, 1)
     cv2.putText(
         canvas,
         timecode,
@@ -772,13 +768,9 @@ def extract_event_video_clip(
             f"Invalid source video parameters: total_frames={total_source_frames}, fps={fps}"
         )
 
-    start_frame = max(0, int(round((event.start_time - pre_roll_seconds) * fps)))
-    end_frame = min(
-        total_source_frames - 1,
-        int(round((event.end_time + post_roll_seconds) * fps)),
-    )
-    if end_frame < start_frame:
-        end_frame = start_frame
+    start_frame = max(0, round((event.start_time - pre_roll_seconds) * fps))
+    raw_end = round((event.end_time + post_roll_seconds) * fps)
+    end_frame = max(start_frame, min(total_source_frames - 1, raw_end))
 
     clip_frames_count = end_frame - start_frame + 1
 
@@ -808,9 +800,7 @@ def extract_event_video_clip(
                     if trajectory_points_by_frame is not None:
                         traj_pts = [
                             pt
-                            for f_idx, pt in sorted(
-                                trajectory_points_by_frame.items()
-                            )
+                            for f_idx, pt in sorted(trajectory_points_by_frame.items())
                             if f_idx <= fid
                         ]
                     frame_to_write = render_clip_frame_overlay(
@@ -893,7 +883,7 @@ def extract_event_storyboard(
 
     try:
         for stage_name, t_sec in stage_moments:
-            fid = max(0, min(total_source_frames - 1, int(round(t_sec * fps))))
+            fid = max(0, min(total_source_frames - 1, round(t_sec * fps)))
             frame = vs.read_frame(fid)
             if frame is None or frame.size == 0:
                 tile = np.zeros((th, tw, 3), dtype=np.uint8)
@@ -907,9 +897,7 @@ def extract_event_storyboard(
                 if trajectory_points_by_frame is not None:
                     traj_pts = [
                         pt
-                        for f_idx, pt in sorted(
-                            trajectory_points_by_frame.items()
-                        )
+                        for f_idx, pt in sorted(trajectory_points_by_frame.items())
                         if f_idx <= fid
                     ]
                 rendered = render_clip_frame_overlay(
@@ -1049,12 +1037,16 @@ def verify_evidence_records(
     *,
     base_dir: Path | str,
 ) -> dict[str, Any]:
-    """Verify that all ``snapshot_path`` and ``crop_path`` entries resolve to non-empty files."""
+    """Verify that all evidence file paths in records resolve to non-empty files."""
     root = Path(base_dir)
     missing_snapshots: list[str] = []
     missing_crops: list[str] = []
+    missing_clips: list[str] = []
+    missing_storyboards: list[str] = []
     resolved_snapshots = 0
     resolved_crops = 0
+    resolved_clips = 0
+    resolved_storyboards = 0
 
     for rec in records:
         snap_file = root / rec.snapshot_path
@@ -1069,13 +1061,36 @@ def verify_evidence_records(
         else:
             missing_crops.append(rec.crop_path)
 
+        if rec.video_clip_path:
+            clip_file = root / rec.video_clip_path
+            if clip_file.is_file() and clip_file.stat().st_size > 0:
+                resolved_clips += 1
+            else:
+                missing_clips.append(rec.video_clip_path)
+
+        if rec.storyboard_path:
+            sb_file = root / rec.storyboard_path
+            if sb_file.is_file() and sb_file.stat().st_size > 0:
+                resolved_storyboards += 1
+            else:
+                missing_storyboards.append(rec.storyboard_path)
+
     return {
         "total_records": len(records),
         "resolved_snapshots": resolved_snapshots,
         "resolved_crops": resolved_crops,
+        "resolved_clips": resolved_clips,
+        "resolved_storyboards": resolved_storyboards,
         "missing_or_empty_snapshots": missing_snapshots,
         "missing_or_empty_crops": missing_crops,
-        "all_paths_valid": not missing_snapshots and not missing_crops,
+        "missing_or_empty_clips": missing_clips,
+        "missing_or_empty_storyboards": missing_storyboards,
+        "all_paths_valid": (
+            not missing_snapshots
+            and not missing_crops
+            and not missing_clips
+            and not missing_storyboards
+        ),
     }
 
 
@@ -1087,12 +1102,18 @@ def run_visual_evidence(
     output_dir: Path,
     config_path: Path | None = None,
     scene_config_path: Path | None = None,
+    camera_id: str = "",
     best_frame_strategy_override: str | None = None,
     crop_padding_ratio_override: float | None = None,
     min_padding_px_override: int | None = None,
     jpeg_quality_override: int | None = None,
+    extract_video_clips_override: bool | None = None,
+    clip_pre_roll_seconds_override: float | None = None,
+    clip_post_roll_seconds_override: float | None = None,
+    render_clip_telemetry_override: bool | None = None,
+    extract_storyboards_override: bool | None = None,
 ) -> dict[str, Any]:
-    """Execute the complete Phase 7 visual evidence extraction pipeline."""
+    """Execute the visual evidence extraction pipeline including snapshots, crops, clips, and storyboards."""
     t0 = time.perf_counter()
     output_dir.mkdir(parents=True, exist_ok=True)
     snapshots_dir = output_dir / "snapshots"
@@ -1129,7 +1150,37 @@ def run_visual_evidence(
         overlay_scene_geometry=base_cfg.overlay_scene_geometry,
         contact_sheet_columns=base_cfg.contact_sheet_columns,
         contact_sheet_max_items=base_cfg.contact_sheet_max_items,
+        extract_video_clips=(
+            extract_video_clips_override
+            if extract_video_clips_override is not None
+            else base_cfg.extract_video_clips
+        ),
+        clip_pre_roll_seconds=(
+            clip_pre_roll_seconds_override
+            if clip_pre_roll_seconds_override is not None
+            else base_cfg.clip_pre_roll_seconds
+        ),
+        clip_post_roll_seconds=(
+            clip_post_roll_seconds_override
+            if clip_post_roll_seconds_override is not None
+            else base_cfg.clip_post_roll_seconds
+        ),
+        render_clip_telemetry=(
+            render_clip_telemetry_override
+            if render_clip_telemetry_override is not None
+            else base_cfg.render_clip_telemetry
+        ),
+        extract_storyboards=(
+            extract_storyboards_override
+            if extract_storyboards_override is not None
+            else base_cfg.extract_storyboards
+        ),
     )
+
+    if cfg.extract_video_clips:
+        (output_dir / "clips").mkdir(parents=True, exist_ok=True)
+    if cfg.extract_storyboards:
+        (output_dir / "storyboards").mkdir(parents=True, exist_ok=True)
 
     scene_cfg: SceneConfig | None = None
     if (
@@ -1219,6 +1270,53 @@ def run_visual_evidence(
             f"Video ended before extracting evidence for events: {missing_events}"
         )
 
+    # Extract dynamic video clips and storyboards if requested
+    for idx, ev in enumerate(events):
+        rec = enriched_by_idx[idx]
+        rel_clip = ""
+        if cfg.extract_video_clips:
+            rel_clip = f"clips/{ev.event_id}_{ev.track_id}.mp4"
+            extract_event_video_clip(
+                source_path=source_path,
+                event=ev,
+                frame_tracks=frame_tracks,
+                output_path=output_dir / rel_clip,
+                pre_roll_seconds=cfg.clip_pre_roll_seconds,
+                post_roll_seconds=cfg.clip_post_roll_seconds,
+                scene_config=scene_cfg,
+                camera_id=camera_id,
+                draw_telemetry=cfg.render_clip_telemetry,
+            )
+
+        rel_sb = ""
+        if cfg.extract_storyboards:
+            rel_sb = f"storyboards/{ev.event_id}_{ev.track_id}_storyboard.jpg"
+            extract_event_storyboard(
+                source_path=source_path,
+                event=ev,
+                frame_tracks=frame_tracks,
+                output_path=output_dir / rel_sb,
+                scene_config=scene_cfg,
+            )
+
+        if rel_clip or rel_sb:
+            enriched_by_idx[idx] = EvidenceEventRecord(
+                event_id=rec.event_id,
+                event_type=rec.event_type,
+                track_id=rec.track_id,
+                zone_id=rec.zone_id,
+                start_time=rec.start_time,
+                end_time=rec.end_time,
+                duration_seconds=rec.duration_seconds,
+                snapshot_path=rec.snapshot_path,
+                crop_path=rec.crop_path,
+                best_frame_id=rec.best_frame_id,
+                best_confidence=rec.best_confidence,
+                clipped_at_frame_edge=rec.clipped_at_frame_edge,
+                video_clip_path=rel_clip,
+                storyboard_path=rel_sb,
+            )
+
     enriched_records = [enriched_by_idx[i] for i in range(len(events))]
     verification = verify_evidence_records(enriched_records, base_dir=output_dir)
     if not verification["all_paths_valid"]:
@@ -1264,6 +1362,10 @@ def run_visual_evidence(
         "crop_padding_ratio": cfg.crop_padding_ratio,
         "min_padding_px": cfg.min_padding_px,
         "jpeg_quality": cfg.jpeg_quality,
+        "extract_video_clips": cfg.extract_video_clips,
+        "extract_storyboards": cfg.extract_storyboards,
+        "video_clips_count": sum(1 for r in enriched_records if r.video_clip_path),
+        "storyboards_count": sum(1 for r in enriched_records if r.storyboard_path),
         "total_events": len(enriched_records),
         "unique_frames_decoded": len(by_frame),
         "event_counts_by_type": event_counts_by_type,
@@ -1281,7 +1383,7 @@ def run_visual_evidence(
 def build_parser() -> argparse.ArgumentParser:
     """Build CLI argument parser for Phase 7 visual evidence extraction."""
     parser = argparse.ArgumentParser(
-        description="Phase 7: Extract best-frame snapshots and padded person crops per event."
+        description="Phase 7: Extract best-frame snapshots, padded person crops, video clips, and storyboards per event."
     )
     parser.add_argument(
         "--source",
@@ -1322,7 +1424,7 @@ def build_parser() -> argparse.ArgumentParser:
         "--output-dir",
         type=Path,
         default=Path(__file__).resolve().parents[1] / "outputs" / "default_run",
-        help="Directory to write snapshots/, crops/, enriched events.csv, and summary.",
+        help="Directory to write snapshots/, crops/, clips/, storyboards/, enriched events.csv, and summary.",
     )
     parser.add_argument(
         "--strategy",
@@ -1349,11 +1451,35 @@ def build_parser() -> argparse.ArgumentParser:
         default=None,
         help="Optional override for jpeg_quality (1-100).",
     )
+    parser.add_argument(
+        "--extract-clips",
+        action="store_true",
+        default=None,
+        help="Extract annotated MP4 video clips per event into clips/.",
+    )
+    parser.add_argument(
+        "--extract-storyboards",
+        action="store_true",
+        default=None,
+        help="Extract 3-stage composite keyframe storyboards per event into storyboards/.",
+    )
+    parser.add_argument(
+        "--clip-pre-roll",
+        type=float,
+        default=None,
+        help="Optional override for clip pre-roll seconds.",
+    )
+    parser.add_argument(
+        "--clip-post-roll",
+        type=float,
+        default=None,
+        help="Optional override for clip post-roll seconds.",
+    )
     return parser
 
 
 def main(argv: Sequence[str] | None = None) -> int:
-    """CLI entrypoint for Phase 7 visual evidence extraction."""
+    """CLI entrypoint for visual evidence extraction."""
     parser = build_parser()
     args = parser.parse_args(argv)
     summary = run_visual_evidence(
@@ -1367,6 +1493,10 @@ def main(argv: Sequence[str] | None = None) -> int:
         crop_padding_ratio_override=args.padding_ratio,
         min_padding_px_override=args.min_padding_px,
         jpeg_quality_override=args.jpeg_quality,
+        extract_video_clips_override=args.extract_clips,
+        extract_storyboards_override=args.extract_storyboards,
+        clip_pre_roll_seconds_override=args.clip_pre_roll,
+        clip_post_roll_seconds_override=args.clip_post_roll,
     )
     print(json.dumps(summary, indent=2))
     return 0
