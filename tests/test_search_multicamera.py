@@ -257,6 +257,48 @@ class TestSearchMultiCameraCli(unittest.TestCase):
         self.assertIn("clip=clips/c01.mp4", text_out)
         self.assertIn("sb=storyboards/c01_sb.jpg", text_out)
 
+    def test_cli_filter_insights_by_clips_and_storyboards_flags(self) -> None:
+        insert_insights(
+            self.db_path,
+            [
+                {
+                    "insight_id": "ins_clip_01",
+                    "camera_id": "lobby",
+                    "insight_type": "loitering",
+                    "severity": "critical",
+                    "track_id": 1,
+                    "zone_id": "lobby",
+                    "start_time": 0.0,
+                    "end_time": 12.0,
+                    "duration": 12.0,
+                    "description": "Loitering with video clip",
+                    "video_clip_path": "clips/ins_clip_01.mp4",
+                    "storyboard_path": "storyboards/ins_clip_01_sb.jpg",
+                }
+            ],
+        )
+        buf = io.StringIO()
+        with redirect_stdout(buf):
+            rc = search_main(
+                ["--db", str(self.db_path), "--insights", "--clips", "--json"]
+            )
+        self.assertEqual(rc, 0)
+        data = json.loads(buf.getvalue())
+        self.assertEqual(len(data), 1)
+        self.assertEqual(data[0]["insight_id"], "ins_clip_01")
+        self.assertEqual(data[0]["video_clip_path"], "clips/ins_clip_01.mp4")
+
+        buf_text = io.StringIO()
+        with redirect_stdout(buf_text):
+            rc_t = search_main(
+                ["--db", str(self.db_path), "--insights", "--storyboards"]
+            )
+        self.assertEqual(rc_t, 0)
+        text_out = buf_text.getvalue()
+        self.assertIn("Matched 1 insight(s):", text_out)
+        self.assertIn("clip=clips/ins_clip_01.mp4", text_out)
+        self.assertIn("sb=storyboards/ins_clip_01_sb.jpg", text_out)
+
 
 if __name__ == "__main__":
     unittest.main()
