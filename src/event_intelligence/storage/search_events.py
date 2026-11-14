@@ -2126,6 +2126,8 @@ def main(argv: list[str] | None = None) -> int:
             zone_id=args.zone,
             min_time=args.min_time,
             max_time=args.max_time,
+            has_clip=True if args.clips else None,
+            has_storyboard=True if args.storyboards else None,
             limit=args.limit,
         )
         if args.json:
@@ -2138,11 +2140,15 @@ def main(argv: list[str] | None = None) -> int:
                     f" track={ins.track_id}" if ins.track_id is not None else ""
                 )
                 zone_label = f" zone={ins.zone_id}" if ins.zone_id else ""
+                clip_label = (
+                    f" clip={ins.video_clip_path}" if ins.video_clip_path else ""
+                )
+                sb_label = f" sb={ins.storyboard_path}" if ins.storyboard_path else ""
                 print(
                     f"  [{ins.insight_id}]{cam_label} type={ins.insight_type} "
                     f"sev={ins.severity}{track_label}{zone_label} "
                     f"time={ins.start_time:.2f}..{ins.end_time:.2f}s "
-                    f"desc='{ins.description}'"
+                    f"desc='{ins.description}'{clip_label}{sb_label}"
                 )
         return 0
 
