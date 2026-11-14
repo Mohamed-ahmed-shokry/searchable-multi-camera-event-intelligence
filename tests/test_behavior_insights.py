@@ -13,6 +13,7 @@ from event_intelligence.insights import (
     detect_cross_camera_transitions,
     detect_crowding_insights,
     detect_loitering_insights,
+    detect_proximity_insights,
     detect_speed_anomaly_insights,
     detect_stationary_and_drop_insights,
     detect_tailgating_insights,
@@ -336,6 +337,28 @@ class TestInsightDetectors(unittest.TestCase):
         self.assertEqual(by_zone["lobby"].details["involved_track_ids"], [1, 2, 3])
         self.assertEqual(by_zone["vault"].severity, "critical")
         self.assertAlmostEqual(by_zone["vault"].duration, 3.5)
+
+    def test_detect_proximity_insights(self) -> None:
+        cfg = InsightConfig(
+            proximity_distance_px=50.0,
+            min_proximity_seconds=2.0,
+        )
+        # Tracks 1 and 2 walk side-by-side (20px apart) for 4s (t=0..4)
+        # Track 3 is far away (300px)
+        trajectories = {
+            1: [DummyPoint(1, i, float(i), 100.0 + i * 5.0, 100.0) for i in range(5)],
+            2: [DummyPoint(2, i, float(i), 100.0 + i * 5.0, 120.0) for i in range(5)],
+            3: [DummyPoint(3, i, float(i), 500.0, 500.0) for i in range(5)],
+        }
+        insights = detect_proximity_insights(trajectories, cfg, camera_id="cam_prox")
+        self.assertEqual(len(insights), 1)
+        ins = insights[0]
+        self.assertEqual(ins.insight_type, "proximity_grouping")
+        self.assertEqual(ins.severity, "high")
+        self.assertEqual(ins.details["track_id_a"], 1)
+        self.assertEqual(ins.details["track_id_b"], 2)
+        self.assertAlmostEqual(ins.details["min_distance_px"], 20.0)
+        self.assertEqual(ins.duration, 4.0)
 
     def test_generate_all_insights_aggregates_and_sorts(self) -> None:
         cfg = InsightConfig(
