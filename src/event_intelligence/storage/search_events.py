@@ -96,6 +96,8 @@ CREATE TABLE IF NOT EXISTS events (
     duration_seconds REAL NOT NULL,
     snapshot_path TEXT NOT NULL,
     crop_path TEXT NOT NULL,
+    video_clip_path TEXT NOT NULL DEFAULT '',
+    storyboard_path TEXT NOT NULL DEFAULT '',
     PRIMARY KEY (camera_id, event_id)
 );
 CREATE INDEX IF NOT EXISTS idx_events_type_zone ON events (event_type, zone_id);
@@ -136,6 +138,8 @@ CREATE TABLE IF NOT EXISTS insights (
     description TEXT NOT NULL,
     evidence_snapshot_path TEXT,
     evidence_crop_path TEXT,
+    video_clip_path TEXT NOT NULL DEFAULT '',
+    storyboard_path TEXT NOT NULL DEFAULT '',
     details_json TEXT NOT NULL DEFAULT '{}',
     PRIMARY KEY (camera_id, insight_id)
 );
@@ -528,6 +532,37 @@ def _migrate_multi_camera_columns(conn: sqlite3.Connection) -> None:
             pass
 
 
+def _migrate_evidence_clip_columns(conn: sqlite3.Connection) -> None:
+    """Add video_clip_path and storyboard_path to events and insights if migrating from older schemas."""
+    try:
+        cursor = conn.execute("PRAGMA table_info(events)")
+        cols = [row[1] for row in cursor.fetchall()]
+        if cols and "video_clip_path" not in cols:
+            conn.execute(
+                "ALTER TABLE events ADD COLUMN video_clip_path TEXT NOT NULL DEFAULT ''"
+            )
+        if cols and "storyboard_path" not in cols:
+            conn.execute(
+                "ALTER TABLE events ADD COLUMN storyboard_path TEXT NOT NULL DEFAULT ''"
+            )
+    except sqlite3.OperationalError:
+        pass
+
+    try:
+        cursor = conn.execute("PRAGMA table_info(insights)")
+        cols = [row[1] for row in cursor.fetchall()]
+        if cols and "video_clip_path" not in cols:
+            conn.execute(
+                "ALTER TABLE insights ADD COLUMN video_clip_path TEXT NOT NULL DEFAULT ''"
+            )
+        if cols and "storyboard_path" not in cols:
+            conn.execute(
+                "ALTER TABLE insights ADD COLUMN storyboard_path TEXT NOT NULL DEFAULT ''"
+            )
+    except sqlite3.OperationalError:
+        pass
+
+
 def init_intelligence_db(db_path: Path | str) -> Path:
     """Create intelligence.db and execute SCHEMA_DDL idempotently."""
     out_db = Path(db_path)
@@ -535,6 +570,7 @@ def init_intelligence_db(db_path: Path | str) -> Path:
     with closing(sqlite3.connect(out_db)) as conn:
         conn.executescript(SCHEMA_DDL)
         _migrate_multi_camera_columns(conn)
+        _migrate_evidence_clip_columns(conn)
         conn.commit()
     return out_db
 

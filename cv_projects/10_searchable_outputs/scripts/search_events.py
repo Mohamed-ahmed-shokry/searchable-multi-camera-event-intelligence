@@ -74,7 +74,9 @@ CREATE TABLE IF NOT EXISTS events (
     end_time REAL NOT NULL,
     duration_seconds REAL NOT NULL,
     snapshot_path TEXT NOT NULL,
-    crop_path TEXT NOT NULL
+    crop_path TEXT NOT NULL,
+    video_clip_path TEXT NOT NULL DEFAULT '',
+    storyboard_path TEXT NOT NULL DEFAULT ''
 );
 CREATE INDEX IF NOT EXISTS idx_events_type_zone ON events (event_type, zone_id);
 CREATE INDEX IF NOT EXISTS idx_events_track_id ON events (track_id);
