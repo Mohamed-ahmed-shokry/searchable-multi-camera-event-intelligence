@@ -418,6 +418,118 @@ class InsightSearchResult:
 
 
 @dataclass(frozen=True, slots=True)
+class TrajectorySearchResult:
+    """Structured trajectory point row returned by query_trajectories."""
+
+    camera_id: str
+    track_id: int
+    frame_id: int
+    timestamp: float
+    x: float
+    y: float
+
+    def __post_init__(self) -> None:
+        if self.track_id < 0 or self.frame_id < 0:
+            raise ValueError("track_id and frame_id must be non-negative")
+        if self.timestamp < 0.0:
+            raise ValueError("timestamp must be non-negative")
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "camera_id": self.camera_id,
+            "track_id": self.track_id,
+            "frame_id": self.frame_id,
+            "timestamp": round(self.timestamp, 4),
+            "x": round(self.x, 2),
+            "y": round(self.y, 2),
+        }
+
+
+@dataclass(frozen=True, slots=True)
+class ZoneCountSearchResult:
+    """Structured zone activity row returned by query_zone_counts."""
+
+    camera_id: str
+    zone_id: str
+    entry_count: int
+    exit_count: int
+    total_dwell_seconds: float
+    peak_occupancy: int
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "camera_id": self.camera_id,
+            "zone_id": self.zone_id,
+            "entry_count": self.entry_count,
+            "exit_count": self.exit_count,
+            "total_dwell_seconds": round(self.total_dwell_seconds, 4),
+            "peak_occupancy": self.peak_occupancy,
+        }
+
+
+@dataclass(frozen=True, slots=True)
+class LineCountSearchResult:
+    """Structured line crossing row returned by query_line_counts."""
+
+    camera_id: str
+    line_id: str
+    crossings_ab: int
+    crossings_ba: int
+    total: int
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "camera_id": self.camera_id,
+            "line_id": self.line_id,
+            "crossings_ab": self.crossings_ab,
+            "crossings_ba": self.crossings_ba,
+            "total": self.total,
+        }
+
+
+@dataclass(frozen=True, slots=True)
+class TrackTimelineDossier:
+    """Unified chronological dossier for a single tracked entity."""
+
+    camera_id: str
+    track_id: int
+    start_frame: int
+    end_frame: int
+    duration_seconds: float
+    path_length_px: float
+    trajectory_points_count: int
+    min_x: float
+    min_y: float
+    max_x: float
+    max_y: float
+    mean_speed_px_s: float
+    max_speed_px_s: float
+    events: list[EventSearchResult] = field(default_factory=list)
+    insights: list[InsightSearchResult] = field(default_factory=list)
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "camera_id": self.camera_id,
+            "track_id": self.track_id,
+            "start_frame": self.start_frame,
+            "end_frame": self.end_frame,
+            "duration_seconds": round(self.duration_seconds, 4),
+            "path_length_px": round(self.path_length_px, 2),
+            "trajectory_points_count": self.trajectory_points_count,
+            "spatial_bounds": {
+                "min_x": round(self.min_x, 2),
+                "min_y": round(self.min_y, 2),
+                "max_x": round(self.max_x, 2),
+                "max_y": round(self.max_y, 2),
+            },
+            "mean_speed_px_s": round(self.mean_speed_px_s, 2),
+            "max_speed_px_s": round(self.max_speed_px_s, 2),
+            "events": [e.to_dict() for e in self.events],
+            "insights": [i.to_dict() for i in self.insights],
+        }
+
+
+@dataclass(frozen=True, slots=True)
 class DatabaseSummary:
     """Row counts across all tables in intelligence.db."""
 
