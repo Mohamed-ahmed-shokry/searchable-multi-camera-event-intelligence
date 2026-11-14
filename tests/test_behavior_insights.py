@@ -131,6 +131,20 @@ class TestInsightTypesAndConfig(unittest.TestCase):
 
         with self.assertRaises(ValueError):
             InsightConfig(loitering_factor=0.5)  # must be > 1.0
+        with self.assertRaises(ValueError):
+            InsightConfig(max_zone_occupancy=0)
+        with self.assertRaises(ValueError):
+            InsightConfig(per_zone_max_occupancy={"lobby": 0})
+        with self.assertRaises(ValueError):
+            InsightConfig(tailgating_max_gap_seconds=0.0)
+        with self.assertRaises(ValueError):
+            InsightConfig(proximity_distance_px=-5.0)
+        with self.assertRaises(ValueError):
+            InsightConfig(min_proximity_seconds=-1.0)
+
+        self.assertEqual(InsightType.CROWDING.value, "crowding")
+        self.assertEqual(InsightType.TAILGATING.value, "tailgating")
+        self.assertEqual(InsightType.PROXIMITY_GROUPING.value, "proximity_grouping")
 
 
 class TestInsightDetectors(unittest.TestCase):
