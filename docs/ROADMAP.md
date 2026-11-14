@@ -2015,18 +2015,18 @@ uv run --locked python -m event_intelligence.search --help
 - [x] 6. `feat(storage): add has_clip and has_storyboard filtering to query_insights`
 - [x] 7. `feat(search): wire --clips and --storyboards into insights CLI search and output`
 - [x] 8. `test(search): add unit tests for insights clip and storyboard filtering`
-- [ ] 9. `types(insights): add CROWDING, TAILGATING, and PROXIMITY_GROUPING to InsightType`
-- [ ] 10. `types(insights): extend InsightConfig with crowding, tailgating, and proximity thresholds`
-- [ ] 11. `feat(pipeline): parse crowding, tailgating, and proximity insight fields in load_pipeline_config`
-- [ ] 12. `test(insights): add validation tests for extended InsightConfig and InsightType`
-- [ ] 13. `feat(insights): implement detect_tailgating_insights for rapid same-direction line crossings`
-- [ ] 14. `test(insights): add unit tests for detect_tailgating_insights`
-- [ ] 15. `feat(insights): implement detect_crowding_insights for sustained zone capacity breaches`
-- [ ] 16. `test(insights): add unit tests for detect_crowding_insights`
-- [ ] 17. `feat(insights): implement detect_proximity_insights for sustained close-range track interactions`
-- [ ] 18. `test(insights): add unit tests for detect_proximity_insights`
-- [ ] 19. `feat(insights): wire tailgating, crowding, and proximity detectors into generate_all_insights`
-- [ ] 20. `test(insights): test generate_all_insights with multi-person behavioral anomalies`
+- [x] 9. `types(insights): add CROWDING, TAILGATING, and PROXIMITY_GROUPING to InsightType`
+- [x] 10. `types(insights): extend InsightConfig with crowding, tailgating, and proximity thresholds`
+- [x] 11. `feat(pipeline): parse crowding, tailgating, and proximity insight fields in load_pipeline_config`
+- [x] 12. `test(insights): add validation tests for extended InsightConfig and InsightType`
+- [x] 13. `feat(insights): implement detect_tailgating_insights for rapid same-direction line crossings`
+- [x] 14. `test(insights): add unit tests for detect_tailgating_insights`
+- [x] 15. `feat(insights): implement detect_crowding_insights for sustained zone capacity breaches`
+- [x] 16. `test(insights): add unit tests for detect_crowding_insights`
+- [x] 17. `feat(insights): implement detect_proximity_insights for sustained close-range track interactions`
+- [x] 18. `test(insights): add unit tests for detect_proximity_insights`
+- [x] 19. `feat(insights): wire tailgating, crowding, and proximity detectors into generate_all_insights`
+- [x] 20. `test(insights): test generate_all_insights with multi-person behavioral anomalies`
 - [ ] 21. `types(analytics): add ZoneOccupancyProfile dataclass to analytics module`
 - [ ] 22. `feat(analytics): implement compute_zone_occupancy_profiles for temporal occupancy metrics`
 - [ ] 23. `feat(analytics): export compute_zone_occupancy_profiles in analytics package and pipeline`
