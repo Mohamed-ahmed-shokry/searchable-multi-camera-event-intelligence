@@ -915,7 +915,25 @@ def generate_all_insights(
     )
     all_insights.extend(stationary_and_drop)
 
-    # 5. Cross-camera transitions (if multi-camera dictionary provided)
+    # 5. Tailgating
+    tailgating = detect_tailgating_insights(
+        events, cfg, camera_id=camera_id, start_index=len(all_insights) + 1
+    )
+    all_insights.extend(tailgating)
+
+    # 6. Crowding / zone capacity breaches
+    crowding = detect_crowding_insights(
+        events, cfg, camera_id=camera_id, start_index=len(all_insights) + 1
+    )
+    all_insights.extend(crowding)
+
+    # 7. Close-proximity grouping / rendezvous
+    proximity = detect_proximity_insights(
+        trajectories, cfg, camera_id=camera_id, start_index=len(all_insights) + 1
+    )
+    all_insights.extend(proximity)
+
+    # 8. Cross-camera transitions (if multi-camera dictionary provided)
     if events_by_camera and len(events_by_camera) > 1:
         multicam_transitions = detect_cross_camera_transitions(
             events_by_camera, cfg, start_index=len(all_insights) + 1
