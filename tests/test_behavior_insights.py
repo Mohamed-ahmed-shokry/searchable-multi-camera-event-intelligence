@@ -14,6 +14,7 @@ from event_intelligence.insights import (
     detect_loitering_insights,
     detect_speed_anomaly_insights,
     detect_stationary_and_drop_insights,
+    detect_tailgating_insights,
     detect_wrong_way_insights,
     generate_all_insights,
 )
@@ -280,6 +281,35 @@ class TestInsightDetectors(unittest.TestCase):
         self.assertEqual(trans.camera_id, "cam_entrance->cam_hallway")
         self.assertEqual(trans.insight_type, "cross_camera_transition")
         self.assertEqual(trans.duration, 3.0)
+
+    def test_detect_tailgating_insights(self) -> None:
+        cfg = InsightConfig(
+            tailgating_max_gap_seconds=2.0,
+            restricted_zones=("turnstile",),
+        )
+        events = [
+            DummyEvent("e1", "line_crossing", 1, "turnstile:A->B", 4.0, 4.0),
+            DummyEvent(
+                "e2",
+                "line_crossing",
+                2,
+                "turnstile:A->B",
+                5.1,
+                5.1,
+                evidence_snapshot_path="snapshots/tg.jpg",
+            ),
+            # Crossing far later -> not tailgating
+            DummyEvent("e3", "line_crossing", 3, "turnstile:A->B", 10.0, 10.0),
+        ]
+        insights = detect_tailgating_insights(events, cfg, camera_id="cam_gate")
+        self.assertEqual(len(insights), 1)
+        ins = insights[0]
+        self.assertEqual(ins.insight_type, "tailgating")
+        self.assertEqual(ins.severity, "high")
+        self.assertEqual(ins.track_id, 2)
+        self.assertEqual(ins.details["leader_track_id"], 1)
+        self.assertEqual(ins.details["follower_track_id"], 2)
+        self.assertAlmostEqual(ins.details["gap_seconds"], 1.1)
 
     def test_generate_all_insights_aggregates_and_sorts(self) -> None:
         cfg = InsightConfig(
