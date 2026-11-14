@@ -132,6 +132,12 @@ class InsightConfig:
     disallowed_line_crossings: tuple[str, ...] = ()
     cross_camera_min_seconds: float = 0.5
     cross_camera_max_seconds: float = 60.0
+    max_zone_occupancy: int = 3
+    per_zone_max_occupancy: Mapping[str, int] = field(default_factory=dict)
+    min_crowding_seconds: float = 2.0
+    tailgating_max_gap_seconds: float = 2.0
+    proximity_distance_px: float = 60.0
+    min_proximity_seconds: float = 2.0
 
     def __post_init__(self) -> None:
         if self.loitering_factor <= 1.0:
@@ -153,6 +159,19 @@ class InsightConfig:
             or self.cross_camera_max_seconds < self.cross_camera_min_seconds
         ):
             raise ValueError("cross camera window must be 0.0 <= min <= max")
+        if self.max_zone_occupancy < 1:
+            raise ValueError("max_zone_occupancy must be >= 1")
+        for zid, cap in self.per_zone_max_occupancy.items():
+            if cap < 1:
+                raise ValueError(f"per_zone_max_occupancy[{zid!r}] must be >= 1")
+        if self.min_crowding_seconds < 0.0:
+            raise ValueError("min_crowding_seconds must be >= 0.0")
+        if self.tailgating_max_gap_seconds <= 0.0:
+            raise ValueError("tailgating_max_gap_seconds must be > 0.0")
+        if self.proximity_distance_px <= 0.0:
+            raise ValueError("proximity_distance_px must be > 0.0")
+        if self.min_proximity_seconds < 0.0:
+            raise ValueError("min_proximity_seconds must be >= 0.0")
 
     def to_dict(self) -> dict[str, Any]:
         """Convert configuration to dictionary."""
@@ -169,4 +188,10 @@ class InsightConfig:
             "disallowed_line_crossings": list(self.disallowed_line_crossings),
             "cross_camera_min_seconds": self.cross_camera_min_seconds,
             "cross_camera_max_seconds": self.cross_camera_max_seconds,
+            "max_zone_occupancy": self.max_zone_occupancy,
+            "per_zone_max_occupancy": dict(self.per_zone_max_occupancy),
+            "min_crowding_seconds": self.min_crowding_seconds,
+            "tailgating_max_gap_seconds": self.tailgating_max_gap_seconds,
+            "proximity_distance_px": self.proximity_distance_px,
+            "min_proximity_seconds": self.min_proximity_seconds,
         }
