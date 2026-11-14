@@ -773,6 +773,106 @@ def detect_crowding_insights(
     return insights
 
 
+def detect_proximity_insights(
+    trajectories: Mapping[int, Sequence[Any]],
+    config: InsightConfig,
+    *,
+    camera_id: str = "default",
+    start_index: int = 1,
+) -> list[InsightRecord]:
+    """Detect sustained close-proximity interactions and rendezvous between concurrent tracks."""
+    tids = sorted(trajectories.keys())
+    if len(tids) < 2:
+        return []
+
+    by_frame: dict[int, dict[int, Any]] = {}
+    for tid in tids:
+        by_frame[tid] = {int(getattr(p, "frame_id", 0)): p for p in trajectories[tid]}
+
+    insights: list[InsightRecord] = []
+    idx = start_index
+    max_dist = config.proximity_distance_px
+    min_dur = config.min_proximity_seconds
+
+    for i, tid_a in enumerate(tids):
+        pts_a = by_frame[tid_a]
+        for tid_b in tids[i + 1 :]:
+            pts_b = by_frame[tid_b]
+            common_fids = sorted(pts_a.keys() & pts_b.keys())
+            if len(common_fids) < 2:
+                continue
+
+            bursts: list[list[tuple[int, float, float]]] = []
+            cur_burst: list[tuple[int, float, float]] = []
+
+            for fid in common_fids:
+                pa = pts_a[fid]
+                pb = pts_b[fid]
+                dist = math.hypot(
+                    float(getattr(pa, "x", 0.0)) - float(getattr(pb, "x", 0.0)),
+                    float(getattr(pa, "y", 0.0)) - float(getattr(pb, "y", 0.0)),
+                )
+                ts = float(getattr(pa, "timestamp", 0.0))
+                if dist <= max_dist:
+                    if cur_burst and (fid - cur_burst[-1][0]) > 3:
+                        bursts.append(list(cur_burst))
+                        cur_burst.clear()
+                    cur_burst.append((fid, ts, dist))
+                else:
+                    if len(cur_burst) >= 2:
+                        bursts.append(list(cur_burst))
+                    cur_burst.clear()
+
+            if len(cur_burst) >= 2:
+                bursts.append(list(cur_burst))
+
+            for burst in bursts:
+                t_start = burst[0][1]
+                t_end = burst[-1][1]
+                dur = round(max(0.0, t_end - t_start), 4)
+                if dur < min_dur:
+                    continue
+
+                dists = [b[2] for b in burst]
+                min_d = min(dists)
+                mean_d = sum(dists) / len(dists)
+                sev = (
+                    Severity.HIGH.value
+                    if dur >= 2.0 * min_dur and min_dur > 0.0
+                    else Severity.MEDIUM.value
+                )
+
+                insights.append(
+                    InsightRecord(
+                        insight_id=f"ins_{camera_id}_{idx:04d}",
+                        camera_id=camera_id,
+                        insight_type=InsightType.PROXIMITY_GROUPING.value,
+                        severity=sev,
+                        track_id=int(tid_a),
+                        zone_id=None,
+                        start_time=t_start,
+                        end_time=t_end,
+                        duration=dur,
+                        description=(
+                            f"Tracks {tid_a} and {tid_b} maintained close proximity "
+                            f"(min {min_d:.1f}px, avg {mean_d:.1f}px <= {max_dist:.1f}px) "
+                            f"for {dur:.2f}s ({len(burst)} frames)"
+                        ),
+                        details={
+                            "track_id_a": int(tid_a),
+                            "track_id_b": int(tid_b),
+                            "min_distance_px": round(min_d, 2),
+                            "mean_distance_px": round(mean_d, 2),
+                            "threshold_px": max_dist,
+                            "interaction_frames": len(burst),
+                        },
+                    )
+                )
+                idx += 1
+
+    return insights
+
+
 def generate_all_insights(
     events: Sequence[Any],
     trajectories: Mapping[int, Sequence[Any]],
