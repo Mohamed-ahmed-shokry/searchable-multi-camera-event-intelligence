@@ -36,12 +36,15 @@ from event_intelligence.detection import (
 )
 from event_intelligence.events import (
     EventConfig,
+    EventRecord,
     draw_dwell_events_overlay,
     evaluate_dwell_events,
     write_events_csv,
 )
 from event_intelligence.evidence import (
     VALID_BEST_FRAME_STRATEGIES,
+    extract_event_storyboard,
+    extract_event_video_clip,
     run_visual_evidence,
 )
 from event_intelligence.insights import (
@@ -73,6 +76,7 @@ from event_intelligence.storage import (
 from event_intelligence.tracking import (
     FrameTracks,
     PersonTracker,
+    TrackDetection,
     compute_track_summaries,
     read_tracks_csv,
     write_track_summary_csv,
@@ -132,6 +136,11 @@ class PipelineConfig:
     save_annotated_video: bool = True
     max_frames: int | None = None
     insight_config: InsightConfig | None = None
+    extract_video_clips: bool = False
+    clip_pre_roll_seconds: float = 1.0
+    clip_post_roll_seconds: float = 1.0
+    render_clip_telemetry: bool = True
+    extract_storyboards: bool = False
 
     def __post_init__(self) -> None:
         if not self.model_name.strip():
@@ -156,6 +165,10 @@ class PipelineConfig:
             raise ValueError("grid_bin_size_px must be >= 1")
         if self.max_frames is not None and self.max_frames < 1:
             raise ValueError("max_frames must be >= 1 when specified")
+        if self.clip_pre_roll_seconds < 0.0:
+            raise ValueError("clip_pre_roll_seconds must be >= 0.0")
+        if self.clip_post_roll_seconds < 0.0:
+            raise ValueError("clip_post_roll_seconds must be >= 0.0")
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -189,6 +202,11 @@ class PipelineConfig:
             "inspection_sample_count": self.inspection_sample_count,
             "save_annotated_video": self.save_annotated_video,
             "max_frames": self.max_frames,
+            "extract_video_clips": self.extract_video_clips,
+            "clip_pre_roll_seconds": self.clip_pre_roll_seconds,
+            "clip_post_roll_seconds": self.clip_post_roll_seconds,
+            "render_clip_telemetry": self.render_clip_telemetry,
+            "extract_storyboards": self.extract_storyboards,
             "insight_config": (
                 self.insight_config.to_dict() if self.insight_config else None
             ),
@@ -643,17 +661,23 @@ def run_pipeline(
     raw_events, traces = evaluate_dwell_events(trajectories, scene_cfg, ev_cfg)
     raw_events_csv = write_events_csv(run_dir / "events.csv", raw_events)
 
-    # Phase 7: Visual evidence (snapshots/, crops/, and enriched 9-column events.csv)
+    # Phase 7 & 11e: Visual evidence (snapshots, crops, clips, storyboards, enriched events.csv)
     run_visual_evidence(
         source_path=src_path,
         events_csv_path=raw_events_csv,
         tracks_csv_path=tracks_csv_path,
         output_dir=run_dir,
         scene_config_path=scene_cfg_file,
+        camera_id=src_path.stem,
         best_frame_strategy_override=cfg.best_frame_strategy,
         crop_padding_ratio_override=cfg.crop_padding_ratio,
         min_padding_px_override=cfg.min_padding_px,
         jpeg_quality_override=cfg.jpeg_quality,
+        extract_video_clips_override=cfg.extract_video_clips,
+        clip_pre_roll_seconds_override=cfg.clip_pre_roll_seconds,
+        clip_post_roll_seconds_override=cfg.clip_post_roll_seconds,
+        render_clip_telemetry_override=cfg.render_clip_telemetry,
+        extract_storyboards_override=cfg.extract_storyboards,
     )
 
     # Phase 8: Heatmaps & zone/line analytics
@@ -768,6 +792,97 @@ def run_pipeline(
         traces=traces,
         camera_id=src_path.stem,
     )
+
+    if (cfg.extract_video_clips or cfg.extract_storyboards) and insights:
+        enriched_insights = []
+        for ins in insights:
+            ins_track_id = ins.track_id if ins.track_id is not None else -1
+            ins_track_dets = (
+                {
+                    pt.frame_id: TrackDetection(
+                        frame_id=pt.frame_id,
+                        track_id=ins_track_id,
+                        x1=pt.x - 15.0,
+                        y1=pt.y - 30.0,
+                        x2=pt.x + 15.0,
+                        y2=pt.y,
+                        confidence=0.9,
+                    )
+                    for pt in trajectories.get(ins_track_id, [])
+                }
+                if ins_track_id in trajectories
+                else {}
+            )
+            ins_traj_pts = (
+                {pt.frame_id: (pt.x, pt.y) for pt in trajectories.get(ins_track_id, [])}
+                if ins_track_id in trajectories
+                else {}
+            )
+            ins_ev = EventRecord(
+                event_id=ins.insight_id,
+                event_type="dwell_time_event",
+                track_id=max(0, ins_track_id),
+                zone_id=ins.zone_id or "scene",
+                start_time=ins.start_time,
+                end_time=ins.end_time,
+                duration_seconds=ins.duration,
+            )
+
+            rel_clip = ""
+            if cfg.extract_video_clips and total_frames > 0:
+                rel_clip = f"clips/insight_{ins.insight_id}.mp4"
+                extract_event_video_clip(
+                    video_source=src_path,
+                    output_clip_path=run_dir / rel_clip,
+                    event=ins_ev,
+                    fps=fps,
+                    total_source_frames=total_frames,
+                    pre_roll_seconds=cfg.clip_pre_roll_seconds,
+                    post_roll_seconds=cfg.clip_post_roll_seconds,
+                    scene_config=scene_cfg,
+                    track_detections_by_frame=ins_track_dets,
+                    trajectory_points_by_frame=ins_traj_pts,
+                    camera_id=src_path.stem,
+                    alert_text=f"{ins.severity.upper()}: {ins.insight_type}",
+                    render_telemetry=cfg.render_clip_telemetry,
+                )
+
+            rel_sb = ""
+            if cfg.extract_storyboards and total_frames > 0:
+                rel_sb = f"storyboards/insight_{ins.insight_id}_storyboard.jpg"
+                extract_event_storyboard(
+                    video_source=src_path,
+                    output_storyboard_path=run_dir / rel_sb,
+                    event=ins_ev,
+                    fps=fps,
+                    total_source_frames=total_frames,
+                    scene_config=scene_cfg,
+                    track_detections_by_frame=ins_track_dets,
+                    trajectory_points_by_frame=ins_traj_pts,
+                    camera_id=src_path.stem,
+                )
+
+            enriched_insights.append(
+                InsightRecord(
+                    insight_id=ins.insight_id,
+                    camera_id=ins.camera_id,
+                    insight_type=ins.insight_type,
+                    severity=ins.severity,
+                    track_id=ins.track_id,
+                    zone_id=ins.zone_id,
+                    start_time=ins.start_time,
+                    end_time=ins.end_time,
+                    duration=ins.duration,
+                    description=ins.description,
+                    evidence_snapshot_path=ins.evidence_snapshot_path,
+                    evidence_crop_path=ins.evidence_crop_path,
+                    video_clip_path=rel_clip if rel_clip else None,
+                    storyboard_path=rel_sb if rel_sb else None,
+                    details=ins.details,
+                )
+            )
+        insights = enriched_insights
+
     insights_json_path = write_insights_json(insights, run_dir / "insights.json")
     write_insights_csv(insights, run_dir / "insights.csv")
 
@@ -1020,6 +1135,8 @@ def run_multi_camera_pipeline(
                 description=i.description,
                 evidence_snapshot_path=i.evidence_snapshot_path,
                 evidence_crop_path=i.evidence_crop_path,
+                video_clip_path=i.video_clip_path,
+                storyboard_path=i.storyboard_path,
                 details=i.details,
             )
             for i in all_master_insights
@@ -1050,6 +1167,8 @@ def run_multi_camera_pipeline(
                 description=i.description,
                 evidence_snapshot_path=i.evidence_snapshot_path,
                 evidence_crop_path=i.evidence_crop_path,
+                video_clip_path=i.video_clip_path,
+                storyboard_path=i.storyboard_path,
                 details=i.details,
             )
             for i in all_master_insights

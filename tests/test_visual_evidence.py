@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
+import cv2
 import numpy as np
 import pytest
 from extract_visual_evidence import (
@@ -12,10 +13,13 @@ from extract_visual_evidence import (
     EvidenceEventRecord,
     FrameTracks,
     TrackDetection,
+    extract_event_storyboard,
+    extract_event_video_clip,
     extract_person_crop,
     index_track_detections,
     load_evidence_config,
     read_evidence_events_csv,
+    render_clip_frame_overlay,
     render_event_snapshot,
     render_evidence_contact_sheet,
     run_visual_evidence,
@@ -41,6 +45,12 @@ def test_evidence_config_defaults_and_validation() -> None:
     assert cfg.overlay_scene_geometry is True
     assert cfg.contact_sheet_columns == 4
     assert cfg.contact_sheet_max_items == 12
+    assert cfg.extract_video_clips is False
+    assert cfg.clip_pre_roll_seconds == pytest.approx(1.0)
+    assert cfg.clip_post_roll_seconds == pytest.approx(1.0)
+    assert cfg.render_clip_telemetry is True
+    assert cfg.extract_storyboards is False
+    assert cfg.storyboard_stages == ("start", "peak", "end")
 
     with pytest.raises(ValueError, match="best_frame_strategy must be one of"):
         EvidenceConfig(best_frame_strategy="invalid_strategy")
@@ -59,6 +69,12 @@ def test_evidence_config_defaults_and_validation() -> None:
 
     with pytest.raises(ValueError, match="contact_sheet_max_items must be >= 1"):
         EvidenceConfig(contact_sheet_max_items=0)
+
+    with pytest.raises(ValueError, match="clip_pre_roll_seconds must be >= 0"):
+        EvidenceConfig(clip_pre_roll_seconds=-0.5)
+
+    with pytest.raises(ValueError, match="clip_post_roll_seconds must be >= 0"):
+        EvidenceConfig(clip_post_roll_seconds=-0.5)
 
 
 def test_best_frame_selection_area_property() -> None:
@@ -188,6 +204,40 @@ def test_evidence_events_csv_round_trip(tmp_path: Path) -> None:
     write_evidence_events_csv(records, csv_path)
     loaded = read_evidence_events_csv(csv_path)
     assert loaded == records
+
+    # Round trip with video_clip_path and storyboard_path (11-column format)
+    records_with_clips = [
+        EvidenceEventRecord(
+            event_id="evt_0001",
+            event_type="zone_entry",
+            track_id=1,
+            zone_id="zone_center",
+            start_time=0.5,
+            end_time=0.5,
+            duration_seconds=0.0,
+            snapshot_path="snapshots/evt_0001_1.jpg",
+            crop_path="crops/evt_0001_1.jpg",
+            video_clip_path="clips/evt_0001.mp4",
+            storyboard_path="storyboards/evt_0001_storyboard.jpg",
+        ),
+        EvidenceEventRecord(
+            event_id="evt_0002",
+            event_type="dwell_time_event",
+            track_id=1,
+            zone_id="zone_center",
+            start_time=0.5,
+            end_time=4.25,
+            duration_seconds=3.75,
+            snapshot_path="snapshots/evt_0002_1.jpg",
+            crop_path="crops/evt_0002_1.jpg",
+            video_clip_path="clips/evt_0002.mp4",
+            storyboard_path="storyboards/evt_0002_storyboard.jpg",
+        ),
+    ]
+    csv_clips_path = tmp_path / "events_with_clips.csv"
+    write_evidence_events_csv(records_with_clips, csv_clips_path)
+    loaded_clips = read_evidence_events_csv(csv_clips_path)
+    assert loaded_clips == records_with_clips
 
     bad_header = tmp_path / "bad_header.csv"
     bad_header.write_text("event_id,event_type\n1,zone_entry\n", encoding="utf-8")
@@ -429,6 +479,182 @@ def test_verify_evidence_records_valid_and_missing(tmp_path: Path) -> None:
     assert report_bad["missing_or_empty_crops"] == ["crops/evt_0002_1.jpg"]
 
 
+def test_render_clip_frame_overlay_telemetry_and_breadcrumbs() -> None:
+    frame = np.full((300, 400, 3), 50, dtype=np.uint8)
+    event = EventRecord(
+        event_id="evt_0001",
+        event_type="dwell_time_event",
+        track_id=3,
+        zone_id="restricted_zone",
+        start_time=1.0,
+        end_time=4.0,
+        duration_seconds=3.0,
+    )
+    det = TrackDetection(
+        frame_id=30,
+        track_id=3,
+        x1=50.0,
+        y1=60.0,
+        x2=120.0,
+        y2=200.0,
+        confidence=0.91,
+    )
+    traj = [(50.0, 180.0), (70.0, 190.0), (85.0, 200.0)]
+
+    rendered = render_clip_frame_overlay(
+        frame,
+        event=event,
+        track_detection=det,
+        current_frame_id=30,
+        current_timestamp=1.5,
+        trajectory_points=traj,
+        camera_id="cam_north",
+        alert_text="LOITERING ALERT",
+    )
+    assert rendered.shape == frame.shape
+    assert rendered.dtype == np.uint8
+    # Canvas should not be identical to original blank frame
+    assert not np.array_equal(rendered, frame)
+
+    # Empty frame raises ValueError
+    with pytest.raises(ValueError, match="Invalid frame shape"):
+        render_clip_frame_overlay(np.zeros((0, 0, 3), dtype=np.uint8))
+
+
+def test_extract_event_video_clip_creates_playable_clip(tmp_path: Path) -> None:
+    video_path = make_video(tmp_path, name="source_test.avi", count=15)
+    event = EventRecord(
+        event_id="evt_0010",
+        event_type="dwell_time_event",
+        track_id=1,
+        zone_id="zone_main",
+        start_time=0.4,
+        end_time=0.8,
+        duration_seconds=0.4,
+    )
+    clip_path = tmp_path / "clips" / "evt_0010.mp4"
+    record = extract_event_video_clip(
+        video_path,
+        clip_path,
+        event=event,
+        fps=10.0,
+        total_source_frames=15,
+        pre_roll_seconds=0.2,
+        post_roll_seconds=0.2,
+        camera_id="cam_01",
+        alert_text="DWELL",
+    )
+    assert Path(record.video_clip_path).is_file()
+    assert record.event_id == "evt_0010"
+    assert record.track_id == 1
+    assert record.total_frames > 0
+    assert record.duration_seconds > 0.0
+
+    # Verify clip can be opened and decoded
+    cap = cv2.VideoCapture(str(clip_path))
+    assert cap.isOpened()
+    ret, frame = cap.read()
+    assert ret is True
+    assert frame is not None
+    cap.release()
+
+
+def test_extract_event_storyboard_creates_composite_jpeg(tmp_path: Path) -> None:
+    video_path = make_video(tmp_path, name="source_story.avi", count=15)
+    event = EventRecord(
+        event_id="evt_0020",
+        event_type="dwell_time_event",
+        track_id=2,
+        zone_id="restricted_zone",
+        start_time=0.2,
+        end_time=1.0,
+        duration_seconds=0.8,
+    )
+    storyboard_path = tmp_path / "storyboards" / "evt_0020_storyboard.jpg"
+    out_file = extract_event_storyboard(
+        video_path,
+        storyboard_path,
+        event=event,
+        fps=10.0,
+        total_source_frames=15,
+        camera_id="cam_east",
+        tile_size=(200, 150),
+    )
+    assert Path(out_file).is_file()
+    img = cv2.imread(out_file)
+    assert img is not None
+    # 3 tiles of width 200 => composite width 600, height = 150 + 36 (header) = 186
+    assert img.shape[1] == 600
+    assert img.shape[0] == 186
+
+
+def test_extract_event_video_clip_boundary_clamping_and_validation(
+    tmp_path: Path,
+) -> None:
+    video_path = make_video(tmp_path, name="source_clamp.avi", count=10)
+    event_start = EventRecord(
+        event_id="evt_start",
+        event_type="zone_entry",
+        track_id=1,
+        zone_id="zone_a",
+        start_time=0.0,
+        end_time=0.1,
+        duration_seconds=0.1,
+    )
+    # Pre-roll of 5.0s on a clip starting at t=0 must clamp start_frame to 0
+    rec_start = extract_event_video_clip(
+        video_path,
+        tmp_path / "clips" / "start_clamp.mp4",
+        event=event_start,
+        fps=10.0,
+        total_source_frames=10,
+        pre_roll_seconds=5.0,
+        post_roll_seconds=0.1,
+        render_telemetry=False,
+    )
+    assert rec_start.start_frame == 0
+
+    event_end = EventRecord(
+        event_id="evt_end",
+        event_type="zone_exit",
+        track_id=1,
+        zone_id="zone_a",
+        start_time=0.9,
+        end_time=1.0,
+        duration_seconds=0.1,
+    )
+    # Post-roll of 5.0s on a 10-frame video must clamp end_frame to 9
+    rec_end = extract_event_video_clip(
+        video_path,
+        tmp_path / "clips" / "end_clamp.mp4",
+        event=event_end,
+        fps=10.0,
+        total_source_frames=10,
+        pre_roll_seconds=0.1,
+        post_roll_seconds=5.0,
+    )
+    assert rec_end.end_frame == 9
+
+    # Negative/zero total frames or fps raises ValueError
+    with pytest.raises(ValueError, match="Invalid source video parameters"):
+        extract_event_video_clip(
+            video_path,
+            tmp_path / "clips" / "bad.mp4",
+            event=event_start,
+            fps=0.0,
+            total_source_frames=10,
+        )
+
+    with pytest.raises(ValueError, match="Invalid source video parameters"):
+        extract_event_storyboard(
+            video_path,
+            tmp_path / "storyboards" / "bad.jpg",
+            event=event_start,
+            fps=10.0,
+            total_source_frames=0,
+        )
+
+
 def test_run_visual_evidence_pipeline_and_cli_end_to_end(tmp_path: Path) -> None:
     video_path = make_video(tmp_path, name="evidence_clip.avi", count=6)
     tracks_csv = tmp_path / "tracks.csv"
@@ -520,3 +746,105 @@ def test_run_visual_evidence_pipeline_and_cli_end_to_end(tmp_path: Path) -> None
     )
     assert rc == 0
     assert (cli_out / "events.csv").is_file()
+
+
+def test_run_visual_evidence_with_clips_and_storyboards_end_to_end(
+    tmp_path: Path,
+) -> None:
+    """Verify run_visual_evidence generates MP4 clips, storyboard JPEGs, and enriched CSV."""
+    video_path = make_video(tmp_path, name="evidence_full.avi", count=10)
+    tracks_csv = tmp_path / "tracks_full.csv"
+    events_csv = tmp_path / "input_events_full.csv"
+    out_dir = tmp_path / "evidence_clips_out"
+
+    frame_tracks = [
+        FrameTracks(
+            frame_id=i,
+            tracks=[
+                TrackDetection(
+                    frame_id=i,
+                    track_id=2,
+                    x1=15.0,
+                    y1=12.0,
+                    x2=40.0,
+                    y2=45.0,
+                    confidence=0.85,
+                )
+            ],
+        )
+        for i in range(10)
+    ]
+    write_tracks_csv(tracks_csv, frame_tracks)
+
+    events = [
+        EventRecord(
+            event_id="evt_clip_01",
+            event_type="zone_entry",
+            track_id=2,
+            zone_id="entry_zone",
+            start_time=0.1,
+            end_time=0.2,
+            duration_seconds=0.1,
+        ),
+        EventRecord(
+            event_id="evt_clip_02",
+            event_type="dwell_time_event",
+            track_id=2,
+            zone_id="entry_zone",
+            start_time=0.2,
+            end_time=0.7,
+            duration_seconds=0.5,
+        ),
+    ]
+    write_events_csv(events_csv, events)
+
+    summary = run_visual_evidence(
+        source_path=video_path,
+        events_csv_path=events_csv,
+        tracks_csv_path=tracks_csv,
+        output_dir=out_dir,
+        extract_video_clips_override=True,
+        extract_storyboards_override=True,
+        clip_pre_roll_seconds_override=0.1,
+        clip_post_roll_seconds_override=0.1,
+    )
+
+    assert summary["extract_video_clips"] is True
+    assert summary["extract_storyboards"] is True
+    assert summary["video_clips_count"] == 2
+    assert summary["storyboards_count"] == 2
+    assert summary["verification"]["all_paths_valid"] is True
+
+    assert (out_dir / "clips" / "evt_clip_01_2.mp4").is_file()
+    assert (out_dir / "clips" / "evt_clip_02_2.mp4").is_file()
+    assert (out_dir / "storyboards" / "evt_clip_01_2_storyboard.jpg").is_file()
+    assert (out_dir / "storyboards" / "evt_clip_02_2_storyboard.jpg").is_file()
+
+    enriched = read_evidence_events_csv(out_dir / "events.csv")
+    assert len(enriched) == 2
+    assert enriched[0].video_clip_path == "clips/evt_clip_01_2.mp4"
+    assert enriched[0].storyboard_path == "storyboards/evt_clip_01_2_storyboard.jpg"
+
+    # Test CLI invocation with flags
+    cli_out = tmp_path / "cli_clips_out"
+    rc = extract_visual_evidence_main(
+        [
+            "--source",
+            str(video_path),
+            "--events",
+            str(events_csv),
+            "--tracks",
+            str(tracks_csv),
+            "--output-dir",
+            str(cli_out),
+            "--extract-clips",
+            "--extract-storyboards",
+            "--clip-pre-roll",
+            "0.1",
+            "--clip-post-roll",
+            "0.1",
+        ]
+    )
+    assert rc == 0
+    assert (cli_out / "clips" / "evt_clip_01_2.mp4").is_file()
+    assert (cli_out / "storyboards" / "evt_clip_01_2_storyboard.jpg").is_file()

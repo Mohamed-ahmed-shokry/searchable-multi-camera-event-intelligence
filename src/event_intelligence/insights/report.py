@@ -69,11 +69,14 @@ def generate_intelligence_report_markdown(
             ]
         )
         for al in crit_or_high:
-            ev_link = (
-                f" ([Snapshot]({al.evidence_snapshot_path}))"
-                if al.evidence_snapshot_path
-                else ""
-            )
+            links = []
+            if al.evidence_snapshot_path:
+                links.append(f"[Snapshot]({al.evidence_snapshot_path})")
+            if al.video_clip_path:
+                links.append(f"[Clip]({al.video_clip_path})")
+            if al.storyboard_path:
+                links.append(f"[Storyboard]({al.storyboard_path})")
+            ev_link = f" ({', '.join(links)})" if links else ""
             lines.append(
                 f"> - **[{al.severity.upper()}]** `[{al.camera_id}]` {al.description}{ev_link}"
             )
@@ -91,13 +94,16 @@ def generate_intelligence_report_markdown(
         lines.append("| — | — | — | — | — | — | — | No anomalous events detected | — |")
     else:
         for ins in insights:
-            ev_str = "None"
-            if ins.evidence_snapshot_path and ins.evidence_crop_path:
-                ev_str = f"[Snap]({ins.evidence_snapshot_path}) / [Crop]({ins.evidence_crop_path})"
-            elif ins.evidence_snapshot_path:
-                ev_str = f"[Snap]({ins.evidence_snapshot_path})"
-            elif ins.evidence_crop_path:
-                ev_str = f"[Crop]({ins.evidence_crop_path})"
+            ev_parts = []
+            if ins.evidence_snapshot_path:
+                ev_parts.append(f"[Snap]({ins.evidence_snapshot_path})")
+            if ins.evidence_crop_path:
+                ev_parts.append(f"[Crop]({ins.evidence_crop_path})")
+            if ins.video_clip_path:
+                ev_parts.append(f"[Clip]({ins.video_clip_path})")
+            if ins.storyboard_path:
+                ev_parts.append(f"[Storyboard]({ins.storyboard_path})")
+            ev_str = " / ".join(ev_parts) if ev_parts else "None"
 
             t_str = (
                 f"{ins.start_time:.1f}s"
@@ -218,6 +224,8 @@ def write_insights_csv(
         "description",
         "evidence_snapshot_path",
         "evidence_crop_path",
+        "video_clip_path",
+        "storyboard_path",
     ]
     with open(out_p, "w", newline="", encoding="utf-8") as f:
         writer = csv.DictWriter(f, fieldnames=fields, extrasaction="ignore")

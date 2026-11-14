@@ -3,15 +3,21 @@
 from __future__ import annotations
 
 from event_intelligence.evidence.extract_visual_evidence import (
+    EVIDENCE_EVENTS_CSV_CLIPS_HEADER,
     EVIDENCE_EVENTS_CSV_HEADER,
     VALID_BEST_FRAME_STRATEGIES,
     BestFrameSelection,
+    EventClipRecord,
     EvidenceConfig,
     EvidenceEventRecord,
+    create_video_writer,
+    extract_event_storyboard,
+    extract_event_video_clip,
     extract_person_crop,
     index_track_detections,
     load_evidence_config,
     read_evidence_events_csv,
+    render_clip_frame_overlay,
     render_event_snapshot,
     render_evidence_contact_sheet,
     run_visual_evidence,
@@ -22,15 +28,21 @@ from event_intelligence.evidence.extract_visual_evidence import (
 )
 
 __all__ = [
+    "EVIDENCE_EVENTS_CSV_CLIPS_HEADER",
     "EVIDENCE_EVENTS_CSV_HEADER",
     "VALID_BEST_FRAME_STRATEGIES",
     "BestFrameSelection",
+    "EventClipRecord",
     "EvidenceConfig",
     "EvidenceEventRecord",
+    "create_video_writer",
+    "extract_event_storyboard",
+    "extract_event_video_clip",
     "extract_person_crop",
     "index_track_detections",
     "load_evidence_config",
     "read_evidence_events_csv",
+    "render_clip_frame_overlay",
     "render_event_snapshot",
     "render_evidence_contact_sheet",
     "run_visual_evidence",

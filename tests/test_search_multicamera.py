@@ -211,6 +211,52 @@ class TestSearchMultiCameraCli(unittest.TestCase):
         self.assertIn("[ins_lob_01] cam=lobby type=loitering sev=high", output)
         self.assertIn("[ins_cor_01] cam=corridor type=wrong_way sev=medium", output)
 
+    def test_cli_filter_events_by_clips_flag(self) -> None:
+        events_clip = self.tmp / "events_clip.csv"
+        events_clip.write_text(
+            "event_id,event_type,track_id,zone_id,start_time,end_time,duration_seconds,"
+            "snapshot_path,crop_path,video_clip_path,storyboard_path\n"
+            "ev_clip_01,dwell_time_event,1,lobby,0.0,3.0,3.0,snap_c.jpg,crop_c.jpg,clips/c01.mp4,storyboards/c01_sb.jpg\n"
+            "ev_no_clip,zone_entry,2,lobby,1.0,1.0,0.0,snap_d.jpg,crop_d.jpg,,\n",
+            encoding="utf-8",
+        )
+        clip_db = self.tmp / "clips_test.db"
+        cfg = SearchConfig(
+            source_name="lobby_cam.mp4",
+            camera_id="lobby",
+            events_csv=str(events_clip),
+            tracks_csv="",
+            detections_csv="",
+            tracking_summary_csv="",
+            trajectories_csv="",
+            trajectory_summary_csv="",
+            zone_counts_csv="",
+            line_counts_csv="",
+        )
+        from event_intelligence.storage import ingest_intelligence_db
+
+        ingest_intelligence_db(clip_db, cfg, project_root=self.tmp)
+
+        buf = io.StringIO()
+        with redirect_stdout(buf):
+            rc = search_main(["--db", str(clip_db), "--clips", "--json"])
+        self.assertEqual(rc, 0)
+        data = json.loads(buf.getvalue())
+        self.assertEqual(len(data), 1)
+        self.assertEqual(data[0]["event_id"], "ev_clip_01")
+        self.assertEqual(data[0]["video_clip_path"], "clips/c01.mp4")
+        self.assertEqual(data[0]["storyboard_path"], "storyboards/c01_sb.jpg")
+
+        # Test text output shows clip label
+        buf_text = io.StringIO()
+        with redirect_stdout(buf_text):
+            rc = search_main(["--db", str(clip_db), "--clips"])
+        self.assertEqual(rc, 0)
+        text_out = buf_text.getvalue()
+        self.assertIn("Matched 1 event(s):", text_out)
+        self.assertIn("clip=clips/c01.mp4", text_out)
+        self.assertIn("sb=storyboards/c01_sb.jpg", text_out)
+
 
 if __name__ == "__main__":
     unittest.main()
