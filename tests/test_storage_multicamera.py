@@ -441,6 +441,51 @@ class TestMultiCameraStorage(unittest.TestCase):
             with self.assertRaises(ValueError):
                 query_trajectories(db_path, bbox=(100.0, 0.0, 50.0, 100.0))
 
+    def test_query_zone_counts_and_line_counts(self) -> None:
+        from event_intelligence.storage.search_events import (
+            query_line_counts,
+            query_zone_counts,
+        )
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            tmp = Path(tmpdir)
+            db_path = tmp / "intelligence.db"
+            zc_csv = tmp / "zone_counts.csv"
+            zc_csv.write_text(
+                "zone_id,entry_count,exit_count,total_dwell_seconds,peak_occupancy\n"
+                "lobby,4,3,18.5,2\n",
+                encoding="utf-8",
+            )
+            lc_csv = tmp / "line_counts.csv"
+            lc_csv.write_text(
+                "line_id,crossings_ab,crossings_ba,total\n"
+                "gate,5,2,7\n",
+                encoding="utf-8",
+            )
+            cfg = SearchConfig(
+                source_name="cam_stats.mp4",
+                camera_id="cam_stats",
+                zone_counts_csv=str(zc_csv),
+                line_counts_csv=str(lc_csv),
+                events_csv="",
+                tracks_csv="",
+                detections_csv="",
+                tracking_summary_csv="",
+                trajectories_csv="",
+                trajectory_summary_csv="",
+            )
+            ingest_intelligence_db(db_path, cfg, project_root=tmp)
+
+            z_res = query_zone_counts(db_path, camera_id="cam_stats", zone_id="lobby")
+            self.assertEqual(len(z_res), 1)
+            self.assertEqual(z_res[0].peak_occupancy, 2)
+            self.assertEqual(z_res[0].to_dict()["total_dwell_seconds"], 18.5)
+
+            l_res = query_line_counts(db_path, camera_id="cam_stats", line_id="gate")
+            self.assertEqual(len(l_res), 1)
+            self.assertEqual(l_res[0].total, 7)
+            self.assertEqual(l_res[0].to_dict()["crossings_ab"], 5)
+
 
 if __name__ == "__main__":
     unittest.main()
