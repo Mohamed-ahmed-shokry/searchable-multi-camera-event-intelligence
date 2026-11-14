@@ -2364,6 +2364,39 @@ def build_parser() -> argparse.ArgumentParser:
         help="Filter events having an associated composite storyboard image.",
     )
     parser.add_argument(
+        "--trajectories",
+        action="store_true",
+        help="Query trajectories table instead of events table.",
+    )
+    parser.add_argument(
+        "--bbox",
+        type=str,
+        default=None,
+        help="Spatial bounding box filter 'x1,y1,x2,y2' for trajectory queries.",
+    )
+    parser.add_argument(
+        "--zone-stats",
+        action="store_true",
+        help="Query aggregated zone activity metrics (zone_counts table).",
+    )
+    parser.add_argument(
+        "--line-stats",
+        action="store_true",
+        help="Query aggregated line directional crossings (line_counts table).",
+    )
+    parser.add_argument(
+        "--line",
+        type=str,
+        default=None,
+        help="Filter line stats by line_id.",
+    )
+    parser.add_argument(
+        "--track-timeline",
+        type=int,
+        default=None,
+        help="Build a unified chronological dossier for the specified integer track_id.",
+    )
+    parser.add_argument(
         "--limit",
         type=int,
         default=100,
