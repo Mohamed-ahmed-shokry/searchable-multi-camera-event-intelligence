@@ -341,6 +341,17 @@ def load_pipeline_config(path: Path | str | None = None) -> PipelineConfig:
             cross_camera_max_seconds=float(
                 ins_raw.get("cross_camera_max_seconds", 60.0)
             ),
+            max_zone_occupancy=int(ins_raw.get("max_zone_occupancy", 3)),
+            per_zone_max_occupancy={
+                str(k): int(v)
+                for k, v in (ins_raw.get("per_zone_max_occupancy") or {}).items()
+            },
+            min_crowding_seconds=float(ins_raw.get("min_crowding_seconds", 2.0)),
+            tailgating_max_gap_seconds=float(
+                ins_raw.get("tailgating_max_gap_seconds", 2.0)
+            ),
+            proximity_distance_px=float(ins_raw.get("proximity_distance_px", 60.0)),
+            min_proximity_seconds=float(ins_raw.get("min_proximity_seconds", 2.0)),
         )
 
     return PipelineConfig(
