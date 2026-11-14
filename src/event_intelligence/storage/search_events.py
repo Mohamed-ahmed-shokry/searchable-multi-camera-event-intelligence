@@ -1779,6 +1779,100 @@ def query_line_counts(
     return results
 
 
+def query_track_timeline(
+    db_path: Path | str,
+    track_id: int,
+    *,
+    camera_id: str | None = None,
+) -> list[TrackTimelineDossier]:
+    """Build a unified chronological dossier (lifespan, bounds, speeds, events, insights) for track_id."""
+    if track_id < 0:
+        raise ValueError("track_id must be non-negative")
+    path = Path(db_path)
+    if not path.is_file():
+        raise FileNotFoundError(f"SQLite database not found: {path}")
+
+    clauses = ["track_id = ?"]
+    params: list[Any] = [int(track_id)]
+    if camera_id is not None and camera_id.strip():
+        clauses.append("camera_id = ?")
+        params.append(camera_id.strip())
+
+    where_sql = " AND ".join(clauses)
+    with closing(sqlite3.connect(path)) as conn:
+        track_rows = conn.execute(
+            "SELECT camera_id, track_id, start_frame, end_frame, "
+            "duration_seconds, path_length_px "
+            f"FROM tracks WHERE {where_sql} ORDER BY camera_id ASC",
+            params,
+        ).fetchall()
+
+    if not track_rows:
+        raise KeyError(
+            f"Track {track_id} not found in {path}"
+            + (f" for camera {camera_id!r}" if camera_id else "")
+        )
+
+    dossiers: list[TrackTimelineDossier] = []
+    for cam_raw, tid_raw, s_frame, e_frame, dur_sec, path_len in track_rows:
+        cam_str = str(cam_raw or "")
+        tid = int(tid_raw)
+        pts = query_trajectories(
+            path,
+            camera_id=cam_str if cam_str else None,
+            track_id=tid,
+            limit=50000,
+        )
+        if pts:
+            xs = [p.x for p in pts]
+            ys = [p.y for p in pts]
+            min_x, max_x = min(xs), max(xs)
+            min_y, max_y = min(ys), max(ys)
+            speeds: list[float] = []
+            for p1, p2 in pairwise(pts):
+                dt = p2.timestamp - p1.timestamp
+                if dt > 1e-4:
+                    speeds.append(math.hypot(p2.x - p1.x, p2.y - p1.y) / dt)
+            mean_spd = sum(speeds) / len(speeds) if speeds else 0.0
+            max_spd = max(speeds) if speeds else 0.0
+        else:
+            min_x = max_x = min_y = max_y = 0.0
+            mean_spd = max_spd = 0.0
+
+        evs = query_events(
+            path,
+            camera_id=cam_str if cam_str else None,
+            track_id=tid,
+            limit=1000,
+        )
+        ins = query_insights(
+            path,
+            camera_id=cam_str if cam_str else None,
+            track_id=tid,
+            limit=1000,
+        )
+        dossiers.append(
+            TrackTimelineDossier(
+                camera_id=cam_str,
+                track_id=tid,
+                start_frame=int(s_frame),
+                end_frame=int(e_frame),
+                duration_seconds=float(dur_sec),
+                path_length_px=float(path_len),
+                trajectory_points_count=len(pts),
+                min_x=min_x,
+                min_y=min_y,
+                max_x=max_x,
+                max_y=max_y,
+                mean_speed_px_s=mean_spd,
+                max_speed_px_s=max_spd,
+                events=evs,
+                insights=ins,
+            )
+        )
+    return dossiers
+
+
 def lookup_event_evidence(
     db_path: Path | str,
     event_id: str,
