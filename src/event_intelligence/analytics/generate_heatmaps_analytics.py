@@ -701,6 +701,105 @@ def compute_zone_counts(
     return records
 
 
+def compute_zone_occupancy_profiles(
+    events: Sequence[Any],
+    *,
+    scene_config: SceneConfig | None = None,
+    max_zone_occupancy: int = 3,
+    per_zone_max_occupancy: Mapping[str, int] | None = None,
+) -> list[ZoneOccupancyProfile]:
+    """Compute temporal occupancy profiles (peak timestamp, active time, mean occupancy, crowded time)."""
+    zone_order: list[str] = []
+    if scene_config is not None:
+        for z in scene_config.zones:
+            if z.id not in zone_order:
+                zone_order.append(z.id)
+
+    for ev in events:
+        if (
+            getattr(ev, "event_type", None)
+            in {"zone_entry", "zone_exit", "dwell_time_event", "zone_dwell"}
+            and getattr(ev, "zone_id", None)
+            and str(ev.zone_id) not in zone_order
+        ):
+            zone_order.append(str(ev.zone_id))
+
+    cap_overrides = dict(per_zone_max_occupancy or {})
+    profiles: list[ZoneOccupancyProfile] = []
+
+    for zid in zone_order:
+        cap = int(cap_overrides.get(zid, max_zone_occupancy))
+        stays = [
+            ev
+            for ev in events
+            if getattr(ev, "event_type", None) in {"dwell_time_event", "zone_dwell"}
+            and str(getattr(ev, "zone_id", "")) == zid
+        ]
+        if not stays:
+            profiles.append(
+                ZoneOccupancyProfile(
+                    zone_id=zid,
+                    peak_occupancy=0,
+                    peak_timestamp_seconds=0.0,
+                    active_seconds=0.0,
+                    mean_active_occupancy=0.0,
+                    crowded_seconds=0.0,
+                )
+            )
+            continue
+
+        boundaries = sorted(
+            {round(float(getattr(ev, "start_time", 0.0)), 6) for ev in stays}
+            | {round(float(getattr(ev, "end_time", 0.0)), 6) for ev in stays}
+        )
+        peak_occ = 0
+        peak_ts = float(boundaries[0]) if boundaries else 0.0
+        active_sec = 0.0
+        person_sec = 0.0
+        crowded_sec = 0.0
+
+        for t0, t1 in itertools.pairwise(boundaries):
+            dt = t1 - t0
+            if dt <= 0.0:
+                continue
+            mid = 0.5 * (t0 + t1)
+            occ = len(
+                {
+                    int(getattr(ev, "track_id", 0))
+                    for ev in stays
+                    if float(getattr(ev, "start_time", 0.0))
+                    <= mid
+                    <= float(getattr(ev, "end_time", 0.0))
+                }
+            )
+            if occ > peak_occ:
+                peak_occ = occ
+                peak_ts = t0
+            if occ >= 1:
+                active_sec += dt
+                person_sec += occ * dt
+            if occ >= cap:
+                crowded_sec += dt
+
+        if peak_occ == 0 and stays:
+            peak_occ = 1
+            peak_ts = min(float(getattr(ev, "start_time", 0.0)) for ev in stays)
+
+        mean_occ = (person_sec / active_sec) if active_sec > 0.0 else 0.0
+        profiles.append(
+            ZoneOccupancyProfile(
+                zone_id=zid,
+                peak_occupancy=peak_occ,
+                peak_timestamp_seconds=round(peak_ts, 4),
+                active_seconds=round(active_sec, 4),
+                mean_active_occupancy=round(mean_occ, 4),
+                crowded_seconds=round(crowded_sec, 4),
+            )
+        )
+
+    return profiles
+
+
 def compute_line_counts(
     events: Sequence[Any],
     *,
