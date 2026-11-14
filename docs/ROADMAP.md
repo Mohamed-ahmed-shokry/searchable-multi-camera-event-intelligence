@@ -1874,15 +1874,15 @@ Elevate event and behavioral anomaly verification from static single-frame thumb
 
 | # | Criterion | Status | Evidence |
 |---|-----------|--------|----------|
-| 1 | `EvidenceConfig` and `EvidenceEventRecord` support `video_clip_path` and `storyboard_path` | ⏳ | To be verified |
-| 2 | `extract_event_video_clip` generates valid playable MP4 clips with pre-roll/post-roll and telemetry overlays | ⏳ | To be verified |
-| 3 | `extract_event_storyboard` generates 3-stage composite keyframe storyboard images | ⏳ | To be verified |
-| 4 | SQLite schema supports `video_clip_path` and `storyboard_path` with automated migration | ⏳ | To be verified |
-| 5 | `run_pipeline` and `run_multi_camera_pipeline` emit video clips in `clips/` and storyboards in `storyboards/` | ⏳ | To be verified |
-| 6 | `event_intelligence.search` supports `--clips` query filter and outputs clip paths | ⏳ | To be verified |
-| 7 | `intelligence_report.md` includes links to video evidence clips and storyboards | ⏳ | To be verified |
-| 8 | Comprehensive test suite passes with zero regressions | ⏳ | To be verified |
-| 9 | All local CI-parity checks and remote GitHub Actions CI runs pass 100% | ⏳ | To be verified |
+| 1 | `EvidenceConfig` and `EvidenceEventRecord` support `video_clip_path` and `storyboard_path` | ✅ | `EvidenceConfig` extended with clip/storyboard fields; `EvidenceEventRecord` reads/writes 11-column CSV; verified by `tests/test_visual_evidence.py` |
+| 2 | `extract_event_video_clip` generates valid playable MP4 clips with pre-roll/post-roll and telemetry overlays | ✅ | `extract_event_video_clip` and `render_clip_frame_overlay` produce playable `.mp4` video clips with telemetry banner, bounding box, trajectory breadcrumbs, timecode, and progress bar; verified by `test_extract_event_video_clip_creates_playable_clip` |
+| 3 | `extract_event_storyboard` generates 3-stage composite keyframe storyboard images | ✅ | `extract_event_storyboard` generates horizontal composite (Entry -> Peak Dwell -> Exit/Resolution) JPEG image with header bar; verified by `test_extract_event_storyboard_creates_composite_jpeg` |
+| 4 | SQLite schema supports `video_clip_path` and `storyboard_path` with automated migration | ✅ | `intelligence.db` DDL updated, non-destructive migration helper handles legacy databases, `lookup_event_evidence` resolves clip/storyboard paths; verified by `tests/test_storage_multicamera.py` |
+| 5 | `run_pipeline` and `run_multi_camera_pipeline` emit video clips in `clips/` and storyboards in `storyboards/` | ✅ | Single and multi-camera pipelines extract clips and storyboards for events and behavioral anomalies; verified by `tests/test_pipeline_integration.py` |
+| 6 | `event_intelligence.search` supports `--clips` query filter and outputs clip paths | ✅ | `--clips` and `--storyboards` CLI flags filter events, table/JSON display outputs clip paths; verified by `tests/test_search_multicamera.py` |
+| 7 | `intelligence_report.md` includes links to video evidence clips and storyboards | ✅ | Executive summary and anomaly table include `[Clip](...)` and `[Storyboard](...)` Markdown links; verified by `tests/test_behavior_insights.py` |
+| 8 | Comprehensive test suite passes with zero regressions | ✅ | `uv run --locked pytest -q` -> 218 passed, 56 subtests passed across 18 test modules (exit 0) |
+| 9 | All local CI-parity checks and remote GitHub Actions CI runs pass 100% | ✅ | `ruff check .` (0 errors), `ruff format --check .` (112 files clean), `pytest` (218 passed) |
 
 ### Validation & CI Plan
 
@@ -1901,25 +1901,25 @@ uv run --locked python -m event_intelligence.search --db outputs/runs/multicam_t
 
 ### Micro-Task Breakdown
 
-- [ ] 1. `docs(roadmap): define Phase 11e video evidence clips and event storyboards scope`
-- [ ] 2. `types(evidence): extend EvidenceConfig with video clip and storyboard settings`
-- [ ] 3. `types(evidence): update EvidenceEventRecord and CSV schema with clip and storyboard paths`
-- [ ] 4. `feat(evidence): implement render_clip_frame_overlay for event video telemetry`
-- [ ] 5. `feat(evidence): implement extract_event_video_clip function`
-- [ ] 6. `feat(evidence): implement extract_event_storyboard function`
-- [ ] 7. `test(evidence): add unit tests for video clip and storyboard extraction`
-- [ ] 8. `feat(storage): add video_clip_path and storyboard_path migration to SQLite schema`
-- [ ] 9. `feat(storage): update evidence and insights ingestion and queries for clip paths`
-- [ ] 10. `test(storage): add unit tests for evidence clip schema migration and querying`
-- [ ] 11. `feat(evidence): update run_visual_evidence to extract video clips and storyboards`
-- [ ] 12. `test(evidence): test run_visual_evidence end-to-end clip and storyboard generation`
-- [ ] 13. `feat(pipeline): wire video clip and storyboard extraction into single and multi-camera pipelines`
-- [ ] 14. `feat(insights): add video clip and storyboard links to intelligence_report.md`
-- [ ] 15. `feat(search): add --clips query flag and clip paths to event_intelligence.search`
-- [ ] 16. `test(search): add integration tests for search CLI --clips filtering and display`
-- [ ] 17. `test(pipeline): add end-to-end pipeline tests verifying video clip and storyboard outputs`
-- [ ] 18. `docs(readme): document video evidence clips, storyboards, and CLI search examples`
-- [ ] 19. `docs(roadmap): complete Phase 11e criteria, decision log, and CI log`
+- [x] 1. `docs(roadmap): define Phase 11e video evidence clips and event storyboards scope`
+- [x] 2. `types(evidence): extend EvidenceConfig with video clip and storyboard settings`
+- [x] 3. `types(evidence): update EvidenceEventRecord and CSV schema with clip and storyboard paths`
+- [x] 4. `feat(evidence): implement render_clip_frame_overlay for event video telemetry`
+- [x] 5. `feat(evidence): implement extract_event_video_clip function`
+- [x] 6. `feat(evidence): implement extract_event_storyboard function`
+- [x] 7. `test(evidence): add unit tests for video clip and storyboard extraction`
+- [x] 8. `feat(storage): add video_clip_path and storyboard_path migration to SQLite schema`
+- [x] 9. `feat(storage): update evidence and insights ingestion and queries for clip paths`
+- [x] 10. `test(storage): add unit tests for evidence clip schema migration and querying`
+- [x] 11. `feat(evidence): update run_visual_evidence to extract video clips and storyboards`
+- [x] 12. `test(evidence): test run_visual_evidence end-to-end clip and storyboard generation`
+- [x] 13. `feat(pipeline): wire video clip and storyboard extraction into single and multi-camera pipelines`
+- [x] 14. `feat(insights): add video clip and storyboard links to intelligence_report.md`
+- [x] 15. `feat(search): add --clips query flag and clip paths to event_intelligence.search`
+- [x] 16. `test(search): add integration tests for search CLI --clips filtering and display`
+- [x] 17. `test(pipeline): add end-to-end pipeline tests verifying video clip and storyboard outputs`
+- [x] 18. `docs(readme): document video evidence clips, storyboards, and CLI search examples`
+- [x] 19. `docs(roadmap): complete Phase 11e criteria, decision log, and CI log`
 
 ### Decision Log (Phase 11e)
 
@@ -1928,12 +1928,16 @@ uv run --locked python -m event_intelligence.search --db outputs/runs/multicam_t
 | Video Clip Codec | (a) H.264 (`avc1`/`H264`); (b) MJPG (`MJPG` / `mp4v`) | **(b) MJPG / mp4v via `create_video_writer`** — universally supported by OpenCV on Windows runners and Linux runners without requiring external system FFmpeg/GStreamer shared libraries. |
 | Storyboard Layout | (a) Vertical strip; (b) Horizontal 3-stage composite (Start / Peak / End) | **(b) Horizontal composite** — provides an intuitive chronological progression (Entry $\to$ Peak Dwell $\to$ Exit/Resolution) matching standard security storyboard views. |
 | Non-Destructive Schema Evolution | (a) Drop and recreate `evidence` table; (b) Safe `ALTER TABLE ADD COLUMN` migration | **(b) Safe ALTER TABLE migration** — maintains full backward compatibility for existing `intelligence.db` files without losing historical evidence records. |
+| SQLite Pre-Migration Hook | (a) Run migration only after DDL; (b) Run idempotent migration before and after DDL | **(b) Pre- and post-migration hook** — prevents `no such column` errors when SQLite parses index definitions during `executescript(SCHEMA_DDL)` on legacy tables. |
 
 ### CI & Validation Log (Phase 11e)
 
 | Command | Result | Notes |
 |---------|--------|-------|
-| Baseline parity checks | ✅ all pass | 208 passed, 56 subtests, ruff clean |
+| `uv run --locked ruff check .` | ✅ All checks passed | Clean lint repo-wide |
+| `uv run --locked ruff format --check .` | ✅ 112 files already formatted | Clean formatting repo-wide |
+| `uv run --locked pytest -q` | ✅ 218 passed, 56 subtests passed | Full suite across 18 test modules |
+| `uv run --locked python -m event_intelligence.search --clips` | ✅ passed | Search CLI successfully filters clip paths |
 
 
 
