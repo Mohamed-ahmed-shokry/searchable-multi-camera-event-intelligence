@@ -43,12 +43,41 @@ EVIDENCE_EVENTS_CSV_HEADER: list[str] = [
     "crop_path",
 ]
 
+EVIDENCE_EVENTS_CSV_CLIPS_HEADER: list[str] = [
+    "event_id",
+    "event_type",
+    "track_id",
+    "zone_id",
+    "start_time",
+    "end_time",
+    "duration_seconds",
+    "snapshot_path",
+    "crop_path",
+    "video_clip_path",
+    "storyboard_path",
+]
+
 VALID_BEST_FRAME_STRATEGIES: tuple[str, ...] = (
     "highest_confidence",
     "midpoint",
     "start_frame",
     "largest_area",
 )
+
+
+@dataclass(frozen=True)
+class EventClipRecord:
+    """Metadata for an extracted event or anomaly video clip and storyboard."""
+
+    event_id: str
+    track_id: int
+    video_clip_path: str
+    storyboard_path: str = ""
+    start_frame: int = 0
+    end_frame: int = 0
+    total_frames: int = 0
+    fps: float = 30.0
+    duration_seconds: float = 0.0
 
 
 @dataclass(frozen=True)
@@ -125,7 +154,7 @@ class BestFrameSelection:
 
 @dataclass(frozen=True)
 class EvidenceEventRecord:
-    """An EventRecord enriched with relative/portable snapshot_path and crop_path."""
+    """An EventRecord enriched with relative/portable snapshot_path, crop_path, video_clip_path, and storyboard_path."""
 
     event_id: str
     event_type: str
@@ -136,6 +165,8 @@ class EvidenceEventRecord:
     duration_seconds: float
     snapshot_path: str
     crop_path: str
+    video_clip_path: str = ""
+    storyboard_path: str = ""
     best_frame_id: int = 0
     best_confidence: float = 0.0
     clipped_at_frame_edge: bool = False
@@ -173,6 +204,8 @@ class EvidenceEventRecord:
         *,
         snapshot_path: str,
         crop_path: str,
+        video_clip_path: str = "",
+        storyboard_path: str = "",
         best_frame_id: int = 0,
         best_confidence: float = 0.0,
         clipped_at_frame_edge: bool = False,
@@ -187,13 +220,15 @@ class EvidenceEventRecord:
             duration_seconds=event.duration_seconds,
             snapshot_path=snapshot_path,
             crop_path=crop_path,
+            video_clip_path=video_clip_path,
+            storyboard_path=storyboard_path,
             best_frame_id=best_frame_id,
             best_confidence=best_confidence,
             clipped_at_frame_edge=clipped_at_frame_edge,
         )
 
-    def to_row(self) -> list[str]:
-        return [
+    def to_row(self, include_clips: bool = False) -> list[str]:
+        row = [
             self.event_id,
             self.event_type,
             str(self.track_id),
@@ -204,6 +239,9 @@ class EvidenceEventRecord:
             self.snapshot_path,
             self.crop_path,
         ]
+        if include_clips or self.video_clip_path or self.storyboard_path:
+            row.extend([self.video_clip_path, self.storyboard_path])
+        return row
 
 
 def load_evidence_config(config_path: Path | str) -> EvidenceConfig:
@@ -270,21 +308,34 @@ def save_evidence_config(config: EvidenceConfig, config_path: Path | str) -> Pat
 
 
 def write_evidence_events_csv(
-    records: Sequence[EvidenceEventRecord], csv_path: Path | str
+    records: Sequence[EvidenceEventRecord],
+    csv_path: Path | str,
+    *,
+    include_clips: bool | None = None,
 ) -> Path:
-    """Write enriched EvidenceEventRecord rows to the 9-column Phase 7 events.csv."""
+    """Write enriched EvidenceEventRecord rows to events.csv (9-column legacy or 11-column with clips)."""
     path = Path(csv_path)
     path.parent.mkdir(parents=True, exist_ok=True)
+    with_clips = (
+        include_clips
+        if include_clips is not None
+        else any(rec.video_clip_path or rec.storyboard_path for rec in records)
+    )
+    header = (
+        EVIDENCE_EVENTS_CSV_CLIPS_HEADER
+        if with_clips
+        else EVIDENCE_EVENTS_CSV_HEADER
+    )
     with path.open("w", encoding="utf-8", newline="") as handle:
         writer = csv.writer(handle)
-        writer.writerow(EVIDENCE_EVENTS_CSV_HEADER)
+        writer.writerow(header)
         for rec in records:
-            writer.writerow(rec.to_row())
+            writer.writerow(rec.to_row(include_clips=with_clips))
     return path
 
 
 def read_evidence_events_csv(csv_path: Path | str) -> list[EvidenceEventRecord]:
-    """Read enriched EvidenceEventRecord rows from the 9-column Phase 7 events.csv."""
+    """Read enriched EvidenceEventRecord rows from events.csv (supports 9-column and 11-column headers)."""
     path = Path(csv_path)
     if not path.is_file():
         raise FileNotFoundError(f"Enriched events.csv not found: {path}")
@@ -292,19 +343,25 @@ def read_evidence_events_csv(csv_path: Path | str) -> list[EvidenceEventRecord]:
     with path.open("r", encoding="utf-8", newline="") as handle:
         reader = csv.reader(handle)
         header = next(reader, None)
-        if header != EVIDENCE_EVENTS_CSV_HEADER:
+        is_clips_header = header == EVIDENCE_EVENTS_CSV_CLIPS_HEADER
+        if not is_clips_header and header != EVIDENCE_EVENTS_CSV_HEADER:
             raise ValueError(
                 f"Unexpected events.csv header in {path}: got {header}, "
-                f"expected {EVIDENCE_EVENTS_CSV_HEADER}"
+                f"expected {EVIDENCE_EVENTS_CSV_HEADER} or {EVIDENCE_EVENTS_CSV_CLIPS_HEADER}"
             )
 
+        expected_len = (
+            len(EVIDENCE_EVENTS_CSV_CLIPS_HEADER)
+            if is_clips_header
+            else len(EVIDENCE_EVENTS_CSV_HEADER)
+        )
         records: list[EvidenceEventRecord] = []
         for row in reader:
             if not row or all(not cell.strip() for cell in row):
                 continue
-            if len(row) != len(EVIDENCE_EVENTS_CSV_HEADER):
+            if len(row) != expected_len:
                 raise ValueError(
-                    f"Malformed row in {path}: expected {len(EVIDENCE_EVENTS_CSV_HEADER)} "
+                    f"Malformed row in {path}: expected {expected_len} "
                     f"columns, got {len(row)}: {row}"
                 )
             records.append(
@@ -318,6 +375,8 @@ def read_evidence_events_csv(csv_path: Path | str) -> list[EvidenceEventRecord]:
                     duration_seconds=float(row[6].strip()),
                     snapshot_path=row[7].strip(),
                     crop_path=row[8].strip(),
+                    video_clip_path=row[9].strip() if is_clips_header else "",
+                    storyboard_path=row[10].strip() if is_clips_header else "",
                 )
             )
     return records

@@ -3,9 +3,11 @@
 from __future__ import annotations
 
 from event_intelligence.evidence.extract_visual_evidence import (
+    EVIDENCE_EVENTS_CSV_CLIPS_HEADER,
     EVIDENCE_EVENTS_CSV_HEADER,
     VALID_BEST_FRAME_STRATEGIES,
     BestFrameSelection,
+    EventClipRecord,
     EvidenceConfig,
     EvidenceEventRecord,
     extract_person_crop,
@@ -22,9 +24,11 @@ from event_intelligence.evidence.extract_visual_evidence import (
 )
 
 __all__ = [
+    "EVIDENCE_EVENTS_CSV_CLIPS_HEADER",
     "EVIDENCE_EVENTS_CSV_HEADER",
     "VALID_BEST_FRAME_STRATEGIES",
     "BestFrameSelection",
+    "EventClipRecord",
     "EvidenceConfig",
     "EvidenceEventRecord",
     "extract_person_crop",

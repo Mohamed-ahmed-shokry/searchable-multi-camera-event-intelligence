@@ -201,6 +201,40 @@ def test_evidence_events_csv_round_trip(tmp_path: Path) -> None:
     loaded = read_evidence_events_csv(csv_path)
     assert loaded == records
 
+    # Round trip with video_clip_path and storyboard_path (11-column format)
+    records_with_clips = [
+        EvidenceEventRecord(
+            event_id="evt_0001",
+            event_type="zone_entry",
+            track_id=1,
+            zone_id="zone_center",
+            start_time=0.5,
+            end_time=0.5,
+            duration_seconds=0.0,
+            snapshot_path="snapshots/evt_0001_1.jpg",
+            crop_path="crops/evt_0001_1.jpg",
+            video_clip_path="clips/evt_0001.mp4",
+            storyboard_path="storyboards/evt_0001_storyboard.jpg",
+        ),
+        EvidenceEventRecord(
+            event_id="evt_0002",
+            event_type="dwell_time_event",
+            track_id=1,
+            zone_id="zone_center",
+            start_time=0.5,
+            end_time=4.25,
+            duration_seconds=3.75,
+            snapshot_path="snapshots/evt_0002_1.jpg",
+            crop_path="crops/evt_0002_1.jpg",
+            video_clip_path="clips/evt_0002.mp4",
+            storyboard_path="storyboards/evt_0002_storyboard.jpg",
+        ),
+    ]
+    csv_clips_path = tmp_path / "events_with_clips.csv"
+    write_evidence_events_csv(records_with_clips, csv_clips_path)
+    loaded_clips = read_evidence_events_csv(csv_clips_path)
+    assert loaded_clips == records_with_clips
+
     bad_header = tmp_path / "bad_header.csv"
     bad_header.write_text("event_id,event_type\n1,zone_entry\n", encoding="utf-8")
     with pytest.raises(ValueError, match="Unexpected events.csv header"):
