@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from event_intelligence.insights.detectors import (
     detect_cross_camera_transitions,
+    detect_crowding_insights,
     detect_loitering_insights,
     detect_speed_anomaly_insights,
     detect_stationary_and_drop_insights,
@@ -34,6 +35,7 @@ __all__ = [
     "InsightType",
     "Severity",
     "detect_cross_camera_transitions",
+    "detect_crowding_insights",
     "detect_loitering_insights",
     "detect_speed_anomaly_insights",
     "detect_stationary_and_drop_insights",

@@ -630,6 +630,149 @@ def detect_tailgating_insights(
     return insights
 
 
+def detect_crowding_insights(
+    events: Sequence[Any],
+    config: InsightConfig,
+    *,
+    camera_id: str = "default",
+    start_index: int = 1,
+) -> list[InsightRecord]:
+    """Detect sustained zone occupancy / crowding breaches via interval sweep-line."""
+    dwell_events = [
+        ev
+        for ev in events
+        if getattr(ev, "event_type", None) in ("dwell_time_event", "zone_dwell")
+        and getattr(ev, "zone_id", None)
+    ]
+    if not dwell_events:
+        return []
+
+    by_zone: dict[str, list[Any]] = {}
+    for ev in dwell_events:
+        by_zone.setdefault(str(ev.zone_id), []).append(ev)
+
+    insights: list[InsightRecord] = []
+    idx = start_index
+
+    for zone in sorted(by_zone):
+        stays = by_zone[zone]
+        cap = int(config.per_zone_max_occupancy.get(zone, config.max_zone_occupancy))
+        if len(stays) < cap:
+            continue
+
+        boundaries = sorted(
+            {round(float(getattr(ev, "start_time", 0.0)), 6) for ev in stays}
+            | {round(float(getattr(ev, "end_time", 0.0)), 6) for ev in stays}
+        )
+        if len(boundaries) < 2:
+            continue
+
+        episodes: list[tuple[float, float, int, set[int], list[Any]]] = []
+        cur_start: float | None = None
+        cur_end: float = 0.0
+        cur_peak: int = 0
+        cur_tracks: set[int] = set()
+        cur_evs: list[Any] = []
+
+        for t0, t1 in itertools.pairwise(boundaries):
+            if t1 <= t0:
+                continue
+            mid = 0.5 * (t0 + t1)
+            active_evs = [
+                ev
+                for ev in stays
+                if float(getattr(ev, "start_time", 0.0))
+                <= mid
+                <= float(getattr(ev, "end_time", 0.0))
+            ]
+            active_tids = {int(getattr(ev, "track_id", 0)) for ev in active_evs}
+            occ = len(active_tids)
+            if occ >= cap:
+                if cur_start is None:
+                    cur_start = t0
+                    cur_peak = occ
+                    cur_tracks = set(active_tids)
+                    cur_evs = list(active_evs)
+                else:
+                    cur_peak = max(cur_peak, occ)
+                    cur_tracks.update(active_tids)
+                    cur_evs.extend(active_evs)
+                cur_end = t1
+            else:
+                if cur_start is not None:
+                    episodes.append(
+                        (cur_start, cur_end, cur_peak, set(cur_tracks), list(cur_evs))
+                    )
+                    cur_start = None
+                    cur_peak = 0
+                    cur_tracks.clear()
+                    cur_evs.clear()
+
+        if cur_start is not None:
+            episodes.append(
+                (cur_start, cur_end, cur_peak, set(cur_tracks), list(cur_evs))
+            )
+
+        is_restricted = zone in config.restricted_zones
+        for ep_start, ep_end, ep_peak, ep_tracks, ep_evs in episodes:
+            dur = round(ep_end - ep_start, 4)
+            if dur < config.min_crowding_seconds:
+                continue
+
+            if is_restricted or ep_peak >= 2 * cap:
+                sev = Severity.CRITICAL.value
+            elif ep_peak > cap:
+                sev = Severity.HIGH.value
+            else:
+                sev = Severity.MEDIUM.value
+
+            snap_path = None
+            crop_path = None
+            for ev in ep_evs:
+                snap_path = (
+                    snap_path
+                    or getattr(ev, "evidence_snapshot_path", None)
+                    or getattr(ev, "snapshot_path", None)
+                )
+                crop_path = (
+                    crop_path
+                    or getattr(ev, "evidence_crop_path", None)
+                    or getattr(ev, "crop_path", None)
+                )
+
+            sorted_tids = sorted(ep_tracks)
+            insights.append(
+                InsightRecord(
+                    insight_id=f"ins_{camera_id}_{idx:04d}",
+                    camera_id=camera_id,
+                    insight_type=InsightType.CROWDING.value,
+                    severity=sev,
+                    track_id=sorted_tids[0] if sorted_tids else None,
+                    zone_id=zone,
+                    start_time=ep_start,
+                    end_time=ep_end,
+                    duration=dur,
+                    description=(
+                        f"Crowding / occupancy alert in {'restricted ' if is_restricted else ''}"
+                        f"zone '{zone}': peak {ep_peak} tracks (capacity {cap}) "
+                        f"for {dur:.1f}s"
+                    ),
+                    evidence_snapshot_path=str(snap_path) if snap_path else None,
+                    evidence_crop_path=str(crop_path) if crop_path else None,
+                    details={
+                        "zone_id": zone,
+                        "peak_occupancy": ep_peak,
+                        "max_allowed_occupancy": cap,
+                        "involved_track_ids": sorted_tids,
+                        "is_restricted_zone": is_restricted,
+                    },
+                )
+            )
+            idx += 1
+
+    return insights
+
+
 def generate_all_insights(
     events: Sequence[Any],
     trajectories: Mapping[int, Sequence[Any]],
