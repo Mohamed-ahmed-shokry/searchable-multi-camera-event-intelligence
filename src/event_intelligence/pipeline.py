@@ -21,6 +21,7 @@ from event_intelligence.analytics import (
     compute_line_counts,
     compute_track_duration_stats,
     compute_zone_counts,
+    compute_zone_occupancy_profiles,
     render_heatmap_overlay,
     smooth_and_normalize_heatmap,
     write_line_counts_csv,
@@ -734,6 +735,15 @@ def run_pipeline(
         trajectory_points=flat_points,
         scene_config=scene_cfg,
     )
+    ins_cfg_for_occ = (
+        cfg.insight_config if cfg.insight_config is not None else InsightConfig()
+    )
+    occupancy_profiles = compute_zone_occupancy_profiles(
+        raw_events,
+        scene_config=scene_cfg,
+        max_zone_occupancy=ins_cfg_for_occ.max_zone_occupancy,
+        per_zone_max_occupancy=ins_cfg_for_occ.per_zone_max_occupancy,
+    )
     line_counts = compute_line_counts(raw_events, scene_config=scene_cfg)
     duration_stats = compute_track_duration_stats(flat_points)
 
@@ -777,6 +787,7 @@ def run_pipeline(
             for l in line_counts
         ],
         "track_duration_distribution": duration_stats.to_dict(),
+        "zone_occupancy_profiles": [p.to_dict() for p in occupancy_profiles],
         "total_path_length_px": round(sum(s.path_length_px for s in traj_summaries), 2),
     }
     (run_dir / "analytics_summary.json").write_text(
