@@ -41,6 +41,12 @@ def test_evidence_config_defaults_and_validation() -> None:
     assert cfg.overlay_scene_geometry is True
     assert cfg.contact_sheet_columns == 4
     assert cfg.contact_sheet_max_items == 12
+    assert cfg.extract_video_clips is False
+    assert cfg.clip_pre_roll_seconds == pytest.approx(1.0)
+    assert cfg.clip_post_roll_seconds == pytest.approx(1.0)
+    assert cfg.render_clip_telemetry is True
+    assert cfg.extract_storyboards is False
+    assert cfg.storyboard_stages == ("start", "peak", "end")
 
     with pytest.raises(ValueError, match="best_frame_strategy must be one of"):
         EvidenceConfig(best_frame_strategy="invalid_strategy")
@@ -59,6 +65,12 @@ def test_evidence_config_defaults_and_validation() -> None:
 
     with pytest.raises(ValueError, match="contact_sheet_max_items must be >= 1"):
         EvidenceConfig(contact_sheet_max_items=0)
+
+    with pytest.raises(ValueError, match="clip_pre_roll_seconds must be >= 0"):
+        EvidenceConfig(clip_pre_roll_seconds=-0.5)
+
+    with pytest.raises(ValueError, match="clip_post_roll_seconds must be >= 0"):
+        EvidenceConfig(clip_post_roll_seconds=-0.5)
 
 
 def test_best_frame_selection_area_property() -> None:

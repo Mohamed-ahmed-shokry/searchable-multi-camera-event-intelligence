@@ -89,7 +89,7 @@ VALID_BEST_FRAME_STRATEGIES: tuple[str, ...] = (
 
 @dataclass(frozen=True)
 class EvidenceConfig:
-    """Configuration for Phase 7 best-frame selection and snapshot/crop extraction."""
+    """Configuration for Phase 7/11e best-frame selection, snapshot/crop, video clip, and storyboard extraction."""
 
     best_frame_strategy: str = "highest_confidence"
     crop_padding_ratio: float = 0.10
@@ -98,6 +98,12 @@ class EvidenceConfig:
     overlay_scene_geometry: bool = True
     contact_sheet_columns: int = 4
     contact_sheet_max_items: int = 12
+    extract_video_clips: bool = False
+    clip_pre_roll_seconds: float = 1.0
+    clip_post_roll_seconds: float = 1.0
+    render_clip_telemetry: bool = True
+    extract_storyboards: bool = False
+    storyboard_stages: tuple[str, ...] = ("start", "peak", "end")
 
     def __post_init__(self) -> None:
         if self.best_frame_strategy not in VALID_BEST_FRAME_STRATEGIES:
@@ -122,6 +128,14 @@ class EvidenceConfig:
         if self.contact_sheet_max_items < 1:
             raise ValueError(
                 f"contact_sheet_max_items must be >= 1, got {self.contact_sheet_max_items}"
+            )
+        if self.clip_pre_roll_seconds < 0.0:
+            raise ValueError(
+                f"clip_pre_roll_seconds must be >= 0.0, got {self.clip_pre_roll_seconds}"
+            )
+        if self.clip_post_roll_seconds < 0.0:
+            raise ValueError(
+                f"clip_post_roll_seconds must be >= 0.0, got {self.clip_post_roll_seconds}"
             )
 
 
@@ -260,6 +274,24 @@ def load_evidence_config(config_path: Path | str) -> EvidenceConfig:
         ),
         contact_sheet_max_items=int(
             raw.get("contact_sheet_max_items", defaults.contact_sheet_max_items)
+        ),
+        extract_video_clips=bool(
+            raw.get("extract_video_clips", defaults.extract_video_clips)
+        ),
+        clip_pre_roll_seconds=float(
+            raw.get("clip_pre_roll_seconds", defaults.clip_pre_roll_seconds)
+        ),
+        clip_post_roll_seconds=float(
+            raw.get("clip_post_roll_seconds", defaults.clip_post_roll_seconds)
+        ),
+        render_clip_telemetry=bool(
+            raw.get("render_clip_telemetry", defaults.render_clip_telemetry)
+        ),
+        extract_storyboards=bool(
+            raw.get("extract_storyboards", defaults.extract_storyboards)
+        ),
+        storyboard_stages=tuple(
+            str(s) for s in raw.get("storyboard_stages", defaults.storyboard_stages)
         ),
     )
 
