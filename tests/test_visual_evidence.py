@@ -589,6 +589,71 @@ def test_extract_event_storyboard_creates_composite_jpeg(tmp_path: Path) -> None
     assert img.shape[0] == 186
 
 
+def test_extract_event_video_clip_boundary_clamping_and_validation(tmp_path: Path) -> None:
+    video_path = make_video(tmp_path, name="source_clamp.avi", count=10)
+    event_start = EventRecord(
+        event_id="evt_start",
+        event_type="zone_entry",
+        track_id=1,
+        zone_id="zone_a",
+        start_time=0.0,
+        end_time=0.1,
+        duration_seconds=0.1,
+    )
+    # Pre-roll of 5.0s on a clip starting at t=0 must clamp start_frame to 0
+    rec_start = extract_event_video_clip(
+        video_path,
+        tmp_path / "clips" / "start_clamp.mp4",
+        event=event_start,
+        fps=10.0,
+        total_source_frames=10,
+        pre_roll_seconds=5.0,
+        post_roll_seconds=0.1,
+        render_telemetry=False,
+    )
+    assert rec_start.start_frame == 0
+
+    event_end = EventRecord(
+        event_id="evt_end",
+        event_type="zone_exit",
+        track_id=1,
+        zone_id="zone_a",
+        start_time=0.9,
+        end_time=1.0,
+        duration_seconds=0.1,
+    )
+    # Post-roll of 5.0s on a 10-frame video must clamp end_frame to 9
+    rec_end = extract_event_video_clip(
+        video_path,
+        tmp_path / "clips" / "end_clamp.mp4",
+        event=event_end,
+        fps=10.0,
+        total_source_frames=10,
+        pre_roll_seconds=0.1,
+        post_roll_seconds=5.0,
+    )
+    assert rec_end.end_frame == 9
+
+    # Negative/zero total frames or fps raises ValueError
+    with pytest.raises(ValueError, match="Invalid source video parameters"):
+        extract_event_video_clip(
+            video_path,
+            tmp_path / "clips" / "bad.mp4",
+            event=event_start,
+            fps=0.0,
+            total_source_frames=10,
+        )
+
+    with pytest.raises(ValueError, match="Invalid source video parameters"):
+        extract_event_storyboard(
+            video_path,
+            tmp_path / "storyboards" / "bad.jpg",
+            event=event_start,
+            fps=10.0,
+            total_source_frames=0,
+        )
+
+
 def test_run_visual_evidence_pipeline_and_cli_end_to_end(tmp_path: Path) -> None:
     video_path = make_video(tmp_path, name="evidence_clip.avi", count=6)
     tracks_csv = tmp_path / "tracks.csv"
