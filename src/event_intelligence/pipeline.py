@@ -309,7 +309,7 @@ def load_pipeline_config(path: Path | str | None = None) -> PipelineConfig:
     trk_csv = raw.get("precomputed_tracks_csv", defaults.precomputed_tracks_csv)
     dev_val = raw.get("device", defaults.device)
 
-    ins_raw = raw.get("insights")
+    ins_raw = raw.get("insights") or raw.get("insight_config")
     ins_cfg: InsightConfig | None = None
     if isinstance(ins_raw, dict):
         ins_cfg = InsightConfig(
@@ -399,6 +399,21 @@ def load_pipeline_config(path: Path | str | None = None) -> PipelineConfig:
         ),
         max_frames=int(max_frames_val) if max_frames_val is not None else None,
         insight_config=ins_cfg,
+        extract_video_clips=bool(
+            raw.get("extract_video_clips", defaults.extract_video_clips)
+        ),
+        clip_pre_roll_seconds=float(
+            raw.get("clip_pre_roll_seconds", defaults.clip_pre_roll_seconds)
+        ),
+        clip_post_roll_seconds=float(
+            raw.get("clip_post_roll_seconds", defaults.clip_post_roll_seconds)
+        ),
+        render_clip_telemetry=bool(
+            raw.get("render_clip_telemetry", defaults.render_clip_telemetry)
+        ),
+        extract_storyboards=bool(
+            raw.get("extract_storyboards", defaults.extract_storyboards)
+        ),
     )
 
 
