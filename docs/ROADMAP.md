@@ -2027,10 +2027,10 @@ uv run --locked python -m event_intelligence.search --help
 - [x] 18. `test(insights): add unit tests for detect_proximity_insights`
 - [x] 19. `feat(insights): wire tailgating, crowding, and proximity detectors into generate_all_insights`
 - [x] 20. `test(insights): test generate_all_insights with multi-person behavioral anomalies`
-- [ ] 21. `types(analytics): add ZoneOccupancyProfile dataclass to analytics module`
-- [ ] 22. `feat(analytics): implement compute_zone_occupancy_profiles for temporal occupancy metrics`
-- [ ] 23. `feat(analytics): export compute_zone_occupancy_profiles in analytics package and pipeline`
-- [ ] 24. `test(analytics): add unit tests for compute_zone_occupancy_profiles`
+- [x] 21. `types(analytics): add ZoneOccupancyProfile dataclass to analytics module`
+- [x] 22. `feat(analytics): implement compute_zone_occupancy_profiles for temporal occupancy metrics`
+- [x] 23. `feat(analytics): export compute_zone_occupancy_profiles in analytics package and pipeline`
+- [x] 24. `test(analytics): add unit tests for compute_zone_occupancy_profiles`
 - [ ] 25. `types(storage): add TrajectorySearchResult, ZoneCountSearchResult, LineCountSearchResult, and TrackTimelineDossier`
 - [ ] 26. `feat(storage): implement query_trajectories with spatial bounding box and temporal filters`
 - [ ] 27. `test(storage): add unit tests for query_trajectories spatial and temporal filtering`
