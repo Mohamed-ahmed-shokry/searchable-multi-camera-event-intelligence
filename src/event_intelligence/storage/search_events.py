@@ -1401,6 +1401,8 @@ def query_insights(
     zone_id: str | None = None,
     min_time: float | None = None,
     max_time: float | None = None,
+    has_clip: bool | None = None,
+    has_storyboard: bool | None = None,
     limit: int = 50,
 ) -> list[InsightSearchResult]:
     """Query behavioral insights from intelligence.db by type, severity, camera, zone, track, or time."""
@@ -1441,6 +1443,16 @@ def query_insights(
     if max_time is not None:
         clauses.append("start_time <= ?")
         params.append(float(max_time))
+
+    if has_clip is True:
+        clauses.append("video_clip_path != ''")
+    elif has_clip is False:
+        clauses.append("video_clip_path = ''")
+
+    if has_storyboard is True:
+        clauses.append("storyboard_path != ''")
+    elif has_storyboard is False:
+        clauses.append("storyboard_path = ''")
 
     where_sql = f"WHERE {' AND '.join(clauses)}" if clauses else ""
     sql = (
