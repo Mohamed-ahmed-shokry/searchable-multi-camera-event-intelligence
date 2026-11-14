@@ -132,6 +132,7 @@ uv run --locked python -m event_intelligence.pipeline --video data/mot17/MOT17-1
 # Query a pipeline run's SQLite database directly via event_intelligence.search
 uv run --locked python -m event_intelligence.search --db outputs/runs/people_detection/intelligence.db --event-type dwell_time_event --zone right_aisle --json
 uv run --locked python -m event_intelligence.search --db outputs/runs/people_detection/intelligence.db --tracks --min-duration 5.0 --json
+uv run --locked python -m event_intelligence.search --db outputs/runs/people_detection/intelligence.db --clips --json
 ```
 
 The two detection extras conflict intentionally; do not use `--all-extras`.
@@ -358,7 +359,7 @@ These can be valuable later, but the first priority is a working CV intelligence
 
 ## Repository Status
 
-The repository has completed **Phase 0 (Foundation)**, **Phase 1 (Video Inspection & Dataset Validation)**, **Phase 2 (Person Detection)**, **Phase 3 (Person Tracking & Early Quantitative MOT17 Checkpoint)**, **Phase 4 (Trajectory Extraction)**, **Phase 5 (Zone and Line Reasoning)**, **Phase 6 (Dwell-Time Events)**, **Phase 7 (Visual Evidence)**, **Phase 8 (Heatmaps and Analytics)**, **Phase 9 (CV Evaluation)**, **Phase 10 (Searchable Outputs)**, and **Phase 11/11c/11d (CV Pipeline Integration, Multi-Camera Intelligence & Automated Behavioral Insights)**.
+The repository has completed **Phase 0 (Foundation)**, **Phase 1 (Video Inspection & Dataset Validation)**, **Phase 2 (Person Detection)**, **Phase 3 (Person Tracking & Early Quantitative MOT17 Checkpoint)**, **Phase 4 (Trajectory Extraction)**, **Phase 5 (Zone and Line Reasoning)**, **Phase 6 (Dwell-Time Events)**, **Phase 7 (Visual Evidence)**, **Phase 8 (Heatmaps and Analytics)**, **Phase 9 (CV Evaluation)**, **Phase 10 (Searchable Outputs)**, and **Phase 11/11c/11d/11e (CV Pipeline Integration, Multi-Camera Intelligence, Automated Behavioral Insights, and Dynamic Video Evidence Clips & Storyboards)**.
 
 Completed capabilities:
 
@@ -368,18 +369,19 @@ Completed capabilities:
 - `cv_projects/04_trajectory_extraction/` — ordered ground-plane trajectories (`trajectories.csv`), per-track path-length summaries (`track_summary.csv`), causal rolling-mean smoothing, static `trajectory_map.png`, and `trajectory_overlay_video.mp4`
 - `cv_projects/05_zone_line_reasoning/` — named polygon zones and directed tripwire lines (`scene_config.yaml`), visual scene authoring (`define_scene_geometry.py`), `zone_enter`/`zone_exit`/`line_cross` signals (`zone_line_events.csv`), boundary flicker analysis, and `annotated_spatial_video.mp4`
 - `cv_projects/06_dwell_time_events/` — stateful `ZoneDwellStateMachine` (`candidate -> active -> triggered -> resolved`), hysteresis grace-period flicker absorption, track-loss-in-zone handling, `events.csv`, `event_debug_log/`, `dwell_examples/`, and `annotated_events_video.mp4`
-- `cv_projects/07_visual_evidence/` — configurable best-frame selection (`highest_confidence`, `largest_area`, `midpoint`, `start_frame`), annotated full-frame snapshots (`snapshots/<event_id>_<track_id>.jpg`), padded person crops (`crops/<event_id>_<track_id>.jpg`), enriched 9-column `events.csv`, contact sheet (`evidence_contact_sheet.jpg`), and automated path verification
+- `cv_projects/07_visual_evidence/` — configurable best-frame selection (`highest_confidence`, `largest_area`, `midpoint`, `start_frame`), annotated full-frame snapshots (`snapshots/<event_id>_<track_id>.jpg`), padded person crops (`crops/<event_id>_<track_id>.jpg`), dynamic playable MP4 video clips with telemetry overlays (`clips/<event_id>_<track_id>.mp4`), 3-stage composite keyframe storyboards (`storyboards/<event_id>_<track_id>_storyboard.jpg`), enriched 11-column `events.csv`, contact sheet (`evidence_contact_sheet.jpg`), and automated path verification
 - `cv_projects/08_heatmaps_analytics/` — 2D spatial trajectory density accumulation with per-track-cell stationary capping, Gaussian smoothing, reference-frame heatmap overlay (`heatmap.png`), per-zone counts (`zone_counts.csv`), per-line directional counts (`line_counts.csv`), track duration distributions, and `analytics_summary.json`
 - `cv_projects/09_cv_evaluation/` — quantitative MOT17 evaluation (`Precision`, `Recall`, `F1`, `MOTA`, `IDF1`, `IDSW`), runtime FPS benchmark, qualitative surveillance clip error taxonomy (`false_positive`, `false_negative`, `id_switch`, `boundary_jitter`, `event_rule_edge_case`), annotated failure examples (`failure_examples/`), and structured `evaluation_report.md`
-- `cv_projects/10_searchable_outputs/` — normalized 7-table SQLite database (`intelligence.db`), CLI and programmatic query engine (`search_events.py`), schema documentation (`schema.md`), and worked query examples (`search_examples.md`)
+- `cv_projects/10_searchable_outputs/` — normalized SQLite database (`intelligence.db`) with non-destructive migrations for multi-camera streams and evidence clips (`video_clip_path`, `storyboard_path`), CLI and programmatic query engine (`search_events.py` with `--clips` and `--storyboards`), schema documentation (`schema.md`), and worked query examples (`search_examples.md`)
 - `src/event_intelligence/` — consolidated end-to-end CV package (`video`, `detection`, `tracking`, `trajectories`, `spatial`, `events`, `evidence`, `analytics`, `evaluation`, `insights`, `storage`, `pipeline`, `search`) runnable end-to-end:
   - **Single camera:** `uv run --locked python -m event_intelligence.pipeline --video data/fallback_clips/people-detection.mp4 --config configs/pipeline.yaml`
   - **Multi-camera:** `uv run --locked python -m event_intelligence.pipeline --videos data/fallback_clips/people-detection.mp4 data/fallback_clips/store-aisle-detection.mp4 --cameras entrance concourse --config configs/pipeline_multicam.yaml`
   - **Cross-camera search:** `uv run --locked python -m event_intelligence.search --db outputs/runs/<run_id>/intelligence.db --camera-summary`
   - **Behavior insights search:** `uv run --locked python -m event_intelligence.search --db outputs/runs/<run_id>/intelligence.db --insights --insight-type loitering --severity high`
+  - **Video evidence clip search:** `uv run --locked python -m event_intelligence.search --db outputs/runs/<run_id>/intelligence.db --clips --json`
   - **Camera filtering:** `uv run --locked python -m event_intelligence.search --db outputs/runs/<run_id>/intelligence.db --camera entrance --tracks --json`
   - **Evaluation benchmark CLI:** `uv run --locked python -m event_intelligence.evaluation --help`
-  - **Surveillance Intelligence Report:** Automatically generates `intelligence_report.md` with executive metrics, high/critical security alerts, and clickable visual evidence links.
+  - **Surveillance Intelligence Report:** Automatically generates `intelligence_report.md` with executive metrics, high/critical security alerts, and clickable snapshot, video clip, and storyboard evidence links.
 
 Next recommended step:
 
