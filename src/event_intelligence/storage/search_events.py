@@ -1605,6 +1605,82 @@ def query_insights(
     return results
 
 
+def query_trajectories(
+    db_path: Path | str,
+    *,
+    camera_id: str | None = None,
+    track_id: int | None = None,
+    min_time: float | None = None,
+    max_time: float | None = None,
+    bbox: tuple[float, float, float, float] | None = None,
+    limit: int = 500,
+) -> list[TrajectorySearchResult]:
+    """Query trajectory points from intelligence.db by camera, track, time window, or spatial bbox."""
+    if limit <= 0:
+        raise ValueError("limit must be positive")
+    path = Path(db_path)
+    if not path.is_file():
+        raise FileNotFoundError(f"SQLite database not found: {path}")
+
+    clauses: list[str] = []
+    params: list[Any] = []
+
+    if camera_id is not None and camera_id.strip():
+        clauses.append("camera_id = ?")
+        params.append(camera_id.strip())
+
+    if track_id is not None:
+        clauses.append("track_id = ?")
+        params.append(int(track_id))
+
+    if min_time is not None:
+        clauses.append("timestamp >= ?")
+        params.append(float(min_time))
+
+    if max_time is not None:
+        clauses.append("timestamp <= ?")
+        params.append(float(max_time))
+
+    if bbox is not None:
+        if len(bbox) != 4:
+            raise ValueError("bbox must be a 4-tuple (x1, y1, x2, y2)")
+        x1, y1, x2, y2 = (
+            float(bbox[0]),
+            float(bbox[1]),
+            float(bbox[2]),
+            float(bbox[3]),
+        )
+        if x2 < x1 or y2 < y1:
+            raise ValueError(
+                f"bbox must satisfy x1 <= x2 and y1 <= y2, got ({x1}, {y1}, {x2}, {y2})"
+            )
+        clauses.append("x >= ? AND x <= ? AND y >= ? AND y <= ?")
+        params.extend([x1, x2, y1, y2])
+
+    where_sql = f"WHERE {' AND '.join(clauses)}" if clauses else ""
+    sql = (
+        "SELECT camera_id, track_id, frame_id, timestamp, x, y "
+        f"FROM trajectories {where_sql} "
+        "ORDER BY camera_id ASC, track_id ASC, frame_id ASC LIMIT ?"
+    )
+    params.append(int(limit))
+
+    results: list[TrajectorySearchResult] = []
+    with closing(sqlite3.connect(path)) as conn:
+        for row in conn.execute(sql, params):
+            results.append(
+                TrajectorySearchResult(
+                    camera_id=str(row[0] or ""),
+                    track_id=int(row[1]),
+                    frame_id=int(row[2]),
+                    timestamp=float(row[3]),
+                    x=float(row[4]),
+                    y=float(row[5]),
+                )
+            )
+    return results
+
+
 def lookup_event_evidence(
     db_path: Path | str,
     event_id: str,
