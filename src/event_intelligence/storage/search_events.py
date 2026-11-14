@@ -2507,6 +2507,118 @@ def main(argv: list[str] | None = None) -> int:
             )
         return 0
 
+    if args.track_timeline is not None:
+        dossiers = query_track_timeline(
+            db_path,
+            args.track_timeline,
+            camera_id=args.camera_id,
+        )
+        if args.json:
+            print(json.dumps([d.to_dict() for d in dossiers], indent=2))
+        else:
+            for d in dossiers:
+                cam_label = f" (camera={d.camera_id})" if d.camera_id else ""
+                print(
+                    f"=== Track Timeline Dossier: track_id={d.track_id}{cam_label} ===\n"
+                    f"  Lifespan: frames {d.start_frame}..{d.end_frame} ({d.duration_seconds:.2f}s), "
+                    f"path={d.path_length_px:.1f}px ({d.trajectory_points_count} pts)\n"
+                    f"  Bounds: x=[{d.min_x:.1f}, {d.max_x:.1f}], y=[{d.min_y:.1f}, {d.max_y:.1f}]\n"
+                    f"  Speed: mean={d.mean_speed_px_s:.1f} px/s, max={d.max_speed_px_s:.1f} px/s\n"
+                    f"  Events ({len(d.events)}): "
+                    + (
+                        ", ".join(
+                            f"{e.event_id}[{e.event_type}:{e.zone_id}]"
+                            for e in d.events
+                        )
+                        if d.events
+                        else "none"
+                    )
+                    + f"\n  Insights ({len(d.insights)}): "
+                    + (
+                        ", ".join(
+                            f"{i.insight_id}[{i.insight_type}:{i.severity}]"
+                            for i in d.insights
+                        )
+                        if d.insights
+                        else "none"
+                    )
+                )
+        return 0
+
+    if args.zone_stats:
+        z_rows = query_zone_counts(
+            db_path,
+            camera_id=args.camera_id,
+            zone_id=args.zone,
+            limit=args.limit,
+        )
+        if args.json:
+            print(json.dumps([z.to_dict() for z in z_rows], indent=2))
+        else:
+            print(f"Matched {len(z_rows)} zone stat row(s):")
+            for z in z_rows:
+                cam_label = f" cam={z.camera_id}" if z.camera_id else ""
+                print(
+                    f"  zone={z.zone_id}{cam_label} entries={z.entry_count} "
+                    f"exits={z.exit_count} dwell={z.total_dwell_seconds:.2f}s "
+                    f"peak_occupancy={z.peak_occupancy}"
+                )
+        return 0
+
+    if args.line_stats:
+        l_rows = query_line_counts(
+            db_path,
+            camera_id=args.camera_id,
+            line_id=args.line,
+            limit=args.limit,
+        )
+        if args.json:
+            print(json.dumps([l.to_dict() for l in l_rows], indent=2))
+        else:
+            print(f"Matched {len(l_rows)} line stat row(s):")
+            for ln in l_rows:
+                cam_label = f" cam={ln.camera_id}" if ln.camera_id else ""
+                print(
+                    f"  line={ln.line_id}{cam_label} A->B={ln.crossings_ab} "
+                    f"B->A={ln.crossings_ba} total={ln.total}"
+                )
+        return 0
+
+    if args.trajectories or args.bbox is not None:
+        parsed_bbox: tuple[float, float, float, float] | None = None
+        if args.bbox is not None:
+            parts = [p.strip() for p in args.bbox.split(",") if p.strip()]
+            if len(parts) != 4:
+                raise ValueError(
+                    f"--bbox must have 4 comma-separated floats 'x1,y1,x2,y2', got {args.bbox!r}"
+                )
+            parsed_bbox = (
+                float(parts[0]),
+                float(parts[1]),
+                float(parts[2]),
+                float(parts[3]),
+            )
+        traj_pts = query_trajectories(
+            db_path,
+            camera_id=args.camera_id,
+            track_id=args.track_id,
+            min_time=args.min_time,
+            max_time=args.max_time,
+            bbox=parsed_bbox,
+            limit=args.limit,
+        )
+        if args.json:
+            print(json.dumps([p.to_dict() for p in traj_pts], indent=2))
+        else:
+            print(f"Matched {len(traj_pts)} trajectory point(s):")
+            for p in traj_pts:
+                cam_label = f" cam={p.camera_id}" if p.camera_id else ""
+                print(
+                    f"  track_id={p.track_id}{cam_label} frame={p.frame_id} "
+                    f"t={p.timestamp:.4f}s x={p.x:.2f} y={p.y:.2f}"
+                )
+        return 0
+
     if args.tracks:
         tracks = query_tracks(
             db_path,
