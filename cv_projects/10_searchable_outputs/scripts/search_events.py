@@ -154,6 +154,8 @@ class EventSearchResult:
     duration_seconds: float
     snapshot_path: str
     crop_path: str
+    video_clip_path: str = ""
+    storyboard_path: str = ""
 
     def __post_init__(self) -> None:
         if not self.event_id.strip() or not self.event_type.strip():
@@ -174,6 +176,8 @@ class EventSearchResult:
             "duration_seconds": round(self.duration_seconds, 4),
             "snapshot_path": self.snapshot_path,
             "crop_path": self.crop_path,
+            "video_clip_path": self.video_clip_path,
+            "storyboard_path": self.storyboard_path,
         }
 
 
@@ -224,6 +228,12 @@ class EvidenceLookupResult:
     crop_exists: bool
     snapshot_size_bytes: int
     crop_size_bytes: int
+    resolved_video_clip_path: str = ""
+    resolved_storyboard_path: str = ""
+    video_clip_exists: bool = False
+    storyboard_exists: bool = False
+    video_clip_size_bytes: int = 0
+    storyboard_size_bytes: int = 0
 
     @property
     def is_valid(self) -> bool:
@@ -243,6 +253,12 @@ class EvidenceLookupResult:
             "crop_exists": self.crop_exists,
             "snapshot_size_bytes": self.snapshot_size_bytes,
             "crop_size_bytes": self.crop_size_bytes,
+            "resolved_video_clip_path": self.resolved_video_clip_path,
+            "resolved_storyboard_path": self.resolved_storyboard_path,
+            "video_clip_exists": self.video_clip_exists,
+            "storyboard_exists": self.storyboard_exists,
+            "video_clip_size_bytes": self.video_clip_size_bytes,
+            "storyboard_size_bytes": self.storyboard_size_bytes,
             "is_valid": self.is_valid,
         }
 

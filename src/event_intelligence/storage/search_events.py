@@ -265,6 +265,8 @@ class EventSearchResult:
     snapshot_path: str
     crop_path: str
     camera_id: str = ""
+    video_clip_path: str = ""
+    storyboard_path: str = ""
 
     def __post_init__(self) -> None:
         if not self.event_id.strip() or not self.event_type.strip():
@@ -286,6 +288,8 @@ class EventSearchResult:
             "duration_seconds": round(self.duration_seconds, 4),
             "snapshot_path": self.snapshot_path,
             "crop_path": self.crop_path,
+            "video_clip_path": self.video_clip_path,
+            "storyboard_path": self.storyboard_path,
         }
 
 
@@ -338,6 +342,12 @@ class EvidenceLookupResult:
     crop_exists: bool
     snapshot_size_bytes: int
     crop_size_bytes: int
+    resolved_video_clip_path: str = ""
+    resolved_storyboard_path: str = ""
+    video_clip_exists: bool = False
+    storyboard_exists: bool = False
+    video_clip_size_bytes: int = 0
+    storyboard_size_bytes: int = 0
 
     @property
     def is_valid(self) -> bool:
@@ -357,6 +367,12 @@ class EvidenceLookupResult:
             "crop_exists": self.crop_exists,
             "snapshot_size_bytes": self.snapshot_size_bytes,
             "crop_size_bytes": self.crop_size_bytes,
+            "resolved_video_clip_path": self.resolved_video_clip_path,
+            "resolved_storyboard_path": self.resolved_storyboard_path,
+            "video_clip_exists": self.video_clip_exists,
+            "storyboard_exists": self.storyboard_exists,
+            "video_clip_size_bytes": self.video_clip_size_bytes,
+            "storyboard_size_bytes": self.storyboard_size_bytes,
             "is_valid": self.is_valid,
         }
 
@@ -377,6 +393,8 @@ class InsightSearchResult:
     description: str
     evidence_snapshot_path: str | None = None
     evidence_crop_path: str | None = None
+    video_clip_path: str = ""
+    storyboard_path: str = ""
     details: dict[str, Any] = field(default_factory=dict)
 
     def to_dict(self) -> dict[str, Any]:
@@ -393,6 +411,8 @@ class InsightSearchResult:
             "description": self.description,
             "evidence_snapshot_path": self.evidence_snapshot_path,
             "evidence_crop_path": self.evidence_crop_path,
+            "video_clip_path": self.video_clip_path,
+            "storyboard_path": self.storyboard_path,
             "details": self.details,
         }
 
@@ -739,7 +759,22 @@ def ingest_intelligence_db(
                 )
             )
 
-    event_rows: list[tuple[str, str, str, int, str, float, float, float, str, str]] = []
+    event_rows: list[
+        tuple[
+            str,
+            str,
+            str,
+            int,
+            str,
+            float,
+            float,
+            float,
+            str,
+            str,
+            str,
+            str,
+        ]
+    ] = []
     if ev_path.is_file():
         with ev_path.open("r", encoding="utf-8", newline="") as handle:
             reader = csv.DictReader(handle)
@@ -751,6 +786,8 @@ def ingest_intelligence_db(
                 ).strip()
                 snap = str(row.get("snapshot_path") or "").strip()
                 crop = str(row.get("crop_path") or "").strip()
+                clip = str(row.get("video_clip_path") or "").strip()
+                story = str(row.get("storyboard_path") or "").strip()
                 event_rows.append(
                     (
                         cam_id,
@@ -763,6 +800,8 @@ def ingest_intelligence_db(
                         float(row["duration_seconds"]),
                         snap,
                         crop,
+                        clip,
+                        story,
                     )
                 )
 
@@ -873,6 +912,16 @@ def ingest_intelligence_db(
                                     if item.get("evidence_crop_path")
                                     else None
                                 )
+                                clip = (
+                                    str(item["video_clip_path"])
+                                    if item.get("video_clip_path")
+                                    else ""
+                                )
+                                story = (
+                                    str(item["storyboard_path"])
+                                    if item.get("storyboard_path")
+                                    else ""
+                                )
                                 det_json = json.dumps(item.get("details", {}))
                                 insight_rows.append(
                                     (
@@ -888,6 +937,8 @@ def ingest_intelligence_db(
                                         desc,
                                         snap,
                                         crop,
+                                        clip,
+                                        story,
                                         det_json,
                                     )
                                 )
@@ -916,8 +967,8 @@ def ingest_intelligence_db(
         )
         conn.executemany(
             "INSERT OR REPLACE INTO events (camera_id, event_id, event_type, track_id, zone_id, start_time, "
-            "end_time, duration_seconds, snapshot_path, crop_path) "
-            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            "end_time, duration_seconds, snapshot_path, crop_path, video_clip_path, storyboard_path) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
             event_rows,
         )
         conn.executemany(
@@ -934,8 +985,8 @@ def ingest_intelligence_db(
             conn.executemany(
                 "INSERT OR REPLACE INTO insights (insight_id, camera_id, insight_type, severity, "
                 "track_id, zone_id, start_time, end_time, duration, description, "
-                "evidence_snapshot_path, evidence_crop_path, details_json) "
-                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                "evidence_snapshot_path, evidence_crop_path, video_clip_path, storyboard_path, details_json) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
                 insight_rows,
             )
         conn.commit()
@@ -1056,7 +1107,7 @@ def query_events(
     where_sql = f"WHERE {' AND '.join(clauses)}" if clauses else ""
     sql = (
         "SELECT camera_id, event_id, event_type, track_id, zone_id, start_time, end_time, "
-        "duration_seconds, snapshot_path, crop_path "
+        "duration_seconds, snapshot_path, crop_path, video_clip_path, storyboard_path "
         f"FROM events {where_sql} "
         "ORDER BY start_time ASC, event_id ASC LIMIT ?"
     )
@@ -1077,6 +1128,8 @@ def query_events(
                     duration_seconds=float(row[7]),
                     snapshot_path=str(row[8]),
                     crop_path=str(row[9]),
+                    video_clip_path=str(row[10] or "") if len(row) > 10 else "",
+                    storyboard_path=str(row[11] or "") if len(row) > 11 else "",
                 )
             )
     return results
@@ -1245,6 +1298,8 @@ def insert_insights(
                 if ins.get("evidence_crop_path")
                 else None
             )
+            clip = str(ins.get("video_clip_path", "") or "")
+            story = str(ins.get("storyboard_path", "") or "")
             det_json = json.dumps(ins.get("details", {}))
         else:
             i_id = str(ins.insight_id)
@@ -1277,6 +1332,8 @@ def insert_insights(
                 if getattr(ins, "evidence_crop_path", None)
                 else None
             )
+            clip = str(getattr(ins, "video_clip_path", "") or "")
+            story = str(getattr(ins, "storyboard_path", "") or "")
             details_obj = getattr(ins, "details", {})
             det_json = (
                 json.dumps(details_obj) if isinstance(details_obj, dict) else "{}"
@@ -1296,6 +1353,8 @@ def insert_insights(
                 desc,
                 snap,
                 crop,
+                clip,
+                story,
                 det_json,
             )
         )
@@ -1309,8 +1368,8 @@ def insert_insights(
             INSERT OR REPLACE INTO insights (
                 insight_id, camera_id, insight_type, severity, track_id, zone_id,
                 start_time, end_time, duration, description,
-                evidence_snapshot_path, evidence_crop_path, details_json
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                evidence_snapshot_path, evidence_crop_path, video_clip_path, storyboard_path, details_json
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             rows,
         )
@@ -1373,7 +1432,7 @@ def query_insights(
     sql = (
         "SELECT camera_id, insight_id, insight_type, severity, track_id, zone_id, "
         "start_time, end_time, duration, description, evidence_snapshot_path, "
-        "evidence_crop_path, details_json "
+        "evidence_crop_path, video_clip_path, storyboard_path, details_json "
         f"FROM insights {where_sql} "
         "ORDER BY start_time ASC, insight_id ASC LIMIT ?"
     )
@@ -1383,8 +1442,8 @@ def query_insights(
     with closing(sqlite3.connect(path)) as conn:
         for row in conn.execute(sql, params):
             try:
-                details = json.loads(row[12]) if row[12] else {}
-            except (json.JSONDecodeError, TypeError):
+                details = json.loads(row[14]) if row[14] else {}
+            except (json.JSONDecodeError, TypeError, IndexError):
                 details = {}
             results.append(
                 InsightSearchResult(
@@ -1400,6 +1459,8 @@ def query_insights(
                     description=row[9],
                     evidence_snapshot_path=row[10],
                     evidence_crop_path=row[11],
+                    video_clip_path=str(row[12] or "") if len(row) > 12 else "",
+                    storyboard_path=str(row[13] or "") if len(row) > 13 else "",
                     details=details,
                 )
             )
@@ -1412,7 +1473,7 @@ def lookup_event_evidence(
     *,
     evidence_root: Path | str | None = None,
 ) -> EvidenceLookupResult:
-    """Look up an event by event_id and resolve/verify its snapshot_path and crop_path on disk."""
+    """Look up an event by event_id and resolve/verify its snapshot_path, crop_path, video_clip_path, and storyboard_path on disk."""
     if not event_id.strip():
         raise ValueError("event_id must be non-empty")
     path = Path(db_path)
@@ -1421,8 +1482,8 @@ def lookup_event_evidence(
 
     with closing(sqlite3.connect(path)) as conn:
         row = conn.execute(
-            "SELECT event_id, event_type, track_id, zone_id, start_time, end_time, "
-            "duration_seconds, snapshot_path, crop_path "
+            "SELECT camera_id, event_id, event_type, track_id, zone_id, start_time, end_time, "
+            "duration_seconds, snapshot_path, crop_path, video_clip_path, storyboard_path "
             "FROM events WHERE event_id = ?",
             (event_id.strip(),),
         ).fetchone()
@@ -1431,15 +1492,18 @@ def lookup_event_evidence(
         raise KeyError(f"Event ID not found in intelligence.db: {event_id!r}")
 
     ev = EventSearchResult(
-        event_id=str(row[0]),
-        event_type=str(row[1]),
-        track_id=int(row[2]),
-        zone_id=str(row[3]),
-        start_time=float(row[4]),
-        end_time=float(row[5]),
-        duration_seconds=float(row[6]),
-        snapshot_path=str(row[7]),
-        crop_path=str(row[8]),
+        camera_id=str(row[0] or ""),
+        event_id=str(row[1]),
+        event_type=str(row[2]),
+        track_id=int(row[3]),
+        zone_id=str(row[4]),
+        start_time=float(row[5]),
+        end_time=float(row[6]),
+        duration_seconds=float(row[7]),
+        snapshot_path=str(row[8]),
+        crop_path=str(row[9]),
+        video_clip_path=str(row[10] or "") if len(row) > 10 else "",
+        storyboard_path=str(row[11] or "") if len(row) > 11 else "",
     )
 
     root = (
@@ -1463,11 +1527,34 @@ def lookup_event_evidence(
         if Path(ev.crop_path).is_absolute()
         else (root / ev.crop_path)
     )
+    clip_file = (
+        (
+            Path(ev.video_clip_path)
+            if Path(ev.video_clip_path).is_absolute()
+            else (root / ev.video_clip_path)
+        )
+        if ev.video_clip_path
+        else None
+    )
+    story_file = (
+        (
+            Path(ev.storyboard_path)
+            if Path(ev.storyboard_path).is_absolute()
+            else (root / ev.storyboard_path)
+        )
+        if ev.storyboard_path
+        else None
+    )
 
     snap_exists = snap_file.is_file()
     crop_exists = crop_file.is_file()
     snap_size = snap_file.stat().st_size if snap_exists else 0
     crop_size = crop_file.stat().st_size if crop_exists else 0
+
+    clip_exists = clip_file.is_file() if clip_file else False
+    story_exists = story_file.is_file() if story_file else False
+    clip_size = clip_file.stat().st_size if clip_exists and clip_file else 0
+    story_size = story_file.stat().st_size if story_exists and story_file else 0
 
     return EvidenceLookupResult(
         event=ev,
@@ -1477,6 +1564,12 @@ def lookup_event_evidence(
         crop_exists=crop_exists,
         snapshot_size_bytes=snap_size,
         crop_size_bytes=crop_size,
+        resolved_video_clip_path=str(clip_file) if clip_file else "",
+        resolved_storyboard_path=str(story_file) if story_file else "",
+        video_clip_exists=clip_exists,
+        storyboard_exists=story_exists,
+        video_clip_size_bytes=clip_size,
+        storyboard_size_bytes=story_size,
     )
 
 
