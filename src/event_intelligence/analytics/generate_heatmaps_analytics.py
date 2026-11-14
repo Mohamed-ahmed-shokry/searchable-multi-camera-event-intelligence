@@ -199,6 +199,42 @@ class TrackDurationStats:
         }
 
 
+@dataclass(frozen=True)
+class ZoneOccupancyProfile:
+    """Temporal occupancy metrics for a polygon zone across a video run."""
+
+    zone_id: str
+    peak_occupancy: int
+    peak_timestamp_seconds: float
+    active_seconds: float
+    mean_active_occupancy: float
+    crowded_seconds: float = 0.0
+
+    def __post_init__(self) -> None:
+        if not self.zone_id or not self.zone_id.strip():
+            raise ValueError("zone_id must be a non-empty string")
+        if self.peak_occupancy < 0:
+            raise ValueError("peak_occupancy must be >= 0")
+        if self.peak_timestamp_seconds < 0.0:
+            raise ValueError("peak_timestamp_seconds must be >= 0.0")
+        if self.active_seconds < 0.0:
+            raise ValueError("active_seconds must be >= 0.0")
+        if self.mean_active_occupancy < 0.0:
+            raise ValueError("mean_active_occupancy must be >= 0.0")
+        if self.crowded_seconds < 0.0:
+            raise ValueError("crowded_seconds must be >= 0.0")
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "zone_id": self.zone_id,
+            "peak_occupancy": self.peak_occupancy,
+            "peak_timestamp_seconds": round(self.peak_timestamp_seconds, 4),
+            "active_seconds": round(self.active_seconds, 4),
+            "mean_active_occupancy": round(self.mean_active_occupancy, 4),
+            "crowded_seconds": round(self.crowded_seconds, 4),
+        }
+
+
 def load_analytics_config(config_path: Path | str) -> AnalyticsConfig:
     """Load an AnalyticsConfig from a YAML file."""
     path = Path(config_path)
