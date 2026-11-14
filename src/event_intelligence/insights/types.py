@@ -17,6 +17,9 @@ class InsightType(StrEnum):
     STATIONARY_IN_ZONE = "stationary_in_zone"
     TRACK_DROP_IN_ZONE = "track_drop_in_zone"
     CROSS_CAMERA_TRANSITION = "cross_camera_transition"
+    CROWDING = "crowding"
+    TAILGATING = "tailgating"
+    PROXIMITY_GROUPING = "proximity_grouping"
 
 
 class Severity(StrEnum):
