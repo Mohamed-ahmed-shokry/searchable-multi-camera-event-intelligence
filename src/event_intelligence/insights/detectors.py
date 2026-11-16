@@ -316,8 +316,22 @@ def detect_stationary_and_drop_insights(
             if getattr(tr, "track_lost_in_zone", False):
                 t_id = int(getattr(tr, "track_id", 0))
                 z_id = str(getattr(tr, "zone_id", ""))
-                t_in = float(getattr(tr, "entry_timestamp", 0.0))
-                t_out = float(getattr(tr, "exit_timestamp", t_in))
+                t_in = float(
+                    getattr(
+                        tr,
+                        "enter_time",
+                        getattr(tr, "entry_timestamp", 0.0),
+                    )
+                )
+                t_out = float(
+                    getattr(
+                        tr,
+                        "last_inside_time",
+                        getattr(
+                            tr, "resolved_time", getattr(tr, "exit_timestamp", t_in)
+                        ),
+                    )
+                )
                 lost_records.append((t_id, z_id, t_in, t_out, tr))
 
     # Also inspect events if event_type explicitly mentions track loss
