@@ -133,6 +133,9 @@ uv run --locked python -m event_intelligence.pipeline --video data/mot17/MOT17-1
 uv run --locked python -m event_intelligence.search --db outputs/runs/people_detection/intelligence.db --event-type dwell_time_event --zone right_aisle --json
 uv run --locked python -m event_intelligence.search --db outputs/runs/people_detection/intelligence.db --tracks --min-duration 5.0 --json
 uv run --locked python -m event_intelligence.search --db outputs/runs/people_detection/intelligence.db --clips --json
+uv run --locked python -m event_intelligence.search --db outputs/runs/people_detection/intelligence.db --bbox 0,0,500,400 --json
+uv run --locked python -m event_intelligence.search --db outputs/runs/people_detection/intelligence.db --track-timeline 1 --json
+uv run --locked python -m event_intelligence.search --db outputs/runs/people_detection/intelligence.db --zone-stats --json
 ```
 
 The two detection extras conflict intentionally; do not use `--all-extras`.
@@ -359,7 +362,7 @@ These can be valuable later, but the first priority is a working CV intelligence
 
 ## Repository Status
 
-The repository has completed **Phase 0 (Foundation)**, **Phase 1 (Video Inspection & Dataset Validation)**, **Phase 2 (Person Detection)**, **Phase 3 (Person Tracking & Early Quantitative MOT17 Checkpoint)**, **Phase 4 (Trajectory Extraction)**, **Phase 5 (Zone and Line Reasoning)**, **Phase 6 (Dwell-Time Events)**, **Phase 7 (Visual Evidence)**, **Phase 8 (Heatmaps and Analytics)**, **Phase 9 (CV Evaluation)**, **Phase 10 (Searchable Outputs)**, and **Phase 11/11c/11d/11e (CV Pipeline Integration, Multi-Camera Intelligence, Automated Behavioral Insights, and Dynamic Video Evidence Clips & Storyboards)**.
+The repository has completed **Phase 0 (Foundation)**, **Phase 1 (Video Inspection & Dataset Validation)**, **Phase 2 (Person Detection)**, **Phase 3 (Person Tracking & Early Quantitative MOT17 Checkpoint)**, **Phase 4 (Trajectory Extraction)**, **Phase 5 (Zone and Line Reasoning)**, **Phase 6 (Dwell-Time Events)**, **Phase 7 (Visual Evidence)**, **Phase 8 (Heatmaps and Analytics)**, **Phase 9 (CV Evaluation)**, **Phase 10 (Searchable Outputs)**, and **Phase 11/11c/11d/11e/11f (CV Pipeline Integration, Multi-Camera Intelligence, Automated Behavioral Insights, Dynamic Video Evidence Clips & Storyboards, and Crowd Occupancy, Tailgating, Proximity & Spatial Trajectory Search)**.
 
 Completed capabilities:
 
@@ -377,8 +380,10 @@ Completed capabilities:
   - **Single camera:** `uv run --locked python -m event_intelligence.pipeline --video data/fallback_clips/people-detection.mp4 --config configs/pipeline.yaml`
   - **Multi-camera:** `uv run --locked python -m event_intelligence.pipeline --videos data/fallback_clips/people-detection.mp4 data/fallback_clips/store-aisle-detection.mp4 --cameras entrance concourse --config configs/pipeline_multicam.yaml`
   - **Cross-camera search:** `uv run --locked python -m event_intelligence.search --db outputs/runs/<run_id>/intelligence.db --camera-summary`
-  - **Behavior insights search:** `uv run --locked python -m event_intelligence.search --db outputs/runs/<run_id>/intelligence.db --insights --insight-type loitering --severity high`
+  - **Behavior insights search:** `uv run --locked python -m event_intelligence.search --db outputs/runs/<run_id>/intelligence.db --insights --insight-type crowding --severity high`
   - **Video evidence clip search:** `uv run --locked python -m event_intelligence.search --db outputs/runs/<run_id>/intelligence.db --clips --json`
+  - **Spatial trajectory & entity dossier search:** `uv run --locked python -m event_intelligence.search --db outputs/runs/<run_id>/intelligence.db --bbox 0,0,500,400 --json` and `--track-timeline 1`
+  - **Zone & line activity stats search:** `uv run --locked python -m event_intelligence.search --db outputs/runs/<run_id>/intelligence.db --zone-stats --line-stats`
   - **Camera filtering:** `uv run --locked python -m event_intelligence.search --db outputs/runs/<run_id>/intelligence.db --camera entrance --tracks --json`
   - **Evaluation benchmark CLI:** `uv run --locked python -m event_intelligence.evaluation --help`
   - **Surveillance Intelligence Report:** Automatically generates `intelligence_report.md` with executive metrics, high/critical security alerts, and clickable snapshot, video clip, and storyboard evidence links.
