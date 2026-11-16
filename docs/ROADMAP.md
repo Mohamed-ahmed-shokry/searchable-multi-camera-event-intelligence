@@ -1939,16 +1939,130 @@ uv run --locked python -m event_intelligence.search --db outputs/runs/multicam_t
 | `uv run --locked pytest -q` | ✅ 218 passed, 56 subtests passed | Full suite across 18 test modules |
 | `uv run --locked python -m event_intelligence.search --clips` | ✅ passed | Search CLI successfully filters clip paths |
 
+---
 
+## Completed Phase: 11f — Crowd Occupancy, Proximity & Tailgating Intelligence + Spatial-Temporal Trajectory Search (2026-11-16)
 
+### Objective
 
+Complete the multi-person behavioral intelligence and spatial-temporal search capabilities across `src/event_intelligence/`:
+1. **Fix Pipeline Configuration & CLI Evidence Wiring Bugs:**
+   - Ensure `load_pipeline_config` parses `extract_video_clips`, `clip_pre_roll_seconds`, `clip_post_roll_seconds`, `render_clip_telemetry`, and `extract_storyboards` from YAML, plus new crowd/proximity/tailgating insight fields.
+   - Ensure `run_multi_camera_pipeline` and `pipeline.main()` preserve `insight_config` and all video clip/storyboard configuration fields instead of dropping them, and expose `--clips` and `--storyboards` CLI flags on `python -m event_intelligence.pipeline`.
+   - Extend `query_insights` and `event_intelligence.search` CLI to filter insights by `--clips` and `--storyboards` and display clip/storyboard paths.
+2. **Multi-Person Crowd Occupancy, Tailgating & Proximity Intelligence (`src/event_intelligence/insights/` & `src/event_intelligence/analytics/`):**
+   - **Zone Occupancy & Crowding Detector (`InsightType.CROWDING`)**: Detect sustained zone capacity breaches when concurrent active tracks in a zone meet or exceed `max_zone_occupancy` (or `per_zone_max_occupancy`) for at least `min_crowding_seconds`.
+   - **Tailgating / Piggybacking Detector (`InsightType.TAILGATING`)**: Detect rapid consecutive multi-person crossings across the same tripwire line in the same direction within `tailgating_max_gap_seconds`.
+   - **Close-Proximity Grouping & Rendezvous Detector (`InsightType.PROXIMITY_GROUPING`)**: Detect sustained pairwise ground-plane proximity (`distance <= proximity_distance_px` for `>= min_proximity_seconds`) between concurrent tracks.
+   - **Zone Occupancy Timeline Analytics**: Compute per-zone peak occupancy timestamp, mean active occupancy, and time-above-capacity metrics in `analytics_summary.json` and `intelligence_report.md`.
+3. **Spatial-Temporal Trajectory, Zone/Line Analytics & Track Dossier Search (`src/event_intelligence/storage/` & `src/event_intelligence/search.py`):**
+   - Implement `query_trajectories` (filtering by `camera_id`, `track_id`, `min_time`, `max_time`, and spatial bounding box `bbox=(x1, y1, x2, y2)`).
+   - Implement `query_zone_counts` and `query_line_counts` for direct SQLite analytics queries.
+   - Implement `query_track_timeline` returning a unified chronological entity dossier (track lifespan, trajectory bounding box & velocity stats, zone/line events, behavioral insights, and visual evidence).
+   - Expose `--trajectories`, `--bbox`, `--zone-stats`, `--line-stats`, and `--track-timeline` in `python -m event_intelligence.search`.
 
+### Scope
 
+1. **Pipeline Config & CLI Evidence Wiring Fixes (`src/event_intelligence/pipeline.py`, `src/event_intelligence/storage/search_events.py`):**
+   - Fix `load_pipeline_config`, `run_multi_camera_pipeline`, and `pipeline.main()` field propagation.
+   - Add `--clips` and `--storyboards` CLI overrides to `event_intelligence.pipeline`.
+   - Add `has_clip` and `has_storyboard` filters to `query_insights`.
+2. **Multi-Person Behavioral Insight Engine (`src/event_intelligence/insights/`):**
+   - Add `CROWDING`, `TAILGATING`, and `PROXIMITY_GROUPING` to `InsightType`.
+   - Extend `InsightConfig` with occupancy, tailgating, and proximity thresholds.
+   - Implement `detect_crowding_insights`, `detect_tailgating_insights`, and `detect_proximity_insights` and wire into `generate_all_insights`.
+3. **Zone Occupancy Timeline Analytics (`src/event_intelligence/analytics/`):**
+   - Add `ZoneOccupancyProfile` and `compute_zone_occupancy_profiles` to `generate_heatmaps_analytics.py` and include in `analytics_summary.json`.
+4. **Spatial-Temporal Trajectory & Track Dossier Search (`src/event_intelligence/storage/search_events.py`):**
+   - Add `TrajectorySearchResult`, `ZoneCountSearchResult`, `LineCountSearchResult`, and `TrackTimelineDossier` dataclasses.
+   - Implement `query_trajectories`, `query_zone_counts`, `query_line_counts`, and `query_track_timeline`.
+   - Wire `--trajectories`, `--bbox`, `--zone-stats`, `--line-stats`, and `--track-timeline` into `event_intelligence.search`.
 
+### Acceptance Criteria
 
+| # | Criterion | Status | Evidence |
+|---|-----------|--------|----------|
+| 1 | `load_pipeline_config`, `run_multi_camera_pipeline`, and `pipeline.main()` preserve `insight_config`, `extract_video_clips`, and `extract_storyboards` settings end-to-end | ✅ | `fe87d46`, `dd4e7fd`, `c2765bb`, verified by `test_pipeline_config_round_trip_preserves_clip_storyboard_and_insights` (`564f7d2`) and CLI execution |
+| 2 | `detect_crowding_insights`, `detect_tailgating_insights`, and `detect_proximity_insights` accurately identify multi-person behavioral anomalies | ✅ | `aa854be`, `b674a6a`, `c76994b`, `2fda1a9`, verified in `tests/test_behavior_insights.py` (`778e6ab`, `dc23087`, `7217fb7`, `dee248f`) |
+| 3 | `compute_zone_occupancy_profiles` computes peak occupancy timestamp, mean active occupancy, and capacity breach duration per zone | ✅ | `4bd37b2`, `7f42075`, `15d778d`, verified by `test_compute_zone_occupancy_profiles_and_validation` (`50fa959`) |
+| 4 | `query_trajectories` supports filtering by camera, track, time window, and spatial bounding box (`--bbox x1,y1,x2,y2`) | ✅ | `e1594a2`, `969003d`, verified by `test_query_trajectories_spatial_and_temporal_filtering` (`357c810`) |
+| 5 | `query_zone_counts`, `query_line_counts`, and `query_track_timeline` return structured analytics and chronological entity dossiers via API and CLI | ✅ | `dd47969`, `6582028`, `41a461c`, `1f32327`, verified by `tests/test_storage_multicamera.py` (`7a8c760`, `8da5a27`) and `tests/test_search_multicamera.py` (`478612d`) |
+| 6 | `query_insights` and `event_intelligence.search --insights` support `--clips` and `--storyboards` filtering | ✅ | `76f99a1`, `d129273`, verified by `test_cli_filter_insights_by_clips_and_storyboards_flags` (`91e01d0`) |
+| 7 | All local CI-parity checks (`uv sync --locked`, `ruff check .`, `ruff format --check .`, `pytest -v`) and remote GitHub Actions CI workflow runs pass 100% | ✅ | `228 passed, 56 subtests passed`, `ruff check .` (0 errors), `ruff format --check .` (112 files clean), remote CI runs `43649920649`, `43650151332`, `43650351134`, `43650620548`, `43650804553`, `43651066104` all green |
 
+### Validation & CI Plan
 
+```bash
+uv sync --locked
+uv run --locked ruff check .
+uv run --locked ruff format --check .
+uv run --locked pytest -v
+uv run --locked python -m event_intelligence.pipeline --help
+uv run --locked python -m event_intelligence.search --help
+```
 
+### Exclusions
 
+- Track C Productization (Phase 12): FastAPI web server, React web UI, live RTSP streaming, user auth, and deep appearance Re-ID feature extractors.
+
+### Micro-Task Breakdown
+
+- [x] 1. `docs(roadmap): define Phase 11f crowd occupancy and trajectory search scope`
+- [x] 2. `fix(pipeline): parse video clip and storyboard fields in load_pipeline_config`
+- [x] 3. `fix(pipeline): propagate clip and storyboard settings in run_multi_camera_pipeline`
+- [x] 4. `feat(pipeline): add --clips and --storyboards CLI flags and preserve insight_config in main`
+- [x] 5. `test(pipeline): add unit tests for pipeline config clip/storyboard YAML loading and CLI propagation`
+- [x] 6. `feat(storage): add has_clip and has_storyboard filtering to query_insights`
+- [x] 7. `feat(search): wire --clips and --storyboards into insights CLI search and output`
+- [x] 8. `test(search): add unit tests for insights clip and storyboard filtering`
+- [x] 9. `types(insights): add CROWDING, TAILGATING, and PROXIMITY_GROUPING to InsightType`
+- [x] 10. `types(insights): extend InsightConfig with crowding, tailgating, and proximity thresholds`
+- [x] 11. `feat(pipeline): parse crowding, tailgating, and proximity insight fields in load_pipeline_config`
+- [x] 12. `test(insights): add validation tests for extended InsightConfig and InsightType`
+- [x] 13. `feat(insights): implement detect_tailgating_insights for rapid same-direction line crossings`
+- [x] 14. `test(insights): add unit tests for detect_tailgating_insights`
+- [x] 15. `feat(insights): implement detect_crowding_insights for sustained zone capacity breaches`
+- [x] 16. `test(insights): add unit tests for detect_crowding_insights`
+- [x] 17. `feat(insights): implement detect_proximity_insights for sustained close-range track interactions`
+- [x] 18. `test(insights): add unit tests for detect_proximity_insights`
+- [x] 19. `feat(insights): wire tailgating, crowding, and proximity detectors into generate_all_insights`
+- [x] 20. `test(insights): test generate_all_insights with multi-person behavioral anomalies`
+- [x] 21. `types(analytics): add ZoneOccupancyProfile dataclass to analytics module`
+- [x] 22. `feat(analytics): implement compute_zone_occupancy_profiles for temporal occupancy metrics`
+- [x] 23. `feat(analytics): export compute_zone_occupancy_profiles in analytics package and pipeline`
+- [x] 24. `test(analytics): add unit tests for compute_zone_occupancy_profiles`
+- [x] 25. `types(storage): add TrajectorySearchResult, ZoneCountSearchResult, LineCountSearchResult, and TrackTimelineDossier`
+- [x] 26. `feat(storage): implement query_trajectories with spatial bounding box and temporal filters`
+- [x] 27. `test(storage): add unit tests for query_trajectories spatial and temporal filtering`
+- [x] 28. `feat(storage): implement query_zone_counts and query_line_counts in storage`
+- [x] 29. `test(storage): add unit tests for query_zone_counts and query_line_counts`
+- [x] 30. `feat(storage): implement query_track_timeline for unified entity dossier retrieval`
+- [x] 31. `test(storage): add unit tests for query_track_timeline`
+- [x] 32. `feat(storage): export new search result types and query functions in storage __init__.py`
+- [x] 33. `feat(search): add --trajectories, --bbox, --zone-stats, --line-stats, and --track-timeline CLI flags`
+- [x] 34. `feat(search): wire trajectory, zone/line stats, and track timeline queries into search CLI main`
+- [x] 35. `test(search): add CLI integration tests for --trajectories, --bbox, --zone-stats, --line-stats, and --track-timeline`
+- [x] 36. `docs(readme): document crowd/tailgating/proximity insights and spatial trajectory search CLI`
+- [x] 37. `docs(roadmap): complete Phase 11f criteria, decision log, and CI log`
+
+### Decision Log (Phase 11f)
+
+| Decision | Options Considered | Chosen & Rationale |
+|----------|-------------------|--------------------|
+| Crowding & Occupancy Episode Detection | (a) Frame-by-frame alert spam whenever occupancy >= threshold; (b) Exact interval sweep-line merging contiguous capacity breaches and filtering by `min_crowding_seconds` | **(b) Interval sweep-line with duration hysteresis** — adheres strictly to `one meaningful behavior -> one clean event`, avoiding alert storms while recording exact peak occupancy and all involved track IDs. |
+| Close-Proximity Grouping Tolerance | (a) Break proximity episode on any single missed frame; (b) Allow up to 3 frames gap within a proximity burst and require `>= min_proximity_seconds` | **(b) 3-frame gap tolerance + minimum duration** — absorbs minor detector flicker while accurately measuring sustained close-range movement or rendezvous. |
+| Multi-Camera `query_track_timeline` Return Type | (a) Return a single `TrackTimelineDossier` and fail on multi-camera ID collisions; (b) Return `list[TrackTimelineDossier]` ordered by `camera_id` | **(b) `list[TrackTimelineDossier]`** — supports both single-camera runs and multi-camera databases where integer `track_id` values are scoped per camera (`PRIMARY KEY (camera_id, track_id)`). |
+| `StayDebugTrace` Timestamp Field Resolution | (a) Only read `entry_timestamp`/`exit_timestamp`; (b) Read `enter_time`/`last_inside_time`/`resolved_time` with fallback to `entry_timestamp`/`exit_timestamp` | **(b) Multi-attribute resolution** — ensures real `StayDebugTrace` objects emitted by `evaluate_dwell_events` populate accurate `start_time`, `end_time`, and `duration` on `track_drop_in_zone` insights. |
+
+### CI & Validation Log (Phase 11f)
+
+| Command | Result | Notes |
+|---------|--------|-------|
+| `uv sync --locked` | ✅ exit 0 | clean locked environment (`152 packages`) |
+| `uv run --locked ruff check .` | ✅ `All checks passed!` | repo-wide lint gate (112 files clean) |
+| `uv run --locked ruff format --check .` | ✅ `112 files already formatted` | repo-wide format gate |
+| `uv run --locked pytest -v` | ✅ `228 passed, 56 subtests passed` | full test suite across 18 test files |
+| `uv run --locked python -m event_intelligence.pipeline --video data/fallback_clips/people-detection.mp4 --config configs/pipeline.yaml --run-id phase11f_verify --max-frames 30 --no-video --clips --storyboards --json` | ✅ exit 0 | verified end-to-end single-command pipeline execution with `--clips` and `--storyboards` |
+| `uv run --locked python -m event_intelligence.search --db outputs/runs/phase11f_verify/intelligence.db --track-timeline 1 --json` | ✅ exit 0 | verified unified track dossier query with spatial bounds, speed stats, events, insights, and clips |
 
 

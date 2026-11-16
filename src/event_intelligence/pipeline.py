@@ -21,6 +21,7 @@ from event_intelligence.analytics import (
     compute_line_counts,
     compute_track_duration_stats,
     compute_zone_counts,
+    compute_zone_occupancy_profiles,
     render_heatmap_overlay,
     smooth_and_normalize_heatmap,
     write_line_counts_csv,
@@ -309,7 +310,7 @@ def load_pipeline_config(path: Path | str | None = None) -> PipelineConfig:
     trk_csv = raw.get("precomputed_tracks_csv", defaults.precomputed_tracks_csv)
     dev_val = raw.get("device", defaults.device)
 
-    ins_raw = raw.get("insights")
+    ins_raw = raw.get("insights") or raw.get("insight_config")
     ins_cfg: InsightConfig | None = None
     if isinstance(ins_raw, dict):
         ins_cfg = InsightConfig(
@@ -341,6 +342,17 @@ def load_pipeline_config(path: Path | str | None = None) -> PipelineConfig:
             cross_camera_max_seconds=float(
                 ins_raw.get("cross_camera_max_seconds", 60.0)
             ),
+            max_zone_occupancy=int(ins_raw.get("max_zone_occupancy", 3)),
+            per_zone_max_occupancy={
+                str(k): int(v)
+                for k, v in (ins_raw.get("per_zone_max_occupancy") or {}).items()
+            },
+            min_crowding_seconds=float(ins_raw.get("min_crowding_seconds", 2.0)),
+            tailgating_max_gap_seconds=float(
+                ins_raw.get("tailgating_max_gap_seconds", 2.0)
+            ),
+            proximity_distance_px=float(ins_raw.get("proximity_distance_px", 60.0)),
+            min_proximity_seconds=float(ins_raw.get("min_proximity_seconds", 2.0)),
         )
 
     return PipelineConfig(
@@ -399,6 +411,21 @@ def load_pipeline_config(path: Path | str | None = None) -> PipelineConfig:
         ),
         max_frames=int(max_frames_val) if max_frames_val is not None else None,
         insight_config=ins_cfg,
+        extract_video_clips=bool(
+            raw.get("extract_video_clips", defaults.extract_video_clips)
+        ),
+        clip_pre_roll_seconds=float(
+            raw.get("clip_pre_roll_seconds", defaults.clip_pre_roll_seconds)
+        ),
+        clip_post_roll_seconds=float(
+            raw.get("clip_post_roll_seconds", defaults.clip_post_roll_seconds)
+        ),
+        render_clip_telemetry=bool(
+            raw.get("render_clip_telemetry", defaults.render_clip_telemetry)
+        ),
+        extract_storyboards=bool(
+            raw.get("extract_storyboards", defaults.extract_storyboards)
+        ),
     )
 
 
@@ -708,6 +735,15 @@ def run_pipeline(
         trajectory_points=flat_points,
         scene_config=scene_cfg,
     )
+    ins_cfg_for_occ = (
+        cfg.insight_config if cfg.insight_config is not None else InsightConfig()
+    )
+    occupancy_profiles = compute_zone_occupancy_profiles(
+        raw_events,
+        scene_config=scene_cfg,
+        max_zone_occupancy=ins_cfg_for_occ.max_zone_occupancy,
+        per_zone_max_occupancy=ins_cfg_for_occ.per_zone_max_occupancy,
+    )
     line_counts = compute_line_counts(raw_events, scene_config=scene_cfg)
     duration_stats = compute_track_duration_stats(flat_points)
 
@@ -751,6 +787,7 @@ def run_pipeline(
             for l in line_counts
         ],
         "track_duration_distribution": duration_stats.to_dict(),
+        "zone_occupancy_profiles": [p.to_dict() for p in occupancy_profiles],
         "total_path_length_px": round(sum(s.path_length_px for s in traj_summaries), 2),
     }
     (run_dir / "analytics_summary.json").write_text(
@@ -1038,6 +1075,11 @@ def run_multi_camera_pipeline(
             save_annotated_video=cfg.save_annotated_video,
             max_frames=cfg.max_frames,
             insight_config=cfg.insight_config,
+            extract_video_clips=cfg.extract_video_clips,
+            clip_pre_roll_seconds=cfg.clip_pre_roll_seconds,
+            clip_post_roll_seconds=cfg.clip_post_roll_seconds,
+            render_clip_telemetry=cfg.render_clip_telemetry,
+            extract_storyboards=cfg.extract_storyboards,
         )
 
         res = run_pipeline(
@@ -1270,6 +1312,16 @@ def build_parser() -> argparse.ArgumentParser:
         help="Skip writing annotated_video.mp4.",
     )
     parser.add_argument(
+        "--clips",
+        action="store_true",
+        help="Enable dynamic MP4 video evidence clip extraction for events and insights.",
+    )
+    parser.add_argument(
+        "--storyboards",
+        action="store_true",
+        help="Enable 3-stage composite storyboard extraction for events and insights.",
+    )
+    parser.add_argument(
         "--json",
         action="store_true",
         help="Print PipelineRunResult as JSON.",
@@ -1322,6 +1374,12 @@ def main(argv: list[str] | None = None) -> int:
         max_frames=(
             args.max_frames if args.max_frames is not None else base_cfg.max_frames
         ),
+        insight_config=base_cfg.insight_config,
+        extract_video_clips=True if args.clips else base_cfg.extract_video_clips,
+        clip_pre_roll_seconds=base_cfg.clip_pre_roll_seconds,
+        clip_post_roll_seconds=base_cfg.clip_post_roll_seconds,
+        render_clip_telemetry=base_cfg.render_clip_telemetry,
+        extract_storyboards=True if args.storyboards else base_cfg.extract_storyboards,
     )
 
     videos: list[Path] = []

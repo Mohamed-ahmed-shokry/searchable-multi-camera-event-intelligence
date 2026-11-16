@@ -397,6 +397,163 @@ class TestMultiCameraStorage(unittest.TestCase):
             self.assertEqual(lookup.storyboard_size_bytes, 10)
             self.assertIn("resolved_video_clip_path", lookup.to_dict())
 
+    def test_query_trajectories_spatial_and_temporal_filtering(self) -> None:
+        from event_intelligence.storage.search_events import query_trajectories
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            tmp = Path(tmpdir)
+            db_path = tmp / "intelligence.db"
+            traj_csv = tmp / "trajectories.csv"
+            traj_csv.write_text(
+                "track_id,frame_id,timestamp,x,y\n"
+                "1,0,0.0,10.0,20.0\n"
+                "1,1,1.0,50.0,60.0\n"
+                "2,2,2.0,200.0,300.0\n",
+                encoding="utf-8",
+            )
+            cfg = SearchConfig(
+                source_name="cam_traj.mp4",
+                camera_id="cam_traj",
+                trajectories_csv=str(traj_csv),
+                events_csv="",
+                tracks_csv="",
+                detections_csv="",
+                tracking_summary_csv="",
+                trajectory_summary_csv="",
+                zone_counts_csv="",
+                line_counts_csv="",
+            )
+            ingest_intelligence_db(db_path, cfg, project_root=tmp)
+
+            all_pts = query_trajectories(db_path, camera_id="cam_traj")
+            self.assertEqual(len(all_pts), 3)
+
+            bbox_pts = query_trajectories(
+                db_path,
+                bbox=(0.0, 0.0, 100.0, 100.0),
+                min_time=0.5,
+            )
+            self.assertEqual(len(bbox_pts), 1)
+            self.assertEqual(bbox_pts[0].track_id, 1)
+            self.assertEqual(bbox_pts[0].frame_id, 1)
+            self.assertEqual(bbox_pts[0].to_dict()["x"], 50.0)
+
+            with self.assertRaises(ValueError):
+                query_trajectories(db_path, bbox=(100.0, 0.0, 50.0, 100.0))
+
+    def test_query_zone_counts_and_line_counts(self) -> None:
+        from event_intelligence.storage.search_events import (
+            query_line_counts,
+            query_zone_counts,
+        )
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            tmp = Path(tmpdir)
+            db_path = tmp / "intelligence.db"
+            zc_csv = tmp / "zone_counts.csv"
+            zc_csv.write_text(
+                "zone_id,entry_count,exit_count,total_dwell_seconds,peak_occupancy\n"
+                "lobby,4,3,18.5,2\n",
+                encoding="utf-8",
+            )
+            lc_csv = tmp / "line_counts.csv"
+            lc_csv.write_text(
+                "line_id,crossings_ab,crossings_ba,total\ngate,5,2,7\n",
+                encoding="utf-8",
+            )
+            cfg = SearchConfig(
+                source_name="cam_stats.mp4",
+                camera_id="cam_stats",
+                zone_counts_csv=str(zc_csv),
+                line_counts_csv=str(lc_csv),
+                events_csv="",
+                tracks_csv="",
+                detections_csv="",
+                tracking_summary_csv="",
+                trajectories_csv="",
+                trajectory_summary_csv="",
+            )
+            ingest_intelligence_db(db_path, cfg, project_root=tmp)
+
+            z_res = query_zone_counts(db_path, camera_id="cam_stats", zone_id="lobby")
+            self.assertEqual(len(z_res), 1)
+            self.assertEqual(z_res[0].peak_occupancy, 2)
+            self.assertEqual(z_res[0].to_dict()["total_dwell_seconds"], 18.5)
+
+            l_res = query_line_counts(db_path, camera_id="cam_stats", line_id="gate")
+            self.assertEqual(len(l_res), 1)
+            self.assertEqual(l_res[0].total, 7)
+            self.assertEqual(l_res[0].to_dict()["crossings_ab"], 5)
+
+    def test_query_track_timeline_builds_complete_dossier(self) -> None:
+        from event_intelligence.storage.search_events import query_track_timeline
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            tmp = Path(tmpdir)
+            db_path = tmp / "intelligence.db"
+            tracks_csv = tmp / "tracks.csv"
+            tracks_csv.write_text(
+                "frame_id,track_id,x1,y1,x2,y2,confidence\n"
+                "0,1,10,10,30,50,0.9\n"
+                "10,1,40,50,60,90,0.95\n",
+                encoding="utf-8",
+            )
+            traj_csv = tmp / "trajectories.csv"
+            traj_csv.write_text(
+                "track_id,frame_id,timestamp,x,y\n1,0,0.0,20.0,50.0\n1,10,1.0,50.0,90.0\n",
+                encoding="utf-8",
+            )
+            events_csv = tmp / "events.csv"
+            events_csv.write_text(
+                "event_id,event_type,track_id,zone_id,start_time,end_time,duration_seconds,snapshot_path,crop_path\n"
+                "evt_t1,dwell_time_event,1,lobby,0.0,1.0,1.0,snap.jpg,crop.jpg\n",
+                encoding="utf-8",
+            )
+            cfg = SearchConfig(
+                source_name="cam_dossier.mp4",
+                camera_id="cam_dossier",
+                tracks_csv=str(tracks_csv),
+                trajectories_csv=str(traj_csv),
+                events_csv=str(events_csv),
+                detections_csv="",
+                tracking_summary_csv="",
+                trajectory_summary_csv="",
+                zone_counts_csv="",
+                line_counts_csv="",
+            )
+            ingest_intelligence_db(db_path, cfg, project_root=tmp)
+            insert_insights(
+                db_path,
+                [
+                    {
+                        "insight_id": "ins_t1",
+                        "camera_id": "cam_dossier",
+                        "insight_type": "loitering",
+                        "severity": "high",
+                        "track_id": 1,
+                        "zone_id": "lobby",
+                        "start_time": 0.0,
+                        "end_time": 1.0,
+                        "duration": 1.0,
+                        "description": "Track 1 loitered",
+                    }
+                ],
+            )
+
+            dossiers = query_track_timeline(db_path, 1, camera_id="cam_dossier")
+            self.assertEqual(len(dossiers), 1)
+            d = dossiers[0]
+            self.assertEqual(d.track_id, 1)
+            self.assertEqual(d.trajectory_points_count, 2)
+            # 30-40-50 right triangle over 1.0s -> 50 px/s
+            self.assertAlmostEqual(d.mean_speed_px_s, 50.0)
+            self.assertEqual(len(d.events), 1)
+            self.assertEqual(len(d.insights), 1)
+            self.assertEqual(d.to_dict()["spatial_bounds"]["max_x"], 50.0)
+
+            with self.assertRaises(KeyError):
+                query_track_timeline(db_path, 999)
+
 
 if __name__ == "__main__":
     unittest.main()

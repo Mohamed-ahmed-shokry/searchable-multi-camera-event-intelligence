@@ -316,8 +316,22 @@ def detect_stationary_and_drop_insights(
             if getattr(tr, "track_lost_in_zone", False):
                 t_id = int(getattr(tr, "track_id", 0))
                 z_id = str(getattr(tr, "zone_id", ""))
-                t_in = float(getattr(tr, "entry_timestamp", 0.0))
-                t_out = float(getattr(tr, "exit_timestamp", t_in))
+                t_in = float(
+                    getattr(
+                        tr,
+                        "enter_time",
+                        getattr(tr, "entry_timestamp", 0.0),
+                    )
+                )
+                t_out = float(
+                    getattr(
+                        tr,
+                        "last_inside_time",
+                        getattr(
+                            tr, "resolved_time", getattr(tr, "exit_timestamp", t_in)
+                        ),
+                    )
+                )
                 lost_records.append((t_id, z_id, t_in, t_out, tr))
 
     # Also inspect events if event_type explicitly mentions track loss
@@ -533,6 +547,346 @@ def detect_cross_camera_transitions(
     return insights
 
 
+def detect_tailgating_insights(
+    events: Sequence[Any],
+    config: InsightConfig,
+    *,
+    camera_id: str = "default",
+    start_index: int = 1,
+) -> list[InsightRecord]:
+    """Detect rapid consecutive multi-person crossings on the same tripwire line (tailgating)."""
+    line_events = [
+        ev
+        for ev in events
+        if getattr(ev, "event_type", None) == "line_crossing"
+        and getattr(ev, "zone_id", None)
+    ]
+    if len(line_events) < 2:
+        return []
+
+    by_line_spec: dict[str, list[Any]] = {}
+    for ev in line_events:
+        spec = str(ev.zone_id)
+        by_line_spec.setdefault(spec, []).append(ev)
+
+    insights: list[InsightRecord] = []
+    idx = start_index
+
+    for full_spec in sorted(by_line_spec):
+        ordered = sorted(
+            by_line_spec[full_spec],
+            key=lambda e: (
+                float(getattr(e, "start_time", 0.0)),
+                int(getattr(e, "track_id", 0)),
+            ),
+        )
+        line_id, sep, direction = full_spec.partition(":")
+        if not sep:
+            line_id = full_spec
+            direction = ""
+
+        is_restricted = (
+            line_id in config.restricted_zones or full_spec in config.restricted_zones
+        )
+
+        for ev1, ev2 in itertools.pairwise(ordered):
+            t1 = int(getattr(ev1, "track_id", 0))
+            t2 = int(getattr(ev2, "track_id", 0))
+            if t1 == t2:
+                continue
+
+            ts1 = float(getattr(ev1, "start_time", 0.0))
+            ts2 = float(getattr(ev2, "start_time", 0.0))
+            gap = ts2 - ts1
+            if 0.0 <= gap <= config.tailgating_max_gap_seconds:
+                if is_restricted or gap <= 0.5 * config.tailgating_max_gap_seconds:
+                    sev = Severity.HIGH.value
+                else:
+                    sev = Severity.MEDIUM.value
+
+                snap_path = getattr(ev2, "evidence_snapshot_path", None) or getattr(
+                    ev2, "snapshot_path", None
+                )
+                crop_path = getattr(ev2, "evidence_crop_path", None) or getattr(
+                    ev2, "crop_path", None
+                )
+
+                insights.append(
+                    InsightRecord(
+                        insight_id=f"ins_{camera_id}_{idx:04d}",
+                        camera_id=camera_id,
+                        insight_type=InsightType.TAILGATING.value,
+                        severity=sev,
+                        track_id=t2,
+                        zone_id=full_spec,
+                        start_time=ts1,
+                        end_time=ts2,
+                        duration=round(gap, 4),
+                        description=(
+                            f"Track {t2} tailgated track {t1} across '{full_spec}' "
+                            f"after {gap:.2f}s (max gap {config.tailgating_max_gap_seconds:.1f}s)"
+                        ),
+                        evidence_snapshot_path=str(snap_path) if snap_path else None,
+                        evidence_crop_path=str(crop_path) if crop_path else None,
+                        details={
+                            "leader_track_id": t1,
+                            "follower_track_id": t2,
+                            "line_id": line_id,
+                            "direction": direction,
+                            "gap_seconds": round(gap, 4),
+                            "threshold_seconds": config.tailgating_max_gap_seconds,
+                            "is_restricted": is_restricted,
+                        },
+                    )
+                )
+                idx += 1
+
+    return insights
+
+
+def detect_crowding_insights(
+    events: Sequence[Any],
+    config: InsightConfig,
+    *,
+    camera_id: str = "default",
+    start_index: int = 1,
+) -> list[InsightRecord]:
+    """Detect sustained zone occupancy / crowding breaches via interval sweep-line."""
+    dwell_events = [
+        ev
+        for ev in events
+        if getattr(ev, "event_type", None) in ("dwell_time_event", "zone_dwell")
+        and getattr(ev, "zone_id", None)
+    ]
+    if not dwell_events:
+        return []
+
+    by_zone: dict[str, list[Any]] = {}
+    for ev in dwell_events:
+        by_zone.setdefault(str(ev.zone_id), []).append(ev)
+
+    insights: list[InsightRecord] = []
+    idx = start_index
+
+    for zone in sorted(by_zone):
+        stays = by_zone[zone]
+        cap = int(config.per_zone_max_occupancy.get(zone, config.max_zone_occupancy))
+        if len(stays) < cap:
+            continue
+
+        boundaries = sorted(
+            {round(float(getattr(ev, "start_time", 0.0)), 6) for ev in stays}
+            | {round(float(getattr(ev, "end_time", 0.0)), 6) for ev in stays}
+        )
+        if len(boundaries) < 2:
+            continue
+
+        episodes: list[tuple[float, float, int, set[int], list[Any]]] = []
+        cur_start: float | None = None
+        cur_end: float = 0.0
+        cur_peak: int = 0
+        cur_tracks: set[int] = set()
+        cur_evs: list[Any] = []
+
+        for t0, t1 in itertools.pairwise(boundaries):
+            if t1 <= t0:
+                continue
+            mid = 0.5 * (t0 + t1)
+            active_evs = [
+                ev
+                for ev in stays
+                if float(getattr(ev, "start_time", 0.0))
+                <= mid
+                <= float(getattr(ev, "end_time", 0.0))
+            ]
+            active_tids = {int(getattr(ev, "track_id", 0)) for ev in active_evs}
+            occ = len(active_tids)
+            if occ >= cap:
+                if cur_start is None:
+                    cur_start = t0
+                    cur_peak = occ
+                    cur_tracks = set(active_tids)
+                    cur_evs = list(active_evs)
+                else:
+                    cur_peak = max(cur_peak, occ)
+                    cur_tracks.update(active_tids)
+                    cur_evs.extend(active_evs)
+                cur_end = t1
+            else:
+                if cur_start is not None:
+                    episodes.append(
+                        (cur_start, cur_end, cur_peak, set(cur_tracks), list(cur_evs))
+                    )
+                    cur_start = None
+                    cur_peak = 0
+                    cur_tracks.clear()
+                    cur_evs.clear()
+
+        if cur_start is not None:
+            episodes.append(
+                (cur_start, cur_end, cur_peak, set(cur_tracks), list(cur_evs))
+            )
+
+        is_restricted = zone in config.restricted_zones
+        for ep_start, ep_end, ep_peak, ep_tracks, ep_evs in episodes:
+            dur = round(ep_end - ep_start, 4)
+            if dur < config.min_crowding_seconds:
+                continue
+
+            if is_restricted or ep_peak >= 2 * cap:
+                sev = Severity.CRITICAL.value
+            elif ep_peak > cap:
+                sev = Severity.HIGH.value
+            else:
+                sev = Severity.MEDIUM.value
+
+            snap_path = None
+            crop_path = None
+            for ev in ep_evs:
+                snap_path = (
+                    snap_path
+                    or getattr(ev, "evidence_snapshot_path", None)
+                    or getattr(ev, "snapshot_path", None)
+                )
+                crop_path = (
+                    crop_path
+                    or getattr(ev, "evidence_crop_path", None)
+                    or getattr(ev, "crop_path", None)
+                )
+
+            sorted_tids = sorted(ep_tracks)
+            insights.append(
+                InsightRecord(
+                    insight_id=f"ins_{camera_id}_{idx:04d}",
+                    camera_id=camera_id,
+                    insight_type=InsightType.CROWDING.value,
+                    severity=sev,
+                    track_id=sorted_tids[0] if sorted_tids else None,
+                    zone_id=zone,
+                    start_time=ep_start,
+                    end_time=ep_end,
+                    duration=dur,
+                    description=(
+                        f"Crowding / occupancy alert in {'restricted ' if is_restricted else ''}"
+                        f"zone '{zone}': peak {ep_peak} tracks (capacity {cap}) "
+                        f"for {dur:.1f}s"
+                    ),
+                    evidence_snapshot_path=str(snap_path) if snap_path else None,
+                    evidence_crop_path=str(crop_path) if crop_path else None,
+                    details={
+                        "zone_id": zone,
+                        "peak_occupancy": ep_peak,
+                        "max_allowed_occupancy": cap,
+                        "involved_track_ids": sorted_tids,
+                        "is_restricted_zone": is_restricted,
+                    },
+                )
+            )
+            idx += 1
+
+    return insights
+
+
+def detect_proximity_insights(
+    trajectories: Mapping[int, Sequence[Any]],
+    config: InsightConfig,
+    *,
+    camera_id: str = "default",
+    start_index: int = 1,
+) -> list[InsightRecord]:
+    """Detect sustained close-proximity interactions and rendezvous between concurrent tracks."""
+    tids = sorted(trajectories.keys())
+    if len(tids) < 2:
+        return []
+
+    by_frame: dict[int, dict[int, Any]] = {}
+    for tid in tids:
+        by_frame[tid] = {int(getattr(p, "frame_id", 0)): p for p in trajectories[tid]}
+
+    insights: list[InsightRecord] = []
+    idx = start_index
+    max_dist = config.proximity_distance_px
+    min_dur = config.min_proximity_seconds
+
+    for i, tid_a in enumerate(tids):
+        pts_a = by_frame[tid_a]
+        for tid_b in tids[i + 1 :]:
+            pts_b = by_frame[tid_b]
+            common_fids = sorted(pts_a.keys() & pts_b.keys())
+            if len(common_fids) < 2:
+                continue
+
+            bursts: list[list[tuple[int, float, float]]] = []
+            cur_burst: list[tuple[int, float, float]] = []
+
+            for fid in common_fids:
+                pa = pts_a[fid]
+                pb = pts_b[fid]
+                dist = math.hypot(
+                    float(getattr(pa, "x", 0.0)) - float(getattr(pb, "x", 0.0)),
+                    float(getattr(pa, "y", 0.0)) - float(getattr(pb, "y", 0.0)),
+                )
+                ts = float(getattr(pa, "timestamp", 0.0))
+                if dist <= max_dist:
+                    if cur_burst and (fid - cur_burst[-1][0]) > 3:
+                        bursts.append(list(cur_burst))
+                        cur_burst.clear()
+                    cur_burst.append((fid, ts, dist))
+                else:
+                    if len(cur_burst) >= 2:
+                        bursts.append(list(cur_burst))
+                    cur_burst.clear()
+
+            if len(cur_burst) >= 2:
+                bursts.append(list(cur_burst))
+
+            for burst in bursts:
+                t_start = burst[0][1]
+                t_end = burst[-1][1]
+                dur = round(max(0.0, t_end - t_start), 4)
+                if dur < min_dur:
+                    continue
+
+                dists = [b[2] for b in burst]
+                min_d = min(dists)
+                mean_d = sum(dists) / len(dists)
+                sev = (
+                    Severity.HIGH.value
+                    if dur >= 2.0 * min_dur and min_dur > 0.0
+                    else Severity.MEDIUM.value
+                )
+
+                insights.append(
+                    InsightRecord(
+                        insight_id=f"ins_{camera_id}_{idx:04d}",
+                        camera_id=camera_id,
+                        insight_type=InsightType.PROXIMITY_GROUPING.value,
+                        severity=sev,
+                        track_id=int(tid_a),
+                        zone_id=None,
+                        start_time=t_start,
+                        end_time=t_end,
+                        duration=dur,
+                        description=(
+                            f"Tracks {tid_a} and {tid_b} maintained close proximity "
+                            f"(min {min_d:.1f}px, avg {mean_d:.1f}px <= {max_dist:.1f}px) "
+                            f"for {dur:.2f}s ({len(burst)} frames)"
+                        ),
+                        details={
+                            "track_id_a": int(tid_a),
+                            "track_id_b": int(tid_b),
+                            "min_distance_px": round(min_d, 2),
+                            "mean_distance_px": round(mean_d, 2),
+                            "threshold_px": max_dist,
+                            "interaction_frames": len(burst),
+                        },
+                    )
+                )
+                idx += 1
+
+    return insights
+
+
 def generate_all_insights(
     events: Sequence[Any],
     trajectories: Mapping[int, Sequence[Any]],
@@ -575,7 +929,25 @@ def generate_all_insights(
     )
     all_insights.extend(stationary_and_drop)
 
-    # 5. Cross-camera transitions (if multi-camera dictionary provided)
+    # 5. Tailgating
+    tailgating = detect_tailgating_insights(
+        events, cfg, camera_id=camera_id, start_index=len(all_insights) + 1
+    )
+    all_insights.extend(tailgating)
+
+    # 6. Crowding / zone capacity breaches
+    crowding = detect_crowding_insights(
+        events, cfg, camera_id=camera_id, start_index=len(all_insights) + 1
+    )
+    all_insights.extend(crowding)
+
+    # 7. Close-proximity grouping / rendezvous
+    proximity = detect_proximity_insights(
+        trajectories, cfg, camera_id=camera_id, start_index=len(all_insights) + 1
+    )
+    all_insights.extend(proximity)
+
+    # 8. Cross-camera transitions (if multi-camera dictionary provided)
     if events_by_camera and len(events_by_camera) > 1:
         multicam_transitions = detect_cross_camera_transitions(
             events_by_camera, cfg, start_index=len(all_insights) + 1

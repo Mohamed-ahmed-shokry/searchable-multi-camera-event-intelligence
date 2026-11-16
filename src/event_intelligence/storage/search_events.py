@@ -418,6 +418,118 @@ class InsightSearchResult:
 
 
 @dataclass(frozen=True, slots=True)
+class TrajectorySearchResult:
+    """Structured trajectory point row returned by query_trajectories."""
+
+    camera_id: str
+    track_id: int
+    frame_id: int
+    timestamp: float
+    x: float
+    y: float
+
+    def __post_init__(self) -> None:
+        if self.track_id < 0 or self.frame_id < 0:
+            raise ValueError("track_id and frame_id must be non-negative")
+        if self.timestamp < 0.0:
+            raise ValueError("timestamp must be non-negative")
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "camera_id": self.camera_id,
+            "track_id": self.track_id,
+            "frame_id": self.frame_id,
+            "timestamp": round(self.timestamp, 4),
+            "x": round(self.x, 2),
+            "y": round(self.y, 2),
+        }
+
+
+@dataclass(frozen=True, slots=True)
+class ZoneCountSearchResult:
+    """Structured zone activity row returned by query_zone_counts."""
+
+    camera_id: str
+    zone_id: str
+    entry_count: int
+    exit_count: int
+    total_dwell_seconds: float
+    peak_occupancy: int
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "camera_id": self.camera_id,
+            "zone_id": self.zone_id,
+            "entry_count": self.entry_count,
+            "exit_count": self.exit_count,
+            "total_dwell_seconds": round(self.total_dwell_seconds, 4),
+            "peak_occupancy": self.peak_occupancy,
+        }
+
+
+@dataclass(frozen=True, slots=True)
+class LineCountSearchResult:
+    """Structured line crossing row returned by query_line_counts."""
+
+    camera_id: str
+    line_id: str
+    crossings_ab: int
+    crossings_ba: int
+    total: int
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "camera_id": self.camera_id,
+            "line_id": self.line_id,
+            "crossings_ab": self.crossings_ab,
+            "crossings_ba": self.crossings_ba,
+            "total": self.total,
+        }
+
+
+@dataclass(frozen=True, slots=True)
+class TrackTimelineDossier:
+    """Unified chronological dossier for a single tracked entity."""
+
+    camera_id: str
+    track_id: int
+    start_frame: int
+    end_frame: int
+    duration_seconds: float
+    path_length_px: float
+    trajectory_points_count: int
+    min_x: float
+    min_y: float
+    max_x: float
+    max_y: float
+    mean_speed_px_s: float
+    max_speed_px_s: float
+    events: list[EventSearchResult] = field(default_factory=list)
+    insights: list[InsightSearchResult] = field(default_factory=list)
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "camera_id": self.camera_id,
+            "track_id": self.track_id,
+            "start_frame": self.start_frame,
+            "end_frame": self.end_frame,
+            "duration_seconds": round(self.duration_seconds, 4),
+            "path_length_px": round(self.path_length_px, 2),
+            "trajectory_points_count": self.trajectory_points_count,
+            "spatial_bounds": {
+                "min_x": round(self.min_x, 2),
+                "min_y": round(self.min_y, 2),
+                "max_x": round(self.max_x, 2),
+                "max_y": round(self.max_y, 2),
+            },
+            "mean_speed_px_s": round(self.mean_speed_px_s, 2),
+            "max_speed_px_s": round(self.max_speed_px_s, 2),
+            "events": [e.to_dict() for e in self.events],
+            "insights": [i.to_dict() for i in self.insights],
+        }
+
+
+@dataclass(frozen=True, slots=True)
 class DatabaseSummary:
     """Row counts across all tables in intelligence.db."""
 
@@ -1401,6 +1513,8 @@ def query_insights(
     zone_id: str | None = None,
     min_time: float | None = None,
     max_time: float | None = None,
+    has_clip: bool | None = None,
+    has_storyboard: bool | None = None,
     limit: int = 50,
 ) -> list[InsightSearchResult]:
     """Query behavioral insights from intelligence.db by type, severity, camera, zone, track, or time."""
@@ -1442,6 +1556,16 @@ def query_insights(
         clauses.append("start_time <= ?")
         params.append(float(max_time))
 
+    if has_clip is True:
+        clauses.append("video_clip_path != ''")
+    elif has_clip is False:
+        clauses.append("video_clip_path = ''")
+
+    if has_storyboard is True:
+        clauses.append("storyboard_path != ''")
+    elif has_storyboard is False:
+        clauses.append("storyboard_path = ''")
+
     where_sql = f"WHERE {' AND '.join(clauses)}" if clauses else ""
     sql = (
         "SELECT camera_id, insight_id, insight_type, severity, track_id, zone_id, "
@@ -1479,6 +1603,274 @@ def query_insights(
                 )
             )
     return results
+
+
+def query_trajectories(
+    db_path: Path | str,
+    *,
+    camera_id: str | None = None,
+    track_id: int | None = None,
+    min_time: float | None = None,
+    max_time: float | None = None,
+    bbox: tuple[float, float, float, float] | None = None,
+    limit: int = 500,
+) -> list[TrajectorySearchResult]:
+    """Query trajectory points from intelligence.db by camera, track, time window, or spatial bbox."""
+    if limit <= 0:
+        raise ValueError("limit must be positive")
+    path = Path(db_path)
+    if not path.is_file():
+        raise FileNotFoundError(f"SQLite database not found: {path}")
+
+    clauses: list[str] = []
+    params: list[Any] = []
+
+    if camera_id is not None and camera_id.strip():
+        clauses.append("camera_id = ?")
+        params.append(camera_id.strip())
+
+    if track_id is not None:
+        clauses.append("track_id = ?")
+        params.append(int(track_id))
+
+    if min_time is not None:
+        clauses.append("timestamp >= ?")
+        params.append(float(min_time))
+
+    if max_time is not None:
+        clauses.append("timestamp <= ?")
+        params.append(float(max_time))
+
+    if bbox is not None:
+        if len(bbox) != 4:
+            raise ValueError("bbox must be a 4-tuple (x1, y1, x2, y2)")
+        x1, y1, x2, y2 = (
+            float(bbox[0]),
+            float(bbox[1]),
+            float(bbox[2]),
+            float(bbox[3]),
+        )
+        if x2 < x1 or y2 < y1:
+            raise ValueError(
+                f"bbox must satisfy x1 <= x2 and y1 <= y2, got ({x1}, {y1}, {x2}, {y2})"
+            )
+        clauses.append("x >= ? AND x <= ? AND y >= ? AND y <= ?")
+        params.extend([x1, x2, y1, y2])
+
+    where_sql = f"WHERE {' AND '.join(clauses)}" if clauses else ""
+    sql = (
+        "SELECT camera_id, track_id, frame_id, timestamp, x, y "
+        f"FROM trajectories {where_sql} "
+        "ORDER BY camera_id ASC, track_id ASC, frame_id ASC LIMIT ?"
+    )
+    params.append(int(limit))
+
+    results: list[TrajectorySearchResult] = []
+    with closing(sqlite3.connect(path)) as conn:
+        for row in conn.execute(sql, params):
+            results.append(
+                TrajectorySearchResult(
+                    camera_id=str(row[0] or ""),
+                    track_id=int(row[1]),
+                    frame_id=int(row[2]),
+                    timestamp=float(row[3]),
+                    x=float(row[4]),
+                    y=float(row[5]),
+                )
+            )
+    return results
+
+
+def query_zone_counts(
+    db_path: Path | str,
+    *,
+    camera_id: str | None = None,
+    zone_id: str | None = None,
+    limit: int = 100,
+) -> list[ZoneCountSearchResult]:
+    """Query aggregated zone activity metrics from intelligence.db."""
+    if limit <= 0:
+        raise ValueError("limit must be positive")
+    path = Path(db_path)
+    if not path.is_file():
+        raise FileNotFoundError(f"SQLite database not found: {path}")
+
+    clauses: list[str] = []
+    params: list[Any] = []
+
+    if camera_id is not None and camera_id.strip():
+        clauses.append("camera_id = ?")
+        params.append(camera_id.strip())
+
+    if zone_id is not None and zone_id.strip():
+        clauses.append("zone_id = ?")
+        params.append(zone_id.strip())
+
+    where_sql = f"WHERE {' AND '.join(clauses)}" if clauses else ""
+    sql = (
+        "SELECT camera_id, zone_id, entry_count, exit_count, "
+        "total_dwell_seconds, peak_occupancy "
+        f"FROM zone_counts {where_sql} "
+        "ORDER BY camera_id ASC, zone_id ASC LIMIT ?"
+    )
+    params.append(int(limit))
+
+    results: list[ZoneCountSearchResult] = []
+    with closing(sqlite3.connect(path)) as conn:
+        for row in conn.execute(sql, params):
+            results.append(
+                ZoneCountSearchResult(
+                    camera_id=str(row[0] or ""),
+                    zone_id=str(row[1]),
+                    entry_count=int(row[2]),
+                    exit_count=int(row[3]),
+                    total_dwell_seconds=float(row[4]),
+                    peak_occupancy=int(row[5]),
+                )
+            )
+    return results
+
+
+def query_line_counts(
+    db_path: Path | str,
+    *,
+    camera_id: str | None = None,
+    line_id: str | None = None,
+    limit: int = 100,
+) -> list[LineCountSearchResult]:
+    """Query aggregated line directional crossings from intelligence.db."""
+    if limit <= 0:
+        raise ValueError("limit must be positive")
+    path = Path(db_path)
+    if not path.is_file():
+        raise FileNotFoundError(f"SQLite database not found: {path}")
+
+    clauses: list[str] = []
+    params: list[Any] = []
+
+    if camera_id is not None and camera_id.strip():
+        clauses.append("camera_id = ?")
+        params.append(camera_id.strip())
+
+    if line_id is not None and line_id.strip():
+        clauses.append("line_id = ?")
+        params.append(line_id.strip())
+
+    where_sql = f"WHERE {' AND '.join(clauses)}" if clauses else ""
+    sql = (
+        "SELECT camera_id, line_id, crossings_ab, crossings_ba, total "
+        f"FROM line_counts {where_sql} "
+        "ORDER BY camera_id ASC, line_id ASC LIMIT ?"
+    )
+    params.append(int(limit))
+
+    results: list[LineCountSearchResult] = []
+    with closing(sqlite3.connect(path)) as conn:
+        for row in conn.execute(sql, params):
+            results.append(
+                LineCountSearchResult(
+                    camera_id=str(row[0] or ""),
+                    line_id=str(row[1]),
+                    crossings_ab=int(row[2]),
+                    crossings_ba=int(row[3]),
+                    total=int(row[4]),
+                )
+            )
+    return results
+
+
+def query_track_timeline(
+    db_path: Path | str,
+    track_id: int,
+    *,
+    camera_id: str | None = None,
+) -> list[TrackTimelineDossier]:
+    """Build a unified chronological dossier (lifespan, bounds, speeds, events, insights) for track_id."""
+    if track_id < 0:
+        raise ValueError("track_id must be non-negative")
+    path = Path(db_path)
+    if not path.is_file():
+        raise FileNotFoundError(f"SQLite database not found: {path}")
+
+    clauses = ["track_id = ?"]
+    params: list[Any] = [int(track_id)]
+    if camera_id is not None and camera_id.strip():
+        clauses.append("camera_id = ?")
+        params.append(camera_id.strip())
+
+    where_sql = " AND ".join(clauses)
+    with closing(sqlite3.connect(path)) as conn:
+        track_rows = conn.execute(
+            "SELECT camera_id, track_id, start_frame, end_frame, "
+            "duration_seconds, path_length_px "
+            f"FROM tracks WHERE {where_sql} ORDER BY camera_id ASC",
+            params,
+        ).fetchall()
+
+    if not track_rows:
+        raise KeyError(
+            f"Track {track_id} not found in {path}"
+            + (f" for camera {camera_id!r}" if camera_id else "")
+        )
+
+    dossiers: list[TrackTimelineDossier] = []
+    for cam_raw, tid_raw, s_frame, e_frame, dur_sec, path_len in track_rows:
+        cam_str = str(cam_raw or "")
+        tid = int(tid_raw)
+        pts = query_trajectories(
+            path,
+            camera_id=cam_str if cam_str else None,
+            track_id=tid,
+            limit=50000,
+        )
+        if pts:
+            xs = [p.x for p in pts]
+            ys = [p.y for p in pts]
+            min_x, max_x = min(xs), max(xs)
+            min_y, max_y = min(ys), max(ys)
+            speeds: list[float] = []
+            for p1, p2 in pairwise(pts):
+                dt = p2.timestamp - p1.timestamp
+                if dt > 1e-4:
+                    speeds.append(math.hypot(p2.x - p1.x, p2.y - p1.y) / dt)
+            mean_spd = sum(speeds) / len(speeds) if speeds else 0.0
+            max_spd = max(speeds) if speeds else 0.0
+        else:
+            min_x = max_x = min_y = max_y = 0.0
+            mean_spd = max_spd = 0.0
+
+        evs = query_events(
+            path,
+            camera_id=cam_str if cam_str else None,
+            track_id=tid,
+            limit=1000,
+        )
+        ins = query_insights(
+            path,
+            camera_id=cam_str if cam_str else None,
+            track_id=tid,
+            limit=1000,
+        )
+        dossiers.append(
+            TrackTimelineDossier(
+                camera_id=cam_str,
+                track_id=tid,
+                start_frame=int(s_frame),
+                end_frame=int(e_frame),
+                duration_seconds=float(dur_sec),
+                path_length_px=float(path_len),
+                trajectory_points_count=len(pts),
+                min_x=min_x,
+                min_y=min_y,
+                max_x=max_x,
+                max_y=max_y,
+                mean_speed_px_s=mean_spd,
+                max_speed_px_s=max_spd,
+                events=evs,
+                insights=ins,
+            )
+        )
+    return dossiers
 
 
 def lookup_event_evidence(
@@ -1972,6 +2364,39 @@ def build_parser() -> argparse.ArgumentParser:
         help="Filter events having an associated composite storyboard image.",
     )
     parser.add_argument(
+        "--trajectories",
+        action="store_true",
+        help="Query trajectories table instead of events table.",
+    )
+    parser.add_argument(
+        "--bbox",
+        type=str,
+        default=None,
+        help="Spatial bounding box filter 'x1,y1,x2,y2' for trajectory queries.",
+    )
+    parser.add_argument(
+        "--zone-stats",
+        action="store_true",
+        help="Query aggregated zone activity metrics (zone_counts table).",
+    )
+    parser.add_argument(
+        "--line-stats",
+        action="store_true",
+        help="Query aggregated line directional crossings (line_counts table).",
+    )
+    parser.add_argument(
+        "--line",
+        type=str,
+        default=None,
+        help="Filter line stats by line_id.",
+    )
+    parser.add_argument(
+        "--track-timeline",
+        type=int,
+        default=None,
+        help="Build a unified chronological dossier for the specified integer track_id.",
+    )
+    parser.add_argument(
         "--limit",
         type=int,
         default=100,
@@ -2082,6 +2507,118 @@ def main(argv: list[str] | None = None) -> int:
             )
         return 0
 
+    if args.track_timeline is not None:
+        dossiers = query_track_timeline(
+            db_path,
+            args.track_timeline,
+            camera_id=args.camera_id,
+        )
+        if args.json:
+            print(json.dumps([d.to_dict() for d in dossiers], indent=2))
+        else:
+            for d in dossiers:
+                cam_label = f" (camera={d.camera_id})" if d.camera_id else ""
+                print(
+                    f"=== Track Timeline Dossier: track_id={d.track_id}{cam_label} ===\n"
+                    f"  Lifespan: frames {d.start_frame}..{d.end_frame} ({d.duration_seconds:.2f}s), "
+                    f"path={d.path_length_px:.1f}px ({d.trajectory_points_count} pts)\n"
+                    f"  Bounds: x=[{d.min_x:.1f}, {d.max_x:.1f}], y=[{d.min_y:.1f}, {d.max_y:.1f}]\n"
+                    f"  Speed: mean={d.mean_speed_px_s:.1f} px/s, max={d.max_speed_px_s:.1f} px/s\n"
+                    f"  Events ({len(d.events)}): "
+                    + (
+                        ", ".join(
+                            f"{e.event_id}[{e.event_type}:{e.zone_id}]"
+                            for e in d.events
+                        )
+                        if d.events
+                        else "none"
+                    )
+                    + f"\n  Insights ({len(d.insights)}): "
+                    + (
+                        ", ".join(
+                            f"{i.insight_id}[{i.insight_type}:{i.severity}]"
+                            for i in d.insights
+                        )
+                        if d.insights
+                        else "none"
+                    )
+                )
+        return 0
+
+    if args.zone_stats:
+        z_rows = query_zone_counts(
+            db_path,
+            camera_id=args.camera_id,
+            zone_id=args.zone,
+            limit=args.limit,
+        )
+        if args.json:
+            print(json.dumps([z.to_dict() for z in z_rows], indent=2))
+        else:
+            print(f"Matched {len(z_rows)} zone stat row(s):")
+            for z in z_rows:
+                cam_label = f" cam={z.camera_id}" if z.camera_id else ""
+                print(
+                    f"  zone={z.zone_id}{cam_label} entries={z.entry_count} "
+                    f"exits={z.exit_count} dwell={z.total_dwell_seconds:.2f}s "
+                    f"peak_occupancy={z.peak_occupancy}"
+                )
+        return 0
+
+    if args.line_stats:
+        l_rows = query_line_counts(
+            db_path,
+            camera_id=args.camera_id,
+            line_id=args.line,
+            limit=args.limit,
+        )
+        if args.json:
+            print(json.dumps([l.to_dict() for l in l_rows], indent=2))
+        else:
+            print(f"Matched {len(l_rows)} line stat row(s):")
+            for ln in l_rows:
+                cam_label = f" cam={ln.camera_id}" if ln.camera_id else ""
+                print(
+                    f"  line={ln.line_id}{cam_label} A->B={ln.crossings_ab} "
+                    f"B->A={ln.crossings_ba} total={ln.total}"
+                )
+        return 0
+
+    if args.trajectories or args.bbox is not None:
+        parsed_bbox: tuple[float, float, float, float] | None = None
+        if args.bbox is not None:
+            parts = [p.strip() for p in args.bbox.split(",") if p.strip()]
+            if len(parts) != 4:
+                raise ValueError(
+                    f"--bbox must have 4 comma-separated floats 'x1,y1,x2,y2', got {args.bbox!r}"
+                )
+            parsed_bbox = (
+                float(parts[0]),
+                float(parts[1]),
+                float(parts[2]),
+                float(parts[3]),
+            )
+        traj_pts = query_trajectories(
+            db_path,
+            camera_id=args.camera_id,
+            track_id=args.track_id,
+            min_time=args.min_time,
+            max_time=args.max_time,
+            bbox=parsed_bbox,
+            limit=args.limit,
+        )
+        if args.json:
+            print(json.dumps([p.to_dict() for p in traj_pts], indent=2))
+        else:
+            print(f"Matched {len(traj_pts)} trajectory point(s):")
+            for p in traj_pts:
+                cam_label = f" cam={p.camera_id}" if p.camera_id else ""
+                print(
+                    f"  track_id={p.track_id}{cam_label} frame={p.frame_id} "
+                    f"t={p.timestamp:.4f}s x={p.x:.2f} y={p.y:.2f}"
+                )
+        return 0
+
     if args.tracks:
         tracks = query_tracks(
             db_path,
@@ -2114,6 +2651,8 @@ def main(argv: list[str] | None = None) -> int:
             zone_id=args.zone,
             min_time=args.min_time,
             max_time=args.max_time,
+            has_clip=True if args.clips else None,
+            has_storyboard=True if args.storyboards else None,
             limit=args.limit,
         )
         if args.json:
@@ -2126,11 +2665,15 @@ def main(argv: list[str] | None = None) -> int:
                     f" track={ins.track_id}" if ins.track_id is not None else ""
                 )
                 zone_label = f" zone={ins.zone_id}" if ins.zone_id else ""
+                clip_label = (
+                    f" clip={ins.video_clip_path}" if ins.video_clip_path else ""
+                )
+                sb_label = f" sb={ins.storyboard_path}" if ins.storyboard_path else ""
                 print(
                     f"  [{ins.insight_id}]{cam_label} type={ins.insight_type} "
                     f"sev={ins.severity}{track_label}{zone_label} "
                     f"time={ins.start_time:.2f}..{ins.end_time:.2f}s "
-                    f"desc='{ins.description}'"
+                    f"desc='{ins.description}'{clip_label}{sb_label}"
                 )
         return 0
 

@@ -11,9 +11,12 @@ from event_intelligence.insights import (
     InsightType,
     Severity,
     detect_cross_camera_transitions,
+    detect_crowding_insights,
     detect_loitering_insights,
+    detect_proximity_insights,
     detect_speed_anomaly_insights,
     detect_stationary_and_drop_insights,
+    detect_tailgating_insights,
     detect_wrong_way_insights,
     generate_all_insights,
 )
@@ -131,6 +134,20 @@ class TestInsightTypesAndConfig(unittest.TestCase):
 
         with self.assertRaises(ValueError):
             InsightConfig(loitering_factor=0.5)  # must be > 1.0
+        with self.assertRaises(ValueError):
+            InsightConfig(max_zone_occupancy=0)
+        with self.assertRaises(ValueError):
+            InsightConfig(per_zone_max_occupancy={"lobby": 0})
+        with self.assertRaises(ValueError):
+            InsightConfig(tailgating_max_gap_seconds=0.0)
+        with self.assertRaises(ValueError):
+            InsightConfig(proximity_distance_px=-5.0)
+        with self.assertRaises(ValueError):
+            InsightConfig(min_proximity_seconds=-1.0)
+
+        self.assertEqual(InsightType.CROWDING.value, "crowding")
+        self.assertEqual(InsightType.TAILGATING.value, "tailgating")
+        self.assertEqual(InsightType.PROXIMITY_GROUPING.value, "proximity_grouping")
 
 
 class TestInsightDetectors(unittest.TestCase):
@@ -267,20 +284,115 @@ class TestInsightDetectors(unittest.TestCase):
         self.assertEqual(trans.insight_type, "cross_camera_transition")
         self.assertEqual(trans.duration, 3.0)
 
+    def test_detect_tailgating_insights(self) -> None:
+        cfg = InsightConfig(
+            tailgating_max_gap_seconds=2.0,
+            restricted_zones=("turnstile",),
+        )
+        events = [
+            DummyEvent("e1", "line_crossing", 1, "turnstile:A->B", 4.0, 4.0),
+            DummyEvent(
+                "e2",
+                "line_crossing",
+                2,
+                "turnstile:A->B",
+                5.1,
+                5.1,
+                evidence_snapshot_path="snapshots/tg.jpg",
+            ),
+            # Crossing far later -> not tailgating
+            DummyEvent("e3", "line_crossing", 3, "turnstile:A->B", 10.0, 10.0),
+        ]
+        insights = detect_tailgating_insights(events, cfg, camera_id="cam_gate")
+        self.assertEqual(len(insights), 1)
+        ins = insights[0]
+        self.assertEqual(ins.insight_type, "tailgating")
+        self.assertEqual(ins.severity, "high")
+        self.assertEqual(ins.track_id, 2)
+        self.assertEqual(ins.details["leader_track_id"], 1)
+        self.assertEqual(ins.details["follower_track_id"], 2)
+        self.assertAlmostEqual(ins.details["gap_seconds"], 1.1)
+
+    def test_detect_crowding_insights(self) -> None:
+        cfg = InsightConfig(
+            max_zone_occupancy=3,
+            per_zone_max_occupancy={"vault": 2},
+            min_crowding_seconds=2.0,
+            restricted_zones=("vault",),
+        )
+        events = [
+            # 3 people in lobby from t=2.0 to t=6.0 (4.0s >= 2.0s)
+            DummyEvent("e1", "dwell_time_event", 1, "lobby", 0.0, 8.0, 8.0),
+            DummyEvent("e2", "dwell_time_event", 2, "lobby", 1.0, 7.0, 6.0),
+            DummyEvent("e3", "dwell_time_event", 3, "lobby", 2.0, 6.0, 4.0),
+            # 2 people in vault from t=10.0 to t=13.5 (3.5s >= 2.0s, restricted)
+            DummyEvent("e4", "dwell_time_event", 4, "vault", 9.0, 14.0, 5.0),
+            DummyEvent("e5", "dwell_time_event", 5, "vault", 10.0, 13.5, 3.5),
+        ]
+        insights = detect_crowding_insights(events, cfg, camera_id="cam_crowd")
+        self.assertEqual(len(insights), 2)
+        by_zone = {ins.zone_id: ins for ins in insights}
+        self.assertEqual(by_zone["lobby"].insight_type, "crowding")
+        self.assertEqual(by_zone["lobby"].details["peak_occupancy"], 3)
+        self.assertEqual(by_zone["lobby"].details["involved_track_ids"], [1, 2, 3])
+        self.assertEqual(by_zone["vault"].severity, "critical")
+        self.assertAlmostEqual(by_zone["vault"].duration, 3.5)
+
+    def test_detect_proximity_insights(self) -> None:
+        cfg = InsightConfig(
+            proximity_distance_px=50.0,
+            min_proximity_seconds=2.0,
+        )
+        # Tracks 1 and 2 walk side-by-side (20px apart) for 4s (t=0..4)
+        # Track 3 is far away (300px)
+        trajectories = {
+            1: [DummyPoint(1, i, float(i), 100.0 + i * 5.0, 100.0) for i in range(5)],
+            2: [DummyPoint(2, i, float(i), 100.0 + i * 5.0, 120.0) for i in range(5)],
+            3: [DummyPoint(3, i, float(i), 500.0, 500.0) for i in range(5)],
+        }
+        insights = detect_proximity_insights(trajectories, cfg, camera_id="cam_prox")
+        self.assertEqual(len(insights), 1)
+        ins = insights[0]
+        self.assertEqual(ins.insight_type, "proximity_grouping")
+        self.assertEqual(ins.severity, "high")
+        self.assertEqual(ins.details["track_id_a"], 1)
+        self.assertEqual(ins.details["track_id_b"], 2)
+        self.assertAlmostEqual(ins.details["min_distance_px"], 20.0)
+        self.assertEqual(ins.duration, 4.0)
+
     def test_generate_all_insights_aggregates_and_sorts(self) -> None:
         cfg = InsightConfig(
             min_loitering_seconds=5.0,
             allowed_line_directions={"gate": "A->B"},
+            tailgating_max_gap_seconds=1.5,
+            max_zone_occupancy=2,
+            min_crowding_seconds=2.0,
+            proximity_distance_px=30.0,
+            min_proximity_seconds=2.0,
         )
         events = [
             DummyEvent("e1", "line_crossing", 2, "gate:B->A", 10.0, 10.0),
             DummyEvent("e2", "dwell_time_event", 1, "lounge", 2.0, 9.0, 7.0),
+            DummyEvent("e3", "dwell_time_event", 3, "lounge", 3.0, 6.0, 3.0),
+            DummyEvent("e4", "line_crossing", 4, "gate:A->B", 12.0, 12.0),
+            DummyEvent("e5", "line_crossing", 5, "gate:A->B", 12.8, 12.8),
         ]
-        insights = generate_all_insights(events, {}, cfg, camera_id="cam_main")
-        self.assertEqual(len(insights), 2)
-        # Should be sorted chronologically by start_time: e2 (t=2.0) before e1 (t=10.0)
-        self.assertEqual(insights[0].start_time, 2.0)
-        self.assertEqual(insights[1].start_time, 10.0)
+        trajectories = {
+            1: [DummyPoint(1, i, float(i), 50.0, 50.0) for i in range(4)],
+            3: [DummyPoint(3, i, float(i), 60.0, 50.0) for i in range(4)],
+        }
+        insights = generate_all_insights(
+            events, trajectories, cfg, camera_id="cam_main"
+        )
+        types = {ins.insight_type for ins in insights}
+        self.assertIn("loitering", types)
+        self.assertIn("wrong_way", types)
+        self.assertIn("crowding", types)
+        self.assertIn("tailgating", types)
+        self.assertIn("proximity_grouping", types)
+        # Should be sorted chronologically by start_time
+        start_times = [ins.start_time for ins in insights]
+        self.assertEqual(start_times, sorted(start_times))
 
 
 if __name__ == "__main__":

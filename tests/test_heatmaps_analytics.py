@@ -551,3 +551,43 @@ def test_run_heatmaps_analytics_pipeline_and_cli_end_to_end(tmp_path: Path) -> N
     )
     assert rc == 0
     assert (cli_out / "heatmap.png").is_file()
+
+
+def test_compute_zone_occupancy_profiles_and_validation() -> None:
+    from event_intelligence.analytics import (
+        ZoneOccupancyProfile,
+        compute_zone_occupancy_profiles,
+    )
+
+    with pytest.raises(ValueError):
+        ZoneOccupancyProfile(
+            zone_id="",
+            peak_occupancy=1,
+            peak_timestamp_seconds=0.0,
+            active_seconds=1.0,
+            mean_active_occupancy=1.0,
+        )
+
+    events = [
+        EventRecord("e1", "dwell_time_event", 1, "lobby", 0.0, 10.0, 10.0),
+        EventRecord("e2", "dwell_time_event", 2, "lobby", 2.0, 6.0, 4.0),
+        EventRecord("e3", "dwell_time_event", 3, "lobby", 3.0, 5.0, 2.0),
+        EventRecord("e4", "zone_entry", 4, "quiet_zone", 1.0, 1.0, 0.0),
+    ]
+    profiles = compute_zone_occupancy_profiles(
+        events,
+        max_zone_occupancy=2,
+    )
+    by_zone = {p.zone_id: p for p in profiles}
+    lobby = by_zone["lobby"]
+    assert lobby.peak_occupancy == 3
+    assert lobby.peak_timestamp_seconds == pytest.approx(3.0)
+    assert lobby.active_seconds == pytest.approx(10.0)
+    # Person-seconds = 10 + 4 + 2 = 16 over 10s -> 1.6 mean
+    assert lobby.mean_active_occupancy == pytest.approx(1.6)
+    # Crowded (>=2) from t=2.0 to t=6.0 -> 4.0s
+    assert lobby.crowded_seconds == pytest.approx(4.0)
+
+    quiet = by_zone["quiet_zone"]
+    assert quiet.peak_occupancy == 0
+    assert quiet.active_seconds == 0.0

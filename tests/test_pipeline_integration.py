@@ -844,6 +844,27 @@ class TestEndToEndPipelineAndCli(unittest.TestCase):
                 search_rows[0]["storyboard_path"].startswith("storyboards/")
             )
 
+    def test_pipeline_config_round_trip_preserves_clip_storyboard_and_insights(
+        self,
+    ) -> None:
+        """Verify save_pipeline_config and load_pipeline_config preserve clip, storyboard, and insight settings."""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            cfg_path = Path(tmpdir) / "pipeline_roundtrip.yaml"
+            orig = PipelineConfig(
+                extract_video_clips=True,
+                clip_pre_roll_seconds=2.5,
+                clip_post_roll_seconds=3.5,
+                render_clip_telemetry=False,
+                extract_storyboards=True,
+            )
+            save_pipeline_config(orig, cfg_path)
+            loaded = load_pipeline_config(cfg_path)
+            self.assertTrue(loaded.extract_video_clips)
+            self.assertAlmostEqual(loaded.clip_pre_roll_seconds, 2.5)
+            self.assertAlmostEqual(loaded.clip_post_roll_seconds, 3.5)
+            self.assertFalse(loaded.render_clip_telemetry)
+            self.assertTrue(loaded.extract_storyboards)
+
     def test_src_package_has_no_sys_path_mutations_or_cv_projects_imports(self) -> None:
         src_pkg = Path(__file__).resolve().parents[1] / "src" / "event_intelligence"
         py_files = sorted(src_pkg.rglob("*.py"))
