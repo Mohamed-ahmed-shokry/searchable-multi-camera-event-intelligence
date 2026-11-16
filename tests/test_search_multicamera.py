@@ -299,6 +299,105 @@ class TestSearchMultiCameraCli(unittest.TestCase):
         self.assertIn("clip=clips/ins_clip_01.mp4", text_out)
         self.assertIn("sb=storyboards/ins_clip_01_sb.jpg", text_out)
 
+    def test_cli_trajectories_bbox_zone_line_stats_and_track_timeline(self) -> None:
+        from event_intelligence.storage import ingest_intelligence_db
+
+        tracks_f = self.tmp / "tracks_full.csv"
+        tracks_f.write_text(
+            "frame_id,track_id,x1,y1,x2,y2,confidence\n"
+            "0,1,10,10,30,50,0.9\n"
+            "10,1,40,50,60,90,0.95\n",
+            encoding="utf-8",
+        )
+        traj_f = self.tmp / "traj_full.csv"
+        traj_f.write_text(
+            "track_id,frame_id,timestamp,x,y\n"
+            "1,0,0.0,20.0,50.0\n"
+            "1,10,1.0,50.0,90.0\n"
+            "2,5,0.5,250.0,300.0\n",
+            encoding="utf-8",
+        )
+        events_f = self.tmp / "events_full.csv"
+        events_f.write_text(
+            "event_id,event_type,track_id,zone_id,start_time,end_time,duration_seconds,snapshot_path,crop_path\n"
+            "ev_f1,dwell_time_event,1,lobby,0.0,1.0,1.0,snap.jpg,crop.jpg\n",
+            encoding="utf-8",
+        )
+        zc_f = self.tmp / "zc_full.csv"
+        zc_f.write_text(
+            "zone_id,entry_count,exit_count,total_dwell_seconds,peak_occupancy\n"
+            "lobby,3,2,9.5,2\n",
+            encoding="utf-8",
+        )
+        lc_f = self.tmp / "lc_full.csv"
+        lc_f.write_text(
+            "line_id,crossings_ab,crossings_ba,total\ngate_a,4,1,5\n",
+            encoding="utf-8",
+        )
+        full_db = self.tmp / "full_search.db"
+        cfg = SearchConfig(
+            source_name="lobby_cam.mp4",
+            camera_id="lobby",
+            tracks_csv=str(tracks_f),
+            trajectories_csv=str(traj_f),
+            events_csv=str(events_f),
+            zone_counts_csv=str(zc_f),
+            line_counts_csv=str(lc_f),
+            detections_csv="",
+            tracking_summary_csv="",
+            trajectory_summary_csv="",
+        )
+        ingest_intelligence_db(full_db, cfg, project_root=self.tmp)
+
+        # 1. --trajectories & --bbox
+        buf_traj = io.StringIO()
+        with redirect_stdout(buf_traj):
+            rc = search_main(["--db", str(full_db), "--bbox", "0,0,100,100", "--json"])
+        self.assertEqual(rc, 0)
+        pts = json.loads(buf_traj.getvalue())
+        self.assertEqual(len(pts), 2)
+        self.assertEqual(pts[0]["track_id"], 1)
+
+        # 2. --zone-stats
+        buf_zs = io.StringIO()
+        with redirect_stdout(buf_zs):
+            rc_zs = search_main(
+                ["--db", str(full_db), "--zone-stats", "--zone", "lobby", "--json"]
+            )
+        self.assertEqual(rc_zs, 0)
+        z_rows = json.loads(buf_zs.getvalue())
+        self.assertEqual(len(z_rows), 1)
+        self.assertEqual(z_rows[0]["peak_occupancy"], 2)
+
+        # 3. --line-stats
+        buf_ls = io.StringIO()
+        with redirect_stdout(buf_ls):
+            rc_ls = search_main(
+                ["--db", str(full_db), "--line-stats", "--line", "gate_a", "--json"]
+            )
+        self.assertEqual(rc_ls, 0)
+        l_rows = json.loads(buf_ls.getvalue())
+        self.assertEqual(len(l_rows), 1)
+        self.assertEqual(l_rows[0]["total"], 5)
+
+        # 4. --track-timeline (JSON & text)
+        buf_tt = io.StringIO()
+        with redirect_stdout(buf_tt):
+            rc_tt = search_main(
+                ["--db", str(full_db), "--track-timeline", "1", "--json"]
+            )
+        self.assertEqual(rc_tt, 0)
+        dossiers = json.loads(buf_tt.getvalue())
+        self.assertEqual(len(dossiers), 1)
+        self.assertEqual(dossiers[0]["track_id"], 1)
+        self.assertAlmostEqual(dossiers[0]["mean_speed_px_s"], 50.0)
+
+        buf_tt_txt = io.StringIO()
+        with redirect_stdout(buf_tt_txt):
+            rc_txt = search_main(["--db", str(full_db), "--track-timeline", "1"])
+        self.assertEqual(rc_txt, 0)
+        self.assertIn("Track Timeline Dossier: track_id=1", buf_tt_txt.getvalue())
+
 
 if __name__ == "__main__":
     unittest.main()
