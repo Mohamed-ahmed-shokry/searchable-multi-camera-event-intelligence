@@ -144,6 +144,9 @@ class PipelineConfig:
     clip_post_roll_seconds: float = 1.0
     render_clip_telemetry: bool = True
     extract_storyboards: bool = False
+    scene_configs_by_camera: Mapping[str, str] = field(default_factory=dict)
+    precomputed_tracks_by_camera: Mapping[str, str] = field(default_factory=dict)
+    precomputed_detections_by_camera: Mapping[str, str] = field(default_factory=dict)
 
     def __post_init__(self) -> None:
         if not self.model_name.strip():
@@ -210,6 +213,11 @@ class PipelineConfig:
             "clip_post_roll_seconds": self.clip_post_roll_seconds,
             "render_clip_telemetry": self.render_clip_telemetry,
             "extract_storyboards": self.extract_storyboards,
+            "scene_configs_by_camera": dict(self.scene_configs_by_camera),
+            "precomputed_tracks_by_camera": dict(self.precomputed_tracks_by_camera),
+            "precomputed_detections_by_camera": dict(
+                self.precomputed_detections_by_camera
+            ),
             "insight_config": (
                 self.insight_config.to_dict() if self.insight_config else None
             ),
@@ -428,6 +436,21 @@ def load_pipeline_config(path: Path | str | None = None) -> PipelineConfig:
         extract_storyboards=bool(
             raw.get("extract_storyboards", defaults.extract_storyboards)
         ),
+        scene_configs_by_camera={
+            str(k): str(v)
+            for k, v in (raw.get("scene_configs_by_camera") or {}).items()
+            if v is not None
+        },
+        precomputed_tracks_by_camera={
+            str(k): str(v)
+            for k, v in (raw.get("precomputed_tracks_by_camera") or {}).items()
+            if v is not None
+        },
+        precomputed_detections_by_camera={
+            str(k): str(v)
+            for k, v in (raw.get("precomputed_detections_by_camera") or {}).items()
+            if v is not None
+        },
     )
 
 
