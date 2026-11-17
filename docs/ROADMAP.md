@@ -2131,13 +2131,13 @@ uv run --locked python -m event_intelligence.search --help
 
 ### Micro-Task Breakdown
 
-- [x] 1. `docs(roadmap): define Phase 11g temporal analytics, polygon search, and incident bundling scope`
-- [ ] 2. `feat(insights): add zone_occupancy_profiles section to generate_intelligence_report_markdown`
-- [ ] 3. `test(insights): add unit tests for zone_occupancy_profiles rendering in intelligence_report.md`
-- [ ] 4. `fix(pipeline): pass enriched evidence events and real track detections into insight generation`
-- [ ] 5. `types(pipeline): add per-camera config mappings to PipelineConfig and YAML loader`
-- [ ] 6. `feat(pipeline): wire per-camera config mappings and occupancy profiles in single and multi-camera runs`
-- [ ] 7. `test(pipeline): add unit tests for insight evidence linkage and per-camera YAML config propagation`
+- [x] 1. `docs(roadmap): define Phase 11g temporal analytics, polygon search, and incident bundling scope` (`40d0110`)
+- [x] 2. `feat(insights): add zone_occupancy_profiles section to generate_intelligence_report_markdown` (`63814c1`)
+- [x] 3. `test(insights): add unit tests for zone_occupancy_profiles rendering in intelligence_report.md` (`d6bd4e2`)
+- [x] 4. `fix(pipeline): pass enriched evidence events and real track detections into insight generation` (`ff58943`)
+- [x] 5. `types(pipeline): add per-camera config mappings to PipelineConfig and YAML loader` (`c2528a6`)
+- [x] 6. `feat(pipeline): wire per-camera config mappings and occupancy profiles in single and multi-camera runs` (`9c3e205`)
+- [x] 7. `test(pipeline): add unit tests for insight evidence linkage and per-camera YAML config propagation` (`182af9f`)
 - [ ] 8. `types(analytics): add TemporalActivityBucket dataclass to generate_heatmaps_analytics`
 - [ ] 9. `feat(analytics): implement compute_temporal_activity_buckets and wire into analytics_summary.json`
 - [ ] 10. `feat(analytics): export TemporalActivityBucket and compute_temporal_activity_buckets in analytics package`
