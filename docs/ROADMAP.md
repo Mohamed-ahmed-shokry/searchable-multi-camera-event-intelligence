@@ -2065,4 +2065,96 @@ uv run --locked python -m event_intelligence.search --help
 | `uv run --locked python -m event_intelligence.pipeline --video data/fallback_clips/people-detection.mp4 --config configs/pipeline.yaml --run-id phase11f_verify --max-frames 30 --no-video --clips --storyboards --json` | ✅ exit 0 | verified end-to-end single-command pipeline execution with `--clips` and `--storyboards` |
 | `uv run --locked python -m event_intelligence.search --db outputs/runs/phase11f_verify/intelligence.db --track-timeline 1 --json` | ✅ exit 0 | verified unified track dossier query with spatial bounds, speed stats, events, insights, and clips |
 
+---
+
+## Phase: 11g — Multi-Camera YAML Configs, Temporal Activity Histograms, Polygon Spatial Search & Incident Case Export (2026-11-17)
+
+### Objective
+
+Deliver the next cohesive behavioral analytics, spatial search, and forensics export phase across `src/event_intelligence/`:
+1. **Multi-Camera YAML Configs & Evidence Linkage Fixes (`src/event_intelligence/pipeline.py`, `src/event_intelligence/insights/report.py`):**
+   - Link post-evidence `raw_events` (`snapshot_path` and `crop_path`) into `generate_all_insights` in `run_pipeline`, and select the best observed `TrackDetection` bounding box across `details["involved_track_ids"]` or `track_id_b` when extracting video clips and storyboards for multi-person insights (`crowding`, `proximity_grouping`, `tailgating`).
+   - Support per-camera YAML configuration overrides (`cameras_config`, `scene_configs_by_camera`, `precomputed_tracks_by_camera`, `precomputed_detections_by_camera`) in `PipelineConfig`, `load_pipeline_config`, `save_pipeline_config`, `run_multi_camera_pipeline`, and `pipeline.main()`.
+   - Enhance `generate_intelligence_report_markdown` with a **Zone Occupancy & Crowding Profile** section (`zone_occupancy_profiles`) and pass `zone_counts`, `line_counts`, and `zone_occupancy_profiles` in both `run_pipeline` and `run_multi_camera_pipeline`.
+2. **Temporal Activity Histograms (`src/event_intelligence/analytics/`, `src/event_intelligence/storage/`, `src/event_intelligence/search.py`):**
+   - Add `TemporalActivityBucket` and `compute_temporal_activity_buckets` to `event_intelligence.analytics` and include `temporal_activity_buckets` in `analytics_summary.json`.
+   - Implement `query_temporal_activity` in `event_intelligence.storage` and expose `--activity-buckets <seconds>` in `python -m event_intelligence.search`.
+3. **Arbitrary Polygon Spatial Search (`src/event_intelligence/storage/`, `src/event_intelligence/search.py`):**
+   - Extend `query_trajectories` with arbitrary polygon filtering (`polygon: Sequence[tuple[float, float]] | None = None`) using a bounding-box SQL pre-filter followed by exact Shapely `Polygon.covers(Point(x, y))` verification.
+   - Add `--polygon "x1,y1;x2,y2;x3,y3..."` to `python -m event_intelligence.search`.
+4. **Auditable Incident Case Bundle Exporter (`src/event_intelligence/storage/`, `src/event_intelligence/search.py`):**
+   - Add `IncidentBundleManifest` and `export_incident_bundle` in `event_intelligence.storage` to package any `event_id` or `insight_id` (plus associated track timelines, trajectory CSV, copied visual evidence snapshots/crops/clips/storyboards, `manifest.json`, and `incident_report.md`) into a self-contained portable directory.
+   - Expose `--export-incident <id>` and `--bundle-dir <dir>` in `python -m event_intelligence.search`.
+
+### Scope
+
+1. **Evidence Linkage & Multi-Camera Config Propagation (`src/event_intelligence/pipeline.py`, `src/event_intelligence/insights/report.py`):**
+   - Pass enriched events with `snapshot_path` and `crop_path` into `generate_all_insights`.
+   - Use actual tracked bounding boxes from `frame_tracks` (including secondary/involved tracks) when extracting insight video clips and storyboards.
+   - Add `scene_configs_by_camera`, `precomputed_tracks_by_camera`, and `precomputed_detections_by_camera` to `PipelineConfig` and YAML serialization.
+   - Render `zone_occupancy_profiles` table in `intelligence_report.md`.
+2. **Temporal Activity Histogram Engine (`src/event_intelligence/analytics/generate_heatmaps_analytics.py`, `src/event_intelligence/storage/search_events.py`):**
+   - Define `TemporalActivityBucket` and `compute_temporal_activity_buckets`.
+   - Implement `query_temporal_activity(db_path, bucket_seconds=..., camera_id=..., min_time=..., max_time=...)`.
+3. **Polygon Spatial Search (`src/event_intelligence/storage/search_events.py`, `src/event_intelligence/search.py`):**
+   - Add `polygon` parameter to `query_trajectories` and `--polygon` CLI flag to `event_intelligence.search`.
+4. **Incident Case Bundle Exporter (`src/event_intelligence/storage/search_events.py`, `src/event_intelligence/search.py`):**
+   - Define `IncidentBundleManifest` and `export_incident_bundle`.
+   - Wire `--export-incident` and `--bundle-dir` into `event_intelligence.search`.
+
+### Acceptance Criteria
+
+| # | Criterion | Status | Evidence |
+|---|-----------|--------|----------|
+| 1 | `run_pipeline` links post-evidence `snapshot_path` and `crop_path` into generated insights and uses actual `frame_tracks` bounding boxes (including multi-person involved tracks) for insight clips/storyboards | ⏳ | Pending |
+| 2 | `PipelineConfig`, `load_pipeline_config`, `run_multi_camera_pipeline`, and `pipeline.main()` support per-camera YAML configuration (`scene_configs_by_camera`, `precomputed_tracks_by_camera`, `precomputed_detections_by_camera`) | ⏳ | Pending |
+| 3 | `generate_intelligence_report_markdown` renders `zone_occupancy_profiles` and multi-camera `zone_counts`/`line_counts` | ⏳ | Pending |
+| 4 | `compute_temporal_activity_buckets` and `query_temporal_activity` (`--activity-buckets`) compute time-windowed track, event, and insight histograms | ⏳ | Pending |
+| 5 | `query_trajectories` and `event_intelligence.search` support arbitrary polygon spatial filtering (`--polygon "x1,y1;x2,y2;x3,y3..."`) | ⏳ | Pending |
+| 6 | `export_incident_bundle` and `event_intelligence.search --export-incident <id> --bundle-dir <dir>` export a self-contained incident case directory (`manifest.json`, `incident_report.md`, `trajectories.csv`, and copied media files) | ⏳ | Pending |
+| 7 | All local CI-parity checks (`uv sync --locked`, `ruff check .`, `ruff format --check .`, `pytest -v`) and remote GitHub Actions CI workflow runs pass 100% | ⏳ | Pending |
+
+### Validation & CI Plan
+
+```bash
+uv sync --locked
+uv run --locked ruff check .
+uv run --locked ruff format --check .
+uv run --locked pytest -v
+uv run --locked python -m event_intelligence.pipeline --help
+uv run --locked python -m event_intelligence.search --help
+```
+
+### Exclusions
+
+- Track C Productization (Phase 12): FastAPI web server, React web UI, live RTSP streaming, user auth, and deep appearance Re-ID feature extractors.
+
+### Micro-Task Breakdown
+
+- [x] 1. `docs(roadmap): define Phase 11g temporal analytics, polygon search, and incident bundling scope`
+- [ ] 2. `feat(insights): add zone_occupancy_profiles section to generate_intelligence_report_markdown`
+- [ ] 3. `test(insights): add unit tests for zone_occupancy_profiles rendering in intelligence_report.md`
+- [ ] 4. `fix(pipeline): pass enriched evidence events and real track detections into insight generation`
+- [ ] 5. `types(pipeline): add per-camera config mappings to PipelineConfig and YAML loader`
+- [ ] 6. `feat(pipeline): wire per-camera config mappings and occupancy profiles in single and multi-camera runs`
+- [ ] 7. `test(pipeline): add unit tests for insight evidence linkage and per-camera YAML config propagation`
+- [ ] 8. `types(analytics): add TemporalActivityBucket dataclass to generate_heatmaps_analytics`
+- [ ] 9. `feat(analytics): implement compute_temporal_activity_buckets and wire into analytics_summary.json`
+- [ ] 10. `feat(analytics): export TemporalActivityBucket and compute_temporal_activity_buckets in analytics package`
+- [ ] 11. `test(analytics): add unit tests for TemporalActivityBucket and compute_temporal_activity_buckets`
+- [ ] 12. `feat(storage): implement query_temporal_activity for SQLite temporal histogram queries`
+- [ ] 13. `test(storage): add unit tests for query_temporal_activity`
+- [ ] 14. `feat(storage): add arbitrary polygon spatial filter to query_trajectories`
+- [ ] 15. `test(storage): add unit tests for query_trajectories polygon spatial filtering`
+- [ ] 16. `types(storage): add IncidentBundleManifest dataclass to search_events`
+- [ ] 17. `feat(storage): implement export_incident_bundle for self-contained forensics packaging`
+- [ ] 18. `test(storage): add unit tests for export_incident_bundle on event and insight IDs`
+- [ ] 19. `feat(storage): export new analytics, polygon, and incident bundle symbols in storage and search modules`
+- [ ] 20. `feat(search): add --polygon, --activity-buckets, --export-incident, and --bundle-dir CLI flags`
+- [ ] 21. `feat(search): wire polygon search, activity buckets, and incident bundle export into search CLI main`
+- [ ] 22. `test(search): add CLI integration tests for --polygon, --activity-buckets, and --export-incident`
+- [ ] 23. `docs(readme): document temporal activity histograms, polygon search, and incident bundle export`
+- [ ] 24. `docs(roadmap): complete Phase 11g criteria, decision log, and CI log`
+
+
 
