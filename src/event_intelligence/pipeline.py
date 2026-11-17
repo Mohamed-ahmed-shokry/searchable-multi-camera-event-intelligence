@@ -75,6 +75,8 @@ from event_intelligence.storage import (
     query_camera_summary,
     query_events,
     query_insights,
+    query_line_counts,
+    query_zone_counts,
 )
 from event_intelligence.tracking import (
     FrameTracks,
@@ -979,6 +981,7 @@ def run_pipeline(
         },
         zone_counts=zone_counts,
         line_counts=line_counts,
+        zone_occupancy_profiles=occupancy_profiles,
     )
     write_intelligence_report(report_md, run_dir / "intelligence_report.md")
 
@@ -1076,18 +1079,32 @@ def run_multi_camera_pipeline(
         cam_scene_cfg = (
             scene_configs_by_camera.get(cam_id)
             if scene_configs_by_camera and cam_id in scene_configs_by_camera
-            else cfg.scene_config_path
+            else (
+                cfg.scene_configs_by_camera.get(cam_id)
+                if cfg.scene_configs_by_camera and cam_id in cfg.scene_configs_by_camera
+                else cfg.scene_config_path
+            )
         )
         cam_tracks = (
             precomputed_tracks_by_camera.get(cam_id)
             if precomputed_tracks_by_camera and cam_id in precomputed_tracks_by_camera
-            else cfg.precomputed_tracks_csv
+            else (
+                cfg.precomputed_tracks_by_camera.get(cam_id)
+                if cfg.precomputed_tracks_by_camera
+                and cam_id in cfg.precomputed_tracks_by_camera
+                else cfg.precomputed_tracks_csv
+            )
         )
         cam_dets = (
             precomputed_detections_by_camera.get(cam_id)
             if precomputed_detections_by_camera
             and cam_id in precomputed_detections_by_camera
-            else cfg.precomputed_detections_csv
+            else (
+                cfg.precomputed_detections_by_camera.get(cam_id)
+                if cfg.precomputed_detections_by_camera
+                and cam_id in cfg.precomputed_detections_by_camera
+                else cfg.precomputed_detections_csv
+            )
         )
         cam_pipeline_cfg = PipelineConfig(
             model_name=cfg.model_name,
@@ -1236,6 +1253,8 @@ def run_multi_camera_pipeline(
             "elapsed_seconds": time.perf_counter() - t0,
         },
         camera_summaries=query_camera_summary(master_db),
+        zone_counts=query_zone_counts(master_db, limit=500),
+        line_counts=query_line_counts(master_db, limit=500),
     )
     write_intelligence_report(
         master_report_md, master_run_dir / "intelligence_report.md"
@@ -1426,6 +1445,9 @@ def main(argv: list[str] | None = None) -> int:
         clip_post_roll_seconds=base_cfg.clip_post_roll_seconds,
         render_clip_telemetry=base_cfg.render_clip_telemetry,
         extract_storyboards=True if args.storyboards else base_cfg.extract_storyboards,
+        scene_configs_by_camera=base_cfg.scene_configs_by_camera,
+        precomputed_tracks_by_camera=base_cfg.precomputed_tracks_by_camera,
+        precomputed_detections_by_camera=base_cfg.precomputed_detections_by_camera,
     )
 
     videos: list[Path] = []
