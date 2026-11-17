@@ -235,6 +235,52 @@ class ZoneOccupancyProfile:
         }
 
 
+@dataclass(frozen=True)
+class TemporalActivityBucket:
+    """Time-windowed activity histogram bucket across trajectories, events, and insights."""
+
+    bucket_index: int
+    start_time: float
+    end_time: float
+    active_tracks_count: int
+    trajectory_points_count: int
+    events_count: int
+    dwell_events_count: int = 0
+    line_crossings_count: int = 0
+    insights_count: int = 0
+    camera_id: str = ""
+
+    def __post_init__(self) -> None:
+        if self.bucket_index < 0:
+            raise ValueError("bucket_index must be >= 0")
+        if self.start_time < 0.0 or self.end_time <= self.start_time:
+            raise ValueError("must satisfy 0.0 <= start_time < end_time")
+        for field_name, val in (
+            ("active_tracks_count", self.active_tracks_count),
+            ("trajectory_points_count", self.trajectory_points_count),
+            ("events_count", self.events_count),
+            ("dwell_events_count", self.dwell_events_count),
+            ("line_crossings_count", self.line_crossings_count),
+            ("insights_count", self.insights_count),
+        ):
+            if val < 0:
+                raise ValueError(f"{field_name} must be >= 0")
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "camera_id": self.camera_id,
+            "bucket_index": self.bucket_index,
+            "start_time": round(self.start_time, 4),
+            "end_time": round(self.end_time, 4),
+            "active_tracks_count": self.active_tracks_count,
+            "trajectory_points_count": self.trajectory_points_count,
+            "events_count": self.events_count,
+            "dwell_events_count": self.dwell_events_count,
+            "line_crossings_count": self.line_crossings_count,
+            "insights_count": self.insights_count,
+        }
+
+
 def load_analytics_config(config_path: Path | str) -> AnalyticsConfig:
     """Load an AnalyticsConfig from a YAML file."""
     path = Path(config_path)
