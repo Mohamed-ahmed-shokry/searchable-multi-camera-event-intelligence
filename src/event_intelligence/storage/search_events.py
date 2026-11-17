@@ -18,6 +18,11 @@ from typing import Any
 
 import yaml
 
+from event_intelligence.analytics import (
+    TemporalActivityBucket,
+    compute_temporal_activity_buckets,
+)
+
 _PROJECT_ROOT = Path(__file__).resolve().parents[3]
 
 SCHEMA_DDL = """
@@ -1871,6 +1876,64 @@ def query_track_timeline(
             )
         )
     return dossiers
+
+
+def query_temporal_activity(
+    db_path: Path | str,
+    *,
+    bucket_seconds: float = 5.0,
+    camera_id: str | None = None,
+    min_time: float | None = None,
+    max_time: float | None = None,
+) -> list[TemporalActivityBucket]:
+    """Query intelligence.db and return time-windowed activity histogram buckets."""
+    if bucket_seconds <= 0.0:
+        raise ValueError(f"bucket_seconds must be > 0.0, got {bucket_seconds}")
+    path = Path(db_path)
+    if not path.is_file():
+        raise FileNotFoundError(f"SQLite database not found: {path}")
+
+    pts = query_trajectories(
+        path,
+        camera_id=camera_id,
+        min_time=min_time,
+        max_time=max_time,
+        limit=200000,
+    )
+    evs = query_events(
+        path,
+        camera_id=camera_id,
+        min_time=min_time,
+        max_time=max_time,
+        limit=10000,
+    )
+    ins = query_insights(
+        path,
+        camera_id=camera_id,
+        min_time=min_time,
+        max_time=max_time,
+        limit=10000,
+    )
+    if min_time is not None:
+        evs = [e for e in evs if e.start_time >= float(min_time)]
+        ins = [i for i in ins if i.start_time >= float(min_time)]
+    if max_time is not None:
+        evs = [e for e in evs if e.start_time <= float(max_time)]
+        ins = [i for i in ins if i.start_time <= float(max_time)]
+
+    buckets = compute_temporal_activity_buckets(
+        pts,
+        evs,
+        insights=ins,
+        bucket_seconds=bucket_seconds,
+        total_duration_seconds=max_time,
+        camera_id=(camera_id.strip() if camera_id else ""),
+    )
+    if min_time is not None:
+        buckets = [b for b in buckets if b.end_time > float(min_time)]
+    if max_time is not None:
+        buckets = [b for b in buckets if b.start_time <= float(max_time)]
+    return buckets
 
 
 def lookup_event_evidence(
