@@ -19,6 +19,7 @@ import yaml
 from event_intelligence.analytics import (
     accumulate_trajectory_grid,
     compute_line_counts,
+    compute_temporal_activity_buckets,
     compute_track_duration_stats,
     compute_zone_counts,
     compute_zone_occupancy_profiles,
@@ -773,6 +774,13 @@ def run_pipeline(
     )
     line_counts = compute_line_counts(raw_events, scene_config=scene_cfg)
     duration_stats = compute_track_duration_stats(flat_points)
+    temporal_buckets = compute_temporal_activity_buckets(
+        flat_points,
+        raw_events,
+        bucket_seconds=5.0,
+        total_duration_seconds=(total_frames / fps) if fps > 0 else None,
+        camera_id=src_path.stem,
+    )
 
     zone_counts_csv_path = write_zone_counts_csv(
         zone_counts, run_dir / "zone_counts.csv"
@@ -815,6 +823,7 @@ def run_pipeline(
         ],
         "track_duration_distribution": duration_stats.to_dict(),
         "zone_occupancy_profiles": [p.to_dict() for p in occupancy_profiles],
+        "temporal_activity_buckets": [b.to_dict() for b in temporal_buckets],
         "total_path_length_px": round(sum(s.path_length_px for s in traj_summaries), 2),
     }
     (run_dir / "analytics_summary.json").write_text(
