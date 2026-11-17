@@ -134,8 +134,11 @@ uv run --locked python -m event_intelligence.search --db outputs/runs/people_det
 uv run --locked python -m event_intelligence.search --db outputs/runs/people_detection/intelligence.db --tracks --min-duration 5.0 --json
 uv run --locked python -m event_intelligence.search --db outputs/runs/people_detection/intelligence.db --clips --json
 uv run --locked python -m event_intelligence.search --db outputs/runs/people_detection/intelligence.db --bbox 0,0,500,400 --json
+uv run --locked python -m event_intelligence.search --db outputs/runs/people_detection/intelligence.db --polygon "0,0;500,0;500,400;0,400" --json
+uv run --locked python -m event_intelligence.search --db outputs/runs/people_detection/intelligence.db --activity-buckets 5.0 --json
 uv run --locked python -m event_intelligence.search --db outputs/runs/people_detection/intelligence.db --track-timeline 1 --json
 uv run --locked python -m event_intelligence.search --db outputs/runs/people_detection/intelligence.db --zone-stats --json
+uv run --locked python -m event_intelligence.search --db outputs/runs/people_detection/intelligence.db --export-incident evt_0001 --bundle-dir outputs/bundles/evt_0001 --json
 ```
 
 The two detection extras conflict intentionally; do not use `--all-extras`.
@@ -362,7 +365,7 @@ These can be valuable later, but the first priority is a working CV intelligence
 
 ## Repository Status
 
-The repository has completed **Phase 0 (Foundation)**, **Phase 1 (Video Inspection & Dataset Validation)**, **Phase 2 (Person Detection)**, **Phase 3 (Person Tracking & Early Quantitative MOT17 Checkpoint)**, **Phase 4 (Trajectory Extraction)**, **Phase 5 (Zone and Line Reasoning)**, **Phase 6 (Dwell-Time Events)**, **Phase 7 (Visual Evidence)**, **Phase 8 (Heatmaps and Analytics)**, **Phase 9 (CV Evaluation)**, **Phase 10 (Searchable Outputs)**, and **Phase 11/11c/11d/11e/11f (CV Pipeline Integration, Multi-Camera Intelligence, Automated Behavioral Insights, Dynamic Video Evidence Clips & Storyboards, and Crowd Occupancy, Tailgating, Proximity & Spatial Trajectory Search)**.
+The repository has completed **Phase 0 (Foundation)**, **Phase 1 (Video Inspection & Dataset Validation)**, **Phase 2 (Person Detection)**, **Phase 3 (Person Tracking & Early Quantitative MOT17 Checkpoint)**, **Phase 4 (Trajectory Extraction)**, **Phase 5 (Zone and Line Reasoning)**, **Phase 6 (Dwell-Time Events)**, **Phase 7 (Visual Evidence)**, **Phase 8 (Heatmaps and Analytics)**, **Phase 9 (CV Evaluation)**, **Phase 10 (Searchable Outputs)**, and **Phase 11/11c/11d/11e/11f/11g (CV Pipeline Integration, Multi-Camera Intelligence, Automated Behavioral Insights, Dynamic Video Evidence Clips & Storyboards, Crowd Occupancy/Tailgating/Proximity Search, and Temporal Activity Histograms, Polygon Spatial Search & Incident Case Bundling)**.
 
 Completed capabilities:
 
@@ -382,7 +385,9 @@ Completed capabilities:
   - **Cross-camera search:** `uv run --locked python -m event_intelligence.search --db outputs/runs/<run_id>/intelligence.db --camera-summary`
   - **Behavior insights search:** `uv run --locked python -m event_intelligence.search --db outputs/runs/<run_id>/intelligence.db --insights --insight-type crowding --severity high`
   - **Video evidence clip search:** `uv run --locked python -m event_intelligence.search --db outputs/runs/<run_id>/intelligence.db --clips --json`
-  - **Spatial trajectory & entity dossier search:** `uv run --locked python -m event_intelligence.search --db outputs/runs/<run_id>/intelligence.db --bbox 0,0,500,400 --json` and `--track-timeline 1`
+  - **Spatial trajectory & entity dossier search:** `uv run --locked python -m event_intelligence.search --db outputs/runs/<run_id>/intelligence.db --bbox 0,0,500,400 --json`, `--polygon "0,0;500,0;250,400"`, and `--track-timeline 1`
+  - **Temporal activity histograms:** `uv run --locked python -m event_intelligence.search --db outputs/runs/<run_id>/intelligence.db --activity-buckets 5.0 --json`
+  - **Incident case bundle export:** `uv run --locked python -m event_intelligence.search --db outputs/runs/<run_id>/intelligence.db --export-incident <event_or_insight_id> --bundle-dir outputs/bundles/<id>`
   - **Zone & line activity stats search:** `uv run --locked python -m event_intelligence.search --db outputs/runs/<run_id>/intelligence.db --zone-stats --line-stats`
   - **Camera filtering:** `uv run --locked python -m event_intelligence.search --db outputs/runs/<run_id>/intelligence.db --camera entrance --tracks --json`
   - **Evaluation benchmark CLI:** `uv run --locked python -m event_intelligence.evaluation --help`
