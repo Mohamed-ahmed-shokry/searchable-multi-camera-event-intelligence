@@ -19,6 +19,7 @@ def generate_intelligence_report_markdown(
     camera_summaries: Sequence[Any] | None = None,
     zone_counts: Sequence[Any] | None = None,
     line_counts: Sequence[Any] | None = None,
+    zone_occupancy_profiles: Sequence[Any] | None = None,
 ) -> str:
     """Generate a GitHub Flavored Markdown executive intelligence report."""
     src = dict(source_info or {})
@@ -159,6 +160,27 @@ def generate_intelligence_report_markdown(
             dwell = getattr(z, "total_dwell_seconds", 0.0)
             peak = getattr(z, "peak_occupancy", 0)
             lines.append(f"| `{zid}` | {ent} | {ex} | {dwell:.1f} | {peak} |")
+        lines.append("")
+
+    if zone_occupancy_profiles:
+        lines.extend(
+            [
+                "## Zone Occupancy & Crowding Profile",
+                "",
+                "| Zone ID | Peak Occupancy | Peak Timestamp (s) | Active Time (s) | Mean Active Occupancy | Crowded Time (s) |",
+                "|---|---|---|---|---|---|",
+            ]
+        )
+        for p in zone_occupancy_profiles:
+            zid = getattr(p, "zone_id", "")
+            peak = getattr(p, "peak_occupancy", 0)
+            peak_ts = getattr(p, "peak_timestamp_seconds", 0.0)
+            active_s = getattr(p, "active_seconds", 0.0)
+            mean_occ = getattr(p, "mean_active_occupancy", 0.0)
+            crowded_s = getattr(p, "crowded_seconds", 0.0)
+            lines.append(
+                f"| `{zid}` | {peak} | {peak_ts:.1f} | {active_s:.1f} | {mean_occ:.2f} | {crowded_s:.1f} |"
+            )
         lines.append("")
 
     if line_counts:
