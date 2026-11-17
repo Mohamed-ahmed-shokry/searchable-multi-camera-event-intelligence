@@ -536,6 +536,46 @@ class TrackTimelineDossier:
 
 
 @dataclass(frozen=True, slots=True)
+class IncidentBundleManifest:
+    """Manifest summarizing a self-contained exported incident case bundle."""
+
+    incident_id: str
+    record_kind: str
+    camera_id: str
+    bundle_dir: str
+    manifest_path: str
+    report_path: str
+    trajectories_csv_path: str
+    start_time: float
+    end_time: float
+    duration_seconds: float
+    involved_track_ids: list[int] = field(default_factory=list)
+    copied_media: dict[str, str] = field(default_factory=dict)
+    missing_media: list[str] = field(default_factory=list)
+    related_events_count: int = 0
+    related_insights_count: int = 0
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "incident_id": self.incident_id,
+            "record_kind": self.record_kind,
+            "camera_id": self.camera_id,
+            "bundle_dir": self.bundle_dir,
+            "manifest_path": self.manifest_path,
+            "report_path": self.report_path,
+            "trajectories_csv_path": self.trajectories_csv_path,
+            "start_time": round(self.start_time, 4),
+            "end_time": round(self.end_time, 4),
+            "duration_seconds": round(self.duration_seconds, 4),
+            "involved_track_ids": list(self.involved_track_ids),
+            "copied_media": dict(self.copied_media),
+            "missing_media": list(self.missing_media),
+            "related_events_count": self.related_events_count,
+            "related_insights_count": self.related_insights_count,
+        }
+
+
+@dataclass(frozen=True, slots=True)
 class DatabaseSummary:
     """Row counts across all tables in intelligence.db."""
 
