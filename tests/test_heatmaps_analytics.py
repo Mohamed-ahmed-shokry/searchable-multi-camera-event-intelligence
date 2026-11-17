@@ -591,3 +591,78 @@ def test_compute_zone_occupancy_profiles_and_validation() -> None:
     quiet = by_zone["quiet_zone"]
     assert quiet.peak_occupancy == 0
     assert quiet.active_seconds == 0.0
+
+
+def test_compute_temporal_activity_buckets_and_validation() -> None:
+    from event_intelligence.analytics import (
+        TemporalActivityBucket,
+        compute_temporal_activity_buckets,
+    )
+    from event_intelligence.insights import InsightRecord
+
+    with pytest.raises(ValueError):
+        TemporalActivityBucket(
+            bucket_index=-1,
+            start_time=0.0,
+            end_time=5.0,
+            active_tracks_count=0,
+            trajectory_points_count=0,
+            events_count=0,
+        )
+    with pytest.raises(ValueError):
+        compute_temporal_activity_buckets([], bucket_seconds=0.0)
+
+    assert compute_temporal_activity_buckets([]) == []
+
+    pts = [
+        TrajectoryPoint(track_id=1, frame_id=0, timestamp=1.0, x=10.0, y=10.0),
+        TrajectoryPoint(track_id=2, frame_id=1, timestamp=2.0, x=20.0, y=20.0),
+        TrajectoryPoint(track_id=1, frame_id=2, timestamp=6.5, x=30.0, y=30.0),
+    ]
+    events = [
+        EventRecord("e1", "dwell_time_event", 1, "lobby", 1.5, 3.0, 1.5),
+        EventRecord("e2", "line_crossing", 2, "gate:A->B", 6.0, 6.0, 0.0),
+    ]
+    insights = [
+        InsightRecord(
+            insight_id="ins_0001",
+            camera_id="cam_a",
+            insight_type="loitering",
+            severity="medium",
+            track_id=1,
+            zone_id="lobby",
+            start_time=6.2,
+            end_time=8.0,
+            duration=1.8,
+            description="Loitering",
+        )
+    ]
+
+    buckets = compute_temporal_activity_buckets(
+        pts,
+        events,
+        insights=insights,
+        bucket_seconds=5.0,
+        total_duration_seconds=10.0,
+        camera_id="cam_a",
+    )
+    assert len(buckets) == 2
+    assert buckets[0].start_time == 0.0
+    assert buckets[0].end_time == 5.0
+    assert buckets[0].active_tracks_count == 2
+    assert buckets[0].trajectory_points_count == 2
+    assert buckets[0].events_count == 1
+    assert buckets[0].dwell_events_count == 1
+    assert buckets[0].line_crossings_count == 0
+    assert buckets[0].insights_count == 0
+    assert buckets[0].camera_id == "cam_a"
+
+    assert buckets[1].start_time == 5.0
+    assert buckets[1].end_time == 10.0
+    assert buckets[1].active_tracks_count == 1
+    assert buckets[1].trajectory_points_count == 1
+    assert buckets[1].events_count == 1
+    assert buckets[1].dwell_events_count == 0
+    assert buckets[1].line_crossings_count == 1
+    assert buckets[1].insights_count == 1
+    assert buckets[1].to_dict()["insights_count"] == 1
