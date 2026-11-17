@@ -46,6 +46,8 @@ from event_intelligence.evidence import (
     VALID_BEST_FRAME_STRATEGIES,
     extract_event_storyboard,
     extract_event_video_clip,
+    index_track_detections,
+    read_evidence_events_csv,
     run_visual_evidence,
 )
 from event_intelligence.insights import (
@@ -821,9 +823,14 @@ def run_pipeline(
             writer.release()
 
     # Phase 11d: Generate behavioral insights & anomaly intelligence
+    enriched_events = (
+        read_evidence_events_csv(run_dir / "events.csv")
+        if (run_dir / "events.csv").is_file()
+        else raw_events
+    )
     ins_cfg = cfg.insight_config if cfg.insight_config is not None else InsightConfig()
     insights = generate_all_insights(
-        events=raw_events,
+        events=enriched_events,
         trajectories=trajectories,
         config=ins_cfg,
         traces=traces,
@@ -831,30 +838,46 @@ def run_pipeline(
     )
 
     if (cfg.extract_video_clips or cfg.extract_storyboards) and insights:
+        real_dets_by_track = index_track_detections(frame_tracks)
         enriched_insights = []
         for ins in insights:
-            ins_track_id = ins.track_id if ins.track_id is not None else -1
-            ins_track_dets = (
-                {
-                    pt.frame_id: TrackDetection(
+            candidate_tids: list[int] = []
+            if ins.track_id is not None:
+                candidate_tids.append(int(ins.track_id))
+            details_map = ins.details if isinstance(ins.details, Mapping) else {}
+            for extra_key in (
+                "track_id_b",
+                "leader_track_id",
+                "follower_track_id",
+            ):
+                if details_map.get(extra_key) is not None:
+                    tid_val = int(details_map[extra_key])
+                    if tid_val not in candidate_tids:
+                        candidate_tids.append(tid_val)
+            for inv_tid in details_map.get("involved_track_ids") or ():
+                tid_val = int(inv_tid)
+                if tid_val not in candidate_tids:
+                    candidate_tids.append(tid_val)
+
+            ins_track_id = candidate_tids[0] if candidate_tids else -1
+            ins_track_dets: dict[int, TrackDetection] = {}
+            ins_traj_pts: dict[int, tuple[float, float]] = {}
+
+            for c_tid in reversed(candidate_tids):
+                for pt in trajectories.get(c_tid, []):
+                    ins_traj_pts[pt.frame_id] = (pt.x, pt.y)
+                    ins_track_dets[pt.frame_id] = TrackDetection(
                         frame_id=pt.frame_id,
-                        track_id=ins_track_id,
+                        track_id=c_tid,
                         x1=pt.x - 15.0,
                         y1=pt.y - 30.0,
                         x2=pt.x + 15.0,
                         y2=pt.y,
                         confidence=0.9,
                     )
-                    for pt in trajectories.get(ins_track_id, [])
-                }
-                if ins_track_id in trajectories
-                else {}
-            )
-            ins_traj_pts = (
-                {pt.frame_id: (pt.x, pt.y) for pt in trajectories.get(ins_track_id, [])}
-                if ins_track_id in trajectories
-                else {}
-            )
+                for fid, real_det in real_dets_by_track.get(c_tid, {}).items():
+                    ins_track_dets[fid] = real_det
+
             ins_ev = EventRecord(
                 event_id=ins.insight_id,
                 event_type="dwell_time_event",
