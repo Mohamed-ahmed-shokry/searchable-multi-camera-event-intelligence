@@ -554,6 +554,79 @@ class TestMultiCameraStorage(unittest.TestCase):
             with self.assertRaises(KeyError):
                 query_track_timeline(db_path, 999)
 
+    def test_query_temporal_activity_buckets_from_sqlite(self) -> None:
+        from event_intelligence.storage.search_events import query_temporal_activity
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            tmp = Path(tmpdir)
+            db_path = tmp / "intelligence.db"
+            traj_csv = tmp / "trajectories.csv"
+            traj_csv.write_text(
+                "track_id,frame_id,timestamp,x,y\n"
+                "1,0,1.0,20.0,20.0\n"
+                "2,1,2.5,30.0,30.0\n"
+                "1,2,7.0,40.0,40.0\n",
+                encoding="utf-8",
+            )
+            events_csv = tmp / "events.csv"
+            events_csv.write_text(
+                "event_id,event_type,track_id,zone_id,start_time,end_time,duration_seconds,snapshot_path,crop_path\n"
+                "evt_b1,dwell_time_event,1,lobby,1.0,3.0,2.0,snap.jpg,crop.jpg\n"
+                "evt_b2,line_crossing,1,gate:A->B,7.5,7.5,0.0,snap.jpg,crop.jpg\n",
+                encoding="utf-8",
+            )
+            cfg = SearchConfig(
+                source_name="cam_act.mp4",
+                camera_id="cam_act",
+                trajectories_csv=str(traj_csv),
+                events_csv=str(events_csv),
+                tracks_csv="",
+                detections_csv="",
+                tracking_summary_csv="",
+                trajectory_summary_csv="",
+                zone_counts_csv="",
+                line_counts_csv="",
+            )
+            ingest_intelligence_db(db_path, cfg, project_root=tmp)
+            insert_insights(
+                db_path,
+                [
+                    {
+                        "insight_id": "ins_act1",
+                        "camera_id": "cam_act",
+                        "insight_type": "loitering",
+                        "severity": "medium",
+                        "track_id": 1,
+                        "zone_id": "lobby",
+                        "start_time": 6.5,
+                        "end_time": 8.0,
+                        "duration": 1.5,
+                        "description": "Loitering",
+                    }
+                ],
+            )
+
+            buckets = query_temporal_activity(
+                db_path, bucket_seconds=5.0, camera_id="cam_act"
+            )
+            self.assertEqual(len(buckets), 2)
+            self.assertEqual(buckets[0].active_tracks_count, 2)
+            self.assertEqual(buckets[0].dwell_events_count, 1)
+            self.assertEqual(buckets[0].insights_count, 0)
+            self.assertEqual(buckets[1].active_tracks_count, 1)
+            self.assertEqual(buckets[1].line_crossings_count, 1)
+            self.assertEqual(buckets[1].insights_count, 1)
+
+            windowed = query_temporal_activity(
+                db_path,
+                bucket_seconds=5.0,
+                camera_id="cam_act",
+                min_time=5.0,
+                max_time=10.0,
+            )
+            self.assertEqual(len(windowed), 1)
+            self.assertEqual(windowed[0].start_time, 5.0)
+
 
 if __name__ == "__main__":
     unittest.main()
