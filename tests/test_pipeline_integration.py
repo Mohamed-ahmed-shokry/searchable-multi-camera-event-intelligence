@@ -865,6 +865,103 @@ class TestEndToEndPipelineAndCli(unittest.TestCase):
             self.assertFalse(loaded.render_clip_telemetry)
             self.assertTrue(loaded.extract_storyboards)
 
+    def test_pipeline_insight_evidence_linkage_and_per_camera_yaml_configs(
+        self,
+    ) -> None:
+        """Verify run_pipeline links snapshot_path/crop_path into insights and YAML per-camera configs propagate."""
+        from event_intelligence.insights import InsightConfig
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            root = Path(tmpdir)
+            vid_path = make_video(root, name="cam_link.avi", count=10)
+            tracks_csv = root / "tracks.csv"
+            write_tracks_csv(
+                tracks_csv,
+                [
+                    FrameTracks(
+                        i,
+                        [
+                            TrackDetection(i, 1, 10.0, 10.0, 28.0, 40.0, 0.92),
+                            TrackDetection(i, 2, 14.0, 10.0, 32.0, 40.0, 0.91),
+                        ],
+                    )
+                    for i in range(10)
+                ],
+            )
+            scene_yaml = root / "scene.yaml"
+            scene_yaml.write_text(
+                "zones:\n"
+                "  - id: vault\n"
+                "    polygon: [[0, 0], [60, 0], [60, 45], [0, 45]]\n"
+                "lines: []\n",
+                encoding="utf-8",
+            )
+            cfg = PipelineConfig(
+                precomputed_tracks_csv=str(tracks_csv),
+                scene_config_path=str(scene_yaml),
+                min_dwell_seconds=0.1,
+                smoothing_window=1,
+                save_annotated_video=False,
+                extract_video_clips=True,
+                extract_storyboards=True,
+                scene_configs_by_camera={"entrance": str(scene_yaml)},
+                precomputed_tracks_by_camera={"entrance": str(tracks_csv)},
+                precomputed_detections_by_camera={"entrance": "dets.csv"},
+                insight_config=InsightConfig(
+                    min_loitering_seconds=0.1,
+                    restricted_zones=("vault",),
+                    max_zone_occupancy=2,
+                    min_crowding_seconds=0.1,
+                    proximity_distance_px=30.0,
+                    min_proximity_seconds=0.1,
+                ),
+            )
+            cfg_yaml = save_pipeline_config(cfg, root / "cfg.yaml")
+            reloaded = load_pipeline_config(cfg_yaml)
+            self.assertEqual(
+                dict(reloaded.scene_configs_by_camera),
+                {"entrance": str(scene_yaml)},
+            )
+            self.assertEqual(
+                dict(reloaded.precomputed_tracks_by_camera),
+                {"entrance": str(tracks_csv)},
+            )
+            self.assertEqual(
+                dict(reloaded.precomputed_detections_by_camera),
+                {"entrance": "dets.csv"},
+            )
+
+            res = run_pipeline(
+                vid_path,
+                reloaded,
+                output_root=root / "runs",
+                run_id="link_run",
+                project_root=root,
+            )
+            run_dir = Path(res.run_dir)
+            insights_data = json.loads(
+                (run_dir / "insights.json").read_text(encoding="utf-8")
+            )
+            self.assertGreaterEqual(len(insights_data), 2)
+            loitering_items = [
+                i for i in insights_data if i["insight_type"] == "loitering"
+            ]
+            self.assertGreaterEqual(len(loitering_items), 1)
+            self.assertTrue(
+                loitering_items[0]["evidence_snapshot_path"].startswith("snapshots/")
+            )
+            self.assertTrue(
+                loitering_items[0]["evidence_crop_path"].startswith("crops/")
+            )
+            self.assertTrue(loitering_items[0]["video_clip_path"].startswith("clips/"))
+            self.assertTrue(
+                loitering_items[0]["storyboard_path"].startswith("storyboards/")
+            )
+            report_text = (run_dir / "intelligence_report.md").read_text(
+                encoding="utf-8"
+            )
+            self.assertIn("## Zone Occupancy & Crowding Profile", report_text)
+
     def test_src_package_has_no_sys_path_mutations_or_cv_projects_imports(self) -> None:
         src_pkg = Path(__file__).resolve().parents[1] / "src" / "event_intelligence"
         py_files = sorted(src_pkg.rglob("*.py"))
