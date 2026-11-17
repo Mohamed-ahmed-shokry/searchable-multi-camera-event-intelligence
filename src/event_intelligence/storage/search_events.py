@@ -2951,6 +2951,53 @@ def main(argv: list[str] | None = None) -> int:
                 )
         return 0
 
+    if args.export_incident is not None:
+        target_bundle = (
+            args.bundle_dir
+            if args.bundle_dir is not None
+            else (db_path.resolve().parent / "incident_bundles" / args.export_incident)
+        )
+        manifest = export_incident_bundle(
+            db_path,
+            args.export_incident,
+            target_bundle,
+            camera_id=args.camera_id,
+            evidence_root=args.evidence_root,
+        )
+        if args.json:
+            print(json.dumps(manifest.to_dict(), indent=2))
+        else:
+            print(
+                f"Exported {manifest.record_kind} incident bundle '{manifest.incident_id}' "
+                f"-> {manifest.bundle_dir} (tracks={manifest.involved_track_ids}, "
+                f"media={len(manifest.copied_media)} copied, {len(manifest.missing_media)} missing)"
+            )
+        return 0
+
+    if args.activity_buckets is not None:
+        buckets = query_temporal_activity(
+            db_path,
+            bucket_seconds=args.activity_buckets,
+            camera_id=args.camera_id,
+            min_time=args.min_time,
+            max_time=args.max_time,
+        )
+        if args.json:
+            print(json.dumps([b.to_dict() for b in buckets], indent=2))
+        else:
+            print(
+                f"=== Temporal Activity Histogram ({len(buckets)} bucket(s), "
+                f"step={args.activity_buckets:.2f}s) ==="
+            )
+            for b in buckets:
+                print(
+                    f"  [{b.start_time:.1f}s..{b.end_time:.1f}s] "
+                    f"tracks={b.active_tracks_count} pts={b.trajectory_points_count} "
+                    f"events={b.events_count} (dwell={b.dwell_events_count}, "
+                    f"lines={b.line_crossings_count}) insights={b.insights_count}"
+                )
+        return 0
+
     if args.evidence_event_id is not None:
         ev_root = (
             args.evidence_root
@@ -3064,7 +3111,7 @@ def main(argv: list[str] | None = None) -> int:
                 )
         return 0
 
-    if args.trajectories or args.bbox is not None:
+    if args.trajectories or args.bbox is not None or args.polygon is not None:
         parsed_bbox: tuple[float, float, float, float] | None = None
         if args.bbox is not None:
             parts = [p.strip() for p in args.bbox.split(",") if p.strip()]
@@ -3078,6 +3125,21 @@ def main(argv: list[str] | None = None) -> int:
                 float(parts[2]),
                 float(parts[3]),
             )
+        parsed_polygon: list[tuple[float, float]] | None = None
+        if args.polygon is not None:
+            raw_verts = [v.strip() for v in args.polygon.split(";") if v.strip()]
+            if len(raw_verts) < 3:
+                raise ValueError(
+                    f"--polygon requires at least 3 semicolon-separated 'x,y' vertices, got {args.polygon!r}"
+                )
+            parsed_polygon = []
+            for vert in raw_verts:
+                xy = [c.strip() for c in vert.split(",") if c.strip()]
+                if len(xy) != 2:
+                    raise ValueError(
+                        f"Each --polygon vertex must be 'x,y', got {vert!r}"
+                    )
+                parsed_polygon.append((float(xy[0]), float(xy[1])))
         traj_pts = query_trajectories(
             db_path,
             camera_id=args.camera_id,
@@ -3085,6 +3147,7 @@ def main(argv: list[str] | None = None) -> int:
             min_time=args.min_time,
             max_time=args.max_time,
             bbox=parsed_bbox,
+            polygon=parsed_polygon,
             limit=args.limit,
         )
         if args.json:
