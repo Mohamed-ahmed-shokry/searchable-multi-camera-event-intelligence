@@ -627,6 +627,55 @@ class TestMultiCameraStorage(unittest.TestCase):
             self.assertEqual(len(windowed), 1)
             self.assertEqual(windowed[0].start_time, 5.0)
 
+    def test_query_trajectories_polygon_spatial_filtering(self) -> None:
+        from event_intelligence.storage.search_events import query_trajectories
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            tmp = Path(tmpdir)
+            db_path = tmp / "intelligence.db"
+            traj_csv = tmp / "trajectories.csv"
+            # Triangle (0,0) - (100,0) - (0,100) has bbox [0,100]x[0,100].
+            # (20,20) is strictly inside; (80,80) is inside bbox but OUTSIDE triangle;
+            # (50,50) lies on hypotenuse (covered).
+            traj_csv.write_text(
+                "track_id,frame_id,timestamp,x,y\n"
+                "1,0,0.0,20.0,20.0\n"
+                "1,1,0.5,80.0,80.0\n"
+                "2,2,1.0,50.0,50.0\n",
+                encoding="utf-8",
+            )
+            cfg = SearchConfig(
+                source_name="cam_poly.mp4",
+                camera_id="cam_poly",
+                trajectories_csv=str(traj_csv),
+                tracks_csv="",
+                detections_csv="",
+                tracking_summary_csv="",
+                trajectory_summary_csv="",
+                events_csv="",
+                zone_counts_csv="",
+                line_counts_csv="",
+            )
+            ingest_intelligence_db(db_path, cfg, project_root=tmp)
+
+            triangle = [(0.0, 0.0), (100.0, 0.0), (0.0, 100.0)]
+            matched = query_trajectories(
+                db_path, camera_id="cam_poly", polygon=triangle
+            )
+            self.assertEqual(len(matched), 2)
+            self.assertEqual(
+                [(p.x, p.y) for p in matched], [(20.0, 20.0), (50.0, 50.0)]
+            )
+
+            limited = query_trajectories(
+                db_path, camera_id="cam_poly", polygon=triangle, limit=1
+            )
+            self.assertEqual(len(limited), 1)
+            self.assertEqual((limited[0].x, limited[0].y), (20.0, 20.0))
+
+            with self.assertRaises(ValueError):
+                query_trajectories(db_path, polygon=[(0.0, 0.0), (10.0, 10.0)])
+
 
 if __name__ == "__main__":
     unittest.main()
