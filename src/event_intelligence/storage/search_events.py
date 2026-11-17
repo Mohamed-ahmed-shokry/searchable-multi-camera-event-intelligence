@@ -17,6 +17,7 @@ from pathlib import Path
 from typing import Any
 
 import yaml
+from shapely.geometry import Point, Polygon
 
 from event_intelligence.analytics import (
     TemporalActivityBucket,
@@ -1618,14 +1619,26 @@ def query_trajectories(
     min_time: float | None = None,
     max_time: float | None = None,
     bbox: tuple[float, float, float, float] | None = None,
+    polygon: Sequence[tuple[float, float]] | None = None,
     limit: int = 500,
 ) -> list[TrajectorySearchResult]:
-    """Query trajectory points from intelligence.db by camera, track, time window, or spatial bbox."""
+    """Query trajectory points from intelligence.db by camera, track, time window, bbox, or arbitrary polygon."""
     if limit <= 0:
         raise ValueError("limit must be positive")
     path = Path(db_path)
     if not path.is_file():
         raise FileNotFoundError(f"SQLite database not found: {path}")
+
+    poly_geom: Polygon | None = None
+    if polygon is not None:
+        if len(polygon) < 3:
+            raise ValueError(
+                f"polygon requires at least 3 vertices, got {len(polygon)}"
+            )
+        coords = [(float(pt[0]), float(pt[1])) for pt in polygon]
+        poly_geom = Polygon(coords)
+        if not poly_geom.is_valid or poly_geom.area <= 0.0:
+            raise ValueError("polygon forms an invalid or zero-area geometry")
 
     clauses: list[str] = []
     params: list[Any] = []
@@ -1662,27 +1675,45 @@ def query_trajectories(
         clauses.append("x >= ? AND x <= ? AND y >= ? AND y <= ?")
         params.extend([x1, x2, y1, y2])
 
+    if poly_geom is not None:
+        px1, py1, px2, py2 = poly_geom.bounds
+        clauses.append("x >= ? AND x <= ? AND y >= ? AND y <= ?")
+        params.extend([px1, px2, py1, py2])
+
     where_sql = f"WHERE {' AND '.join(clauses)}" if clauses else ""
-    sql = (
-        "SELECT camera_id, track_id, frame_id, timestamp, x, y "
-        f"FROM trajectories {where_sql} "
-        "ORDER BY camera_id ASC, track_id ASC, frame_id ASC LIMIT ?"
-    )
-    params.append(int(limit))
+    if poly_geom is None:
+        sql = (
+            "SELECT camera_id, track_id, frame_id, timestamp, x, y "
+            f"FROM trajectories {where_sql} "
+            "ORDER BY camera_id ASC, track_id ASC, frame_id ASC LIMIT ?"
+        )
+        params.append(int(limit))
+    else:
+        sql = (
+            "SELECT camera_id, track_id, frame_id, timestamp, x, y "
+            f"FROM trajectories {where_sql} "
+            "ORDER BY camera_id ASC, track_id ASC, frame_id ASC"
+        )
 
     results: list[TrajectorySearchResult] = []
     with closing(sqlite3.connect(path)) as conn:
         for row in conn.execute(sql, params):
+            x_val = float(row[4])
+            y_val = float(row[5])
+            if poly_geom is not None and not poly_geom.covers(Point(x_val, y_val)):
+                continue
             results.append(
                 TrajectorySearchResult(
                     camera_id=str(row[0] or ""),
                     track_id=int(row[1]),
                     frame_id=int(row[2]),
                     timestamp=float(row[3]),
-                    x=float(row[4]),
-                    y=float(row[5]),
+                    x=x_val,
+                    y=y_val,
                 )
             )
+            if len(results) >= int(limit):
+                break
     return results
 
 
