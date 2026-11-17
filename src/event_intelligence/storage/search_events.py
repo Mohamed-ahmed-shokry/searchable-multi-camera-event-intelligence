@@ -2831,6 +2831,30 @@ def build_parser() -> argparse.ArgumentParser:
         help="Spatial bounding box filter 'x1,y1,x2,y2' for trajectory queries.",
     )
     parser.add_argument(
+        "--polygon",
+        type=str,
+        default=None,
+        help="Arbitrary polygon spatial filter 'x1,y1;x2,y2;x3,y3;...' for trajectory queries.",
+    )
+    parser.add_argument(
+        "--activity-buckets",
+        type=float,
+        default=None,
+        help="Bucket size in seconds to compute a temporal activity histogram.",
+    )
+    parser.add_argument(
+        "--export-incident",
+        type=str,
+        default=None,
+        help="Export a self-contained forensic case bundle for an event_id or insight_id.",
+    )
+    parser.add_argument(
+        "--bundle-dir",
+        type=Path,
+        default=None,
+        help="Target directory for --export-incident (defaults to <db_dir>/incident_bundles/<id>).",
+    )
+    parser.add_argument(
         "--zone-stats",
         action="store_true",
         help="Query aggregated zone activity metrics (zone_counts table).",
