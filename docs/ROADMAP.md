@@ -2177,5 +2177,93 @@ uv run --locked python -m event_intelligence.search --help
 | `uv run --locked python -m event_intelligence.search --db outputs/runs/phase11g_verify/intelligence.db --polygon "0,0;500,0;500,400;0,400" --limit 5 --json` | ✅ exit 0 | returned 5 exact polygon-covered trajectory points |
 | `uv run --locked python -m event_intelligence.search --db outputs/runs/phase11g_verify/intelligence.db --export-incident evt_0001 --bundle-dir outputs/runs/phase11g_verify/bundle_evt_0001 --json` | ✅ exit 0 | exported `manifest.json`, `incident_report.md`, `trajectories.csv`, and 4 copied media files (`0` missing) |
 
+---
+
+## Phase: 11h — Multi-Run Comparison, Baseline Diffing & Cross-Run Analytics (`event_intelligence.compare`) (2026-11-18)
+
+### Objective
+
+Deliver a self-contained **Multi-Run Comparison & Cross-Run Baseline Analytics** package (`src/event_intelligence/compare/`) and runnable CLI (`python -m event_intelligence.compare`) so CV engineers and surveillance analysts can quantitatively compare any two pipeline runs (`baseline` vs `candidate`), visualize spatial hotspot shifts (`heatmap_diff.png`), trace parameter drift in `run_config.yaml`, and detect anomalous runs across a directory of historical pipeline runs (`outputs/runs/`).
+
+Demonstrable end-to-end outcome:
+- Running `uv run --locked python -m event_intelligence.compare --baseline outputs/runs/<run_a> --candidate outputs/runs/<run_b> --output-dir <out>` generates `comparison_report.json`, `comparison_report.md`, and diverging spatial `heatmap_diff.png`.
+- Running `uv run --locked python -m event_intelligence.compare --runs-root outputs/runs --output-dir <out>` catalogs every run's KPIs, computes baseline mean/std across runs, and flags statistical z-score anomalies in `trends_report.json` and `trends_report.md`.
+
+### Scope
+
+1. **Comparison & Trend Domain Types (`src/event_intelligence/compare/types.py`):**
+   - `RunSnapshot`, `ConfigDiffEntry`, `ZoneMetricDelta`, `LineMetricDelta`, `InsightTypeDelta`, `TemporalBucketDelta`, `SpatialShiftSummary`, `RunComparisonReport`, `RunBaselineAnomaly`, and `MultiRunTrendReport`.
+2. **Comparison & Baseline Analytics Engine (`src/event_intelligence/compare/engine.py`):**
+   - `load_run_snapshot`: loads SQLite KPIs and frozen `run_config.yaml` from a run directory or direct `.db` path.
+   - `diff_run_configs`: recursively flattens and diffs `run_config.yaml` mappings.
+   - `compute_zone_deltas`, `compute_line_deltas`, `compute_insight_deltas`, and `compute_temporal_bucket_deltas`.
+   - `compute_spatial_density_diff`: computes normalized 2D trajectory density difference (`candidate - baseline`), identifies hotspot increase/decrease coordinates, and renders a diverging blue-red `heatmap_diff.png` with legend HUD.
+   - `compare_runs`: orchestrates pairwise run comparison and artifact export.
+   - `discover_runs` & `analyze_multi_run_trends`: scans a runs root directory and computes multi-run baseline statistics + z-score anomaly detection.
+3. **Markdown & JSON Report Writers (`src/event_intelligence/compare/report.py`):**
+   - `generate_comparison_markdown`, `generate_trends_markdown`, `write_comparison_artifacts`, and `write_trends_artifacts`.
+4. **Package Exports & CLI (`src/event_intelligence/compare/__init__.py`, `__main__.py`):**
+   - Expose `python -m event_intelligence.compare` supporting both pairwise diff (`--baseline` / `--candidate`) and multi-run catalog/trends (`--runs-root` / `--runs`), with `--camera`, `--bucket-seconds`, `--z-threshold`, `--output-dir`, `--no-heatmap-diff`, and `--json`.
+5. **Comprehensive Test Suite (`tests/test_compare_runs.py`):**
+   - Unit and integration tests covering all dataclasses, config diffing, zone/line/insight/temporal deltas, spatial density diff image generation, multi-run z-score anomaly detection, Markdown report generation, and CLI execution.
+
+### Acceptance Criteria
+
+| # | Criterion | Status | Evidence |
+|---|-----------|--------|----------|
+| 1 | `load_run_snapshot` and `diff_run_configs` accurately extract run KPIs and flattened `run_config.yaml` diffs from run directories or direct SQLite paths | ⏳ | Pending |
+| 2 | `compute_zone_deltas`, `compute_line_deltas`, `compute_insight_deltas`, and `compute_temporal_bucket_deltas` compute exact signed deltas between runs | ⏳ | Pending |
+| 3 | `compute_spatial_density_diff` quantifies hotspot shifts and renders a valid diverging `heatmap_diff.png` | ⏳ | Pending |
+| 4 | `discover_runs` and `analyze_multi_run_trends` compute cross-run baselines and flag z-score outlier runs | ⏳ | Pending |
+| 5 | `generate_comparison_markdown` and `generate_trends_markdown` write readable executive reports + JSON artifacts | ⏳ | Pending |
+| 6 | `uv run --locked python -m event_intelligence.compare` executes end-to-end on real runs in `outputs/runs/` in both pairwise and multi-run trend modes | ⏳ | Pending |
+| 7 | All local CI-parity checks (`uv sync --locked`, `ruff check .`, `ruff format --check .`, `pytest -v`) and remote GitHub Actions CI workflow runs pass 100% | ⏳ | Pending |
+
+### Validation & CI Plan
+
+```bash
+uv sync --locked
+uv run --locked ruff check .
+uv run --locked ruff format --check .
+uv run --locked pytest -v
+uv run --locked python -m event_intelligence.compare --help
+uv run --locked python -m event_intelligence.compare --baseline outputs/runs/phase11f_verify --candidate outputs/runs/phase11g_verify --output-dir outputs/comparisons/verify_11h --json
+uv run --locked python -m event_intelligence.compare --runs-root outputs/runs --output-dir outputs/comparisons/trends_11h --json
+```
+
+### Exclusions
+
+- Track C Productization (Phase 12): FastAPI HTTP server, React web dashboard, live RTSP streaming, user auth, and deep appearance Re-ID feature extractors.
+
+### Micro-Task Breakdown
+
+- [x] 1. `docs(roadmap): define Phase 11h multi-run comparison and baseline analytics scope`
+- [ ] 2. `types(compare): add RunSnapshot and ConfigDiffEntry dataclasses`
+- [ ] 3. `types(compare): add ZoneMetricDelta, LineMetricDelta, InsightTypeDelta, and TemporalBucketDelta`
+- [ ] 4. `types(compare): add SpatialShiftSummary, RunComparisonReport, RunBaselineAnomaly, and MultiRunTrendReport`
+- [ ] 5. `test(compare): add unit tests for compare domain dataclasses and validation`
+- [ ] 6. `feat(compare): implement load_run_snapshot for run directory and SQLite KPI extraction`
+- [ ] 7. `test(compare): add unit tests for load_run_snapshot`
+- [ ] 8. `feat(compare): implement recursive diff_run_configs for run_config.yaml drift tracking`
+- [ ] 9. `test(compare): add unit tests for diff_run_configs`
+- [ ] 10. `feat(compare): implement compute_zone_deltas and compute_line_deltas`
+- [ ] 11. `test(compare): add unit tests for compute_zone_deltas and compute_line_deltas`
+- [ ] 12. `feat(compare): implement compute_insight_deltas and compute_temporal_bucket_deltas`
+- [ ] 13. `test(compare): add unit tests for compute_insight_deltas and compute_temporal_bucket_deltas`
+- [ ] 14. `feat(compare): implement compute_spatial_density_diff and diverging heatmap_diff.png renderer`
+- [ ] 15. `test(compare): add unit tests for compute_spatial_density_diff and heatmap_diff.png`
+- [ ] 16. `feat(compare): implement discover_runs and analyze_multi_run_trends with z-score anomaly flagging`
+- [ ] 17. `test(compare): add unit tests for discover_runs and analyze_multi_run_trends`
+- [ ] 18. `feat(compare): implement generate_comparison_markdown and write_comparison_artifacts`
+- [ ] 19. `feat(compare): implement generate_trends_markdown and write_trends_artifacts`
+- [ ] 20. `test(compare): add unit tests for Markdown comparison and trends report generators`
+- [ ] 21. `feat(compare): implement compare_runs orchestrator in engine.py`
+- [ ] 22. `feat(compare): add package exports in compare/__init__.py and update package root docstring`
+- [ ] 23. `feat(compare): add CLI parser and main entrypoint in compare/__main__.py`
+- [ ] 24. `test(compare): add end-to-end compare_runs and CLI integration tests`
+- [ ] 25. `docs(readme): document event_intelligence.compare pairwise diff and multi-run trends CLI`
+- [ ] 26. `docs(roadmap): complete Phase 11h criteria, decision log, and CI log`
+
+
 
 
