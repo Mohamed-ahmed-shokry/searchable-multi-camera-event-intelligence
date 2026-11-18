@@ -2,8 +2,14 @@
 
 from __future__ import annotations
 
+import tempfile
 import unittest
+from pathlib import Path
+from typing import Any
 
+import yaml
+
+from event_intelligence.compare.engine import load_run_snapshot
 from event_intelligence.compare.types import (
     ConfigDiffEntry,
     InsightTypeDelta,
@@ -16,6 +22,90 @@ from event_intelligence.compare.types import (
     TemporalBucketDelta,
     ZoneMetricDelta,
 )
+from event_intelligence.storage.search_events import (
+    CameraMetadata,
+    SearchConfig,
+    ingest_intelligence_db,
+    insert_insights,
+)
+
+
+def _create_synthetic_run(
+    run_dir: Path,
+    *,
+    camera_id: str = "cam_main",
+    trajectories_rows: list[tuple[int, int, float, float, float]] | None = None,
+    events_rows: list[tuple[str, str, int, str, float, float, float]] | None = None,
+    zone_counts_rows: list[tuple[str, int, int, float, int]] | None = None,
+    line_counts_rows: list[tuple[str, int, int, int]] | None = None,
+    insights: list[dict[str, Any]] | None = None,
+    run_config: dict[str, Any] | None = None,
+    width: int = 320,
+    height: int = 240,
+) -> Path:
+    """Create a minimal synthetic run directory with intelligence.db and run_config.yaml."""
+    run_dir.mkdir(parents=True, exist_ok=True)
+    traj_csv = run_dir / "trajectories.csv"
+    traj_lines = ["track_id,frame_id,timestamp,x,y"]
+    for tid, fid, ts, x, y in trajectories_rows or []:
+        traj_lines.append(f"{tid},{fid},{ts},{x},{y}")
+    traj_csv.write_text("\n".join(traj_lines) + "\n", encoding="utf-8")
+
+    ev_csv = run_dir / "events.csv"
+    ev_lines = [
+        "event_id,event_type,track_id,zone_id,start_time,end_time,duration_seconds,snapshot_path,crop_path"
+    ]
+    for eid, etype, tid, zid, st, et, dur in events_rows or []:
+        ev_lines.append(f"{eid},{etype},{tid},{zid},{st},{et},{dur},snap.jpg,crop.jpg")
+    ev_csv.write_text("\n".join(ev_lines) + "\n", encoding="utf-8")
+
+    zc_csv = run_dir / "zone_counts.csv"
+    zc_lines = ["zone_id,entry_count,exit_count,total_dwell_seconds,peak_occupancy"]
+    for zid, ent, ex, dw, pk in zone_counts_rows or []:
+        zc_lines.append(f"{zid},{ent},{ex},{dw},{pk}")
+    zc_csv.write_text("\n".join(zc_lines) + "\n", encoding="utf-8")
+
+    lc_csv = run_dir / "line_counts.csv"
+    lc_lines = ["line_id,crossings_ab,crossings_ba,total"]
+    for lid, ab, ba, tot in line_counts_rows or []:
+        lc_lines.append(f"{lid},{ab},{ba},{tot}")
+    lc_csv.write_text("\n".join(lc_lines) + "\n", encoding="utf-8")
+
+    db_path = run_dir / "intelligence.db"
+    cfg = SearchConfig(
+        source_name=f"{camera_id}.mp4",
+        camera_id=camera_id,
+        trajectories_csv=str(traj_csv),
+        events_csv=str(ev_csv),
+        zone_counts_csv=str(zc_csv),
+        line_counts_csv=str(lc_csv),
+        detections_csv="",
+        tracks_csv="",
+        tracking_summary_csv="",
+        trajectory_summary_csv="",
+    )
+    ingest_intelligence_db(
+        db_path,
+        cfg,
+        project_root=run_dir,
+        clear_existing=True,
+        camera_metadata=CameraMetadata(
+            camera_id=camera_id,
+            source_name=f"{camera_id}.mp4",
+            fps=10.0,
+            width=width,
+            height=height,
+            total_frames=100,
+        ),
+    )
+    if insights:
+        insert_insights(db_path, insights)
+    if run_config is not None:
+        (run_dir / "run_config.yaml").write_text(
+            yaml.safe_dump(run_config, sort_keys=False),
+            encoding="utf-8",
+        )
+    return run_dir
 
 
 class TestCompareDomainTypes(unittest.TestCase):
@@ -157,6 +247,65 @@ class TestCompareDomainTypes(unittest.TestCase):
             anomalies=[anomaly],
         )
         self.assertEqual(trends.to_dict()["runs_count"], 2)
+
+
+class TestCompareEngine(unittest.TestCase):
+    """Test run snapshot loading, config diffing, deltas, spatial diff, and multi-run trends."""
+
+    def test_load_run_snapshot_from_directory_and_db_path(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            run_dir = _create_synthetic_run(
+                Path(tmpdir) / "run_alpha",
+                camera_id="entrance",
+                trajectories_rows=[
+                    (1, 0, 0.0, 20.0, 30.0),
+                    (1, 10, 2.0, 60.0, 30.0),
+                    (2, 5, 1.0, 80.0, 80.0),
+                    (2, 15, 4.0, 80.0, 120.0),
+                ],
+                events_rows=[
+                    ("e1", "zone_entry", 1, "lobby", 0.0, 0.0, 0.0),
+                    ("e2", "dwell_time_event", 1, "lobby", 0.0, 2.0, 2.0),
+                    ("e3", "dwell_time_event", 2, "lobby", 1.0, 4.0, 3.0),
+                ],
+                insights=[
+                    {
+                        "insight_id": "ins_1",
+                        "camera_id": "entrance",
+                        "insight_type": "loitering",
+                        "severity": "high",
+                        "track_id": 2,
+                        "zone_id": "lobby",
+                        "start_time": 1.0,
+                        "end_time": 4.0,
+                        "duration": 3.0,
+                        "description": "Loitering",
+                    }
+                ],
+                run_config={
+                    "confidence_threshold": 0.4,
+                    "tracker_config": "bytetrack.yaml",
+                },
+            )
+            snap = load_run_snapshot(run_dir)
+            self.assertEqual(snap.run_id, "run_alpha")
+            self.assertEqual(snap.tracks_count, 2)
+            self.assertEqual(snap.trajectories_count, 4)
+            self.assertEqual(snap.events_count, 3)
+            self.assertEqual(snap.insights_count, 1)
+            self.assertEqual(snap.high_critical_insights_count, 1)
+            self.assertAlmostEqual(snap.total_dwell_seconds, 5.0)
+            self.assertEqual(snap.config_snapshot["confidence_threshold"], 0.4)
+
+            # Direct DB path and camera filter
+            snap_db = load_run_snapshot(
+                run_dir / "intelligence.db", run_id="custom_id", camera_id="entrance"
+            )
+            self.assertEqual(snap_db.run_id, "custom_id")
+            self.assertEqual(snap_db.tracks_count, 2)
+
+            with self.assertRaises(FileNotFoundError):
+                load_run_snapshot(Path(tmpdir) / "missing_run")
 
 
 if __name__ == "__main__":
