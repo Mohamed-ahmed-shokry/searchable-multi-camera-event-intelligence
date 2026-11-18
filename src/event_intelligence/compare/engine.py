@@ -3,13 +3,14 @@
 from __future__ import annotations
 
 import sqlite3
+from collections.abc import Mapping
 from contextlib import closing
 from pathlib import Path
 from typing import Any
 
 import yaml
 
-from event_intelligence.compare.types import RunSnapshot
+from event_intelligence.compare.types import ConfigDiffEntry, RunSnapshot
 
 
 def _resolve_run_and_db_paths(run_or_db_path: Path | str) -> tuple[Path, Path]:
@@ -162,3 +163,38 @@ def load_run_snapshot(
         mean_path_length_px=round(mean_path_len, 2),
         config_snapshot=config_snapshot,
     )
+
+
+def _flatten_mapping(data: Mapping[str, Any], prefix: str = "") -> dict[str, Any]:
+    """Flatten nested YAML dict keys using dot notation for readable config diffs."""
+    out: dict[str, Any] = {}
+    for k, v in data.items():
+        full_key = f"{prefix}.{k}" if prefix else str(k)
+        if isinstance(v, Mapping) and v:
+            out.update(_flatten_mapping(v, prefix=full_key))
+        else:
+            out[full_key] = dict(v) if isinstance(v, Mapping) else v
+    return out
+
+
+def diff_run_configs(
+    baseline_cfg: Mapping[str, Any],
+    candidate_cfg: Mapping[str, Any],
+) -> list[ConfigDiffEntry]:
+    """Return sorted ConfigDiffEntry rows for every parameter differing between two configs."""
+    flat_base = _flatten_mapping(baseline_cfg)
+    flat_cand = _flatten_mapping(candidate_cfg)
+    all_keys = sorted(set(flat_base.keys()) | set(flat_cand.keys()))
+    diffs: list[ConfigDiffEntry] = []
+    for key in all_keys:
+        b_val = flat_base.get(key)
+        c_val = flat_cand.get(key)
+        if b_val != c_val:
+            diffs.append(
+                ConfigDiffEntry(
+                    key=key,
+                    baseline_value=b_val,
+                    candidate_value=c_val,
+                )
+            )
+    return diffs
