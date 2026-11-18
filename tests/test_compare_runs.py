@@ -11,12 +11,14 @@ import cv2
 import yaml
 
 from event_intelligence.compare.engine import (
+    analyze_multi_run_trends,
     compute_insight_deltas,
     compute_line_deltas,
     compute_spatial_density_diff,
     compute_temporal_bucket_deltas,
     compute_zone_deltas,
     diff_run_configs,
+    discover_runs,
     load_run_snapshot,
 )
 from event_intelligence.compare.types import (
@@ -509,6 +511,56 @@ class TestCompareEngine(unittest.TestCase):
             self.assertIsNotNone(loaded_img)
             assert loaded_img is not None
             self.assertEqual(loaded_img.shape, (240, 320, 3))
+
+    def test_discover_runs_and_analyze_multi_run_trends_flags_outlier(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            runs_root = Path(tmpdir) / "runs"
+            runs_root.mkdir()
+            # Non-run folder without intelligence.db should be ignored
+            (runs_root / "not_a_run").mkdir()
+
+            # 3 normal runs with 2 events each, 1 outlier run with 20 events
+            for name in ("run_01", "run_02", "run_03"):
+                _create_synthetic_run(
+                    runs_root / name,
+                    events_rows=[
+                        ("e1", "dwell_time_event", 1, "lobby", 0.0, 2.0, 2.0),
+                        ("e2", "dwell_time_event", 2, "lobby", 2.0, 4.0, 2.0),
+                    ],
+                )
+            _create_synthetic_run(
+                runs_root / "run_04_spike",
+                events_rows=[
+                    (
+                        f"e{i}",
+                        "dwell_time_event",
+                        i,
+                        "lobby",
+                        0.0,
+                        10.0,
+                        10.0,
+                    )
+                    for i in range(1, 21)
+                ],
+            )
+
+            found = discover_runs(runs_root)
+            self.assertEqual(
+                [p.name for p in found],
+                ["run_01", "run_02", "run_03", "run_04_spike"],
+            )
+
+            trends = analyze_multi_run_trends(found, z_score_threshold=1.5)
+            self.assertEqual(len(trends.runs), 4)
+            self.assertIn("events_count", trends.metric_baselines)
+            flagged_ids = {
+                (a.run_id, a.metric_name, a.direction) for a in trends.anomalies
+            }
+            self.assertIn(("run_04_spike", "events_count", "above"), flagged_ids)
+            self.assertIn(("run_04_spike", "total_dwell_seconds", "above"), flagged_ids)
+
+            with self.assertRaises(ValueError):
+                analyze_multi_run_trends(found, z_score_threshold=0.0)
 
 
 if __name__ == "__main__":
