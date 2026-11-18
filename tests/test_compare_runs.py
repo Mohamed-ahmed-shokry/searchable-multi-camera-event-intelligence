@@ -7,11 +7,13 @@ import unittest
 from pathlib import Path
 from typing import Any
 
+import cv2
 import yaml
 
 from event_intelligence.compare.engine import (
     compute_insight_deltas,
     compute_line_deltas,
+    compute_spatial_density_diff,
     compute_temporal_bucket_deltas,
     compute_zone_deltas,
     diff_run_configs,
@@ -461,6 +463,52 @@ class TestCompareEngine(unittest.TestCase):
             self.assertEqual(t_deltas[0].delta_events, 1)
             self.assertEqual(t_deltas[1].delta_active_tracks, 1)
             self.assertEqual(t_deltas[1].delta_insights, 1)
+
+    def test_compute_spatial_density_diff_and_heatmap_image(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            root = Path(tmpdir)
+            # Baseline activity concentrated on left (x~40, y~120)
+            run_a = _create_synthetic_run(
+                root / "run_left",
+                trajectories_rows=[
+                    (1, i, float(i) * 0.2, 40.0, 120.0) for i in range(6)
+                ],
+                width=320,
+                height=240,
+            )
+            # Candidate activity shifted to right (x~260, y~120)
+            run_b = _create_synthetic_run(
+                root / "run_right",
+                trajectories_rows=[
+                    (1, i, float(i) * 0.2, 260.0, 120.0) for i in range(6)
+                ],
+                width=320,
+                height=240,
+            )
+            diff_img = root / "out" / "heatmap_diff.png"
+            shift = compute_spatial_density_diff(
+                run_a,
+                run_b,
+                grid_bin_size_px=16,
+                gaussian_sigma_px=12.0,
+                output_image_path=diff_img,
+            )
+            self.assertEqual(shift.frame_width, 320)
+            self.assertEqual(shift.frame_height, 240)
+            self.assertGreater(shift.max_increase, 0.5)
+            self.assertLess(shift.max_decrease, -0.5)
+            self.assertIsNotNone(shift.hotspot_increase_xy)
+            self.assertIsNotNone(shift.hotspot_decrease_xy)
+            assert shift.hotspot_increase_xy is not None
+            assert shift.hotspot_decrease_xy is not None
+            # Increase hotspot on right side, decrease hotspot on left side
+            self.assertGreater(shift.hotspot_increase_xy[0], 200.0)
+            self.assertLess(shift.hotspot_decrease_xy[0], 100.0)
+            self.assertTrue(diff_img.is_file())
+            loaded_img = cv2.imread(str(diff_img))
+            self.assertIsNotNone(loaded_img)
+            assert loaded_img is not None
+            self.assertEqual(loaded_img.shape, (240, 320, 3))
 
 
 if __name__ == "__main__":
