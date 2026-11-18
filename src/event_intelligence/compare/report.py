@@ -5,7 +5,7 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
-from event_intelligence.compare.types import RunComparisonReport
+from event_intelligence.compare.types import MultiRunTrendReport, RunComparisonReport
 
 
 def _signed_int(val: int) -> str:
@@ -164,5 +164,86 @@ def write_comparison_artifacts(
     )
     md_path.write_text(
         generate_comparison_markdown(report).strip() + "\n", encoding="utf-8"
+    )
+    return json_path, md_path
+
+
+def generate_trends_markdown(report: MultiRunTrendReport) -> str:
+    """Render a GitHub Flavored Markdown multi-run baseline catalog and anomaly report."""
+    lines: list[str] = [
+        f"# Multi-Run Baseline & Trend Analytics ({len(report.runs)} Runs)",
+        "",
+        f"- **Z-Score Anomaly Threshold:** `|z| >= {report.z_score_threshold:.2f}`",
+        f"- **Flagged Anomalies:** **`{len(report.anomalies)}`**",
+    ]
+    if report.camera_filter:
+        lines.append(f"- **Camera Filter:** `{report.camera_filter}`")
+    lines.append("")
+
+    if report.anomalies:
+        lines.extend(
+            [
+                "> [!WARNING]",
+                f"> **{len(report.anomalies)} Cross-Run Baseline Anomalies** detected:",
+                "",
+            ]
+        )
+        for an in report.anomalies:
+            lines.append(
+                f"> - **`{an.run_id}`** `{an.metric_name}` = `{an.value:.2f}` "
+                f"(baseline `{an.baseline_mean:.2f} ± {an.baseline_std:.2f}`, "
+                f"`z={an.z_score:+.2f}`, `{an.direction}`)"
+            )
+        lines.append("")
+
+    lines.extend(
+        [
+            "## Run Catalog",
+            "",
+            "| Run ID | Cameras | Detections | Tracks | Events | Insights | High/Crit | Total Dwell (s) |",
+            "| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: |",
+        ]
+    )
+    for r in report.runs:
+        lines.append(
+            f"| `{r.run_id}` | {r.cameras_count} | {r.detections_count} | {r.tracks_count} | "
+            f"{r.events_count} | {r.insights_count} | {r.high_critical_insights_count} | "
+            f"{r.total_dwell_seconds:.2f} |"
+        )
+    lines.append("")
+
+    if report.metric_baselines:
+        lines.extend(
+            [
+                "## Cross-Run Baseline Statistics",
+                "",
+                "| Metric | Mean | Std | Min | Max |",
+                "| --- | ---: | ---: | ---: | ---: |",
+            ]
+        )
+        for metric_name, stats in report.metric_baselines.items():
+            lines.append(
+                f"| `{metric_name}` | {stats['mean']:.2f} | {stats['std']:.2f} | "
+                f"{stats['min']:.2f} | {stats['max']:.2f} |"
+            )
+        lines.append("")
+
+    return "\n".join(lines)
+
+
+def write_trends_artifacts(
+    report: MultiRunTrendReport,
+    output_dir: Path | str,
+) -> tuple[Path, Path]:
+    """Write trends_report.json and trends_report.md into output_dir."""
+    out = Path(output_dir)
+    out.mkdir(parents=True, exist_ok=True)
+    json_path = out / "trends_report.json"
+    md_path = out / "trends_report.md"
+    json_path.write_text(
+        json.dumps(report.to_dict(), indent=2) + "\n", encoding="utf-8"
+    )
+    md_path.write_text(
+        generate_trends_markdown(report).strip() + "\n", encoding="utf-8"
     )
     return json_path, md_path
