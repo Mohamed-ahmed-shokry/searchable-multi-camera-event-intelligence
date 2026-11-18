@@ -457,10 +457,10 @@ def _render_diverging_diff_image(
     img = np.clip(overlay, 0.0, 255.0).astype(np.uint8)
 
     if hotspot_increase_xy is not None:
-        ix, iy = int(round(hotspot_increase_xy[0])), int(round(hotspot_increase_xy[1]))
+        ix, iy = round(hotspot_increase_xy[0]), round(hotspot_increase_xy[1])
         cv2.circle(img, (ix, iy), 8, (60, 60, 255), 2, cv2.LINE_AA)
     if hotspot_decrease_xy is not None:
-        dx, dy = int(round(hotspot_decrease_xy[0])), int(round(hotspot_decrease_xy[1]))
+        dx, dy = round(hotspot_decrease_xy[0]), round(hotspot_decrease_xy[1])
         cv2.circle(img, (dx, dy), 8, (255, 160, 50), 2, cv2.LINE_AA)
 
     if width >= 180 and height >= 60:
