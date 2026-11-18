@@ -10,7 +10,9 @@ from typing import Any
 import yaml
 
 from event_intelligence.compare.engine import (
+    compute_insight_deltas,
     compute_line_deltas,
+    compute_temporal_bucket_deltas,
     compute_zone_deltas,
     diff_run_configs,
     load_run_snapshot,
@@ -384,6 +386,81 @@ class TestCompareEngine(unittest.TestCase):
             self.assertEqual(l_by_id["door"].delta_ba, -1)
             self.assertEqual(l_by_id["door"].delta_total, 2)
             self.assertEqual(l_by_id["side_gate"].delta_total, 2)
+
+    def test_compute_insight_and_temporal_bucket_deltas(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            root = Path(tmpdir)
+            run_a = _create_synthetic_run(
+                root / "run_a",
+                trajectories_rows=[(1, 0, 1.0, 20.0, 20.0)],
+                events_rows=[("e1", "dwell_time_event", 1, "lobby", 1.0, 3.0, 2.0)],
+                insights=[
+                    {
+                        "insight_id": "ins_a1",
+                        "camera_id": "cam_main",
+                        "insight_type": "loitering",
+                        "severity": "medium",
+                        "track_id": 1,
+                        "zone_id": "lobby",
+                        "start_time": 1.0,
+                        "end_time": 3.0,
+                        "duration": 2.0,
+                        "description": "Loitering A",
+                    }
+                ],
+            )
+            run_b = _create_synthetic_run(
+                root / "run_b",
+                trajectories_rows=[
+                    (1, 0, 1.0, 20.0, 20.0),
+                    (2, 1, 2.0, 30.0, 30.0),
+                    (2, 2, 7.0, 40.0, 40.0),
+                ],
+                events_rows=[
+                    ("e1", "dwell_time_event", 1, "lobby", 1.0, 3.0, 2.0),
+                    ("e2", "dwell_time_event", 2, "lobby", 2.0, 8.0, 6.0),
+                ],
+                insights=[
+                    {
+                        "insight_id": "ins_b1",
+                        "camera_id": "cam_main",
+                        "insight_type": "loitering",
+                        "severity": "high",
+                        "track_id": 2,
+                        "zone_id": "lobby",
+                        "start_time": 2.0,
+                        "end_time": 8.0,
+                        "duration": 6.0,
+                        "description": "Loitering B",
+                    },
+                    {
+                        "insight_id": "ins_b2",
+                        "camera_id": "cam_main",
+                        "insight_type": "crowding",
+                        "severity": "critical",
+                        "track_id": 1,
+                        "zone_id": "lobby",
+                        "start_time": 6.0,
+                        "end_time": 8.0,
+                        "duration": 2.0,
+                        "description": "Crowding B",
+                    },
+                ],
+            )
+
+            ins_deltas = compute_insight_deltas(run_a, run_b)
+            by_type = {d.insight_type: d for d in ins_deltas}
+            self.assertEqual(by_type["loitering"].delta_count, 0)
+            self.assertEqual(by_type["loitering"].delta_high_critical, 1)
+            self.assertEqual(by_type["crowding"].delta_count, 1)
+            self.assertEqual(by_type["crowding"].delta_high_critical, 1)
+
+            t_deltas = compute_temporal_bucket_deltas(run_a, run_b, bucket_seconds=5.0)
+            self.assertEqual(len(t_deltas), 2)
+            self.assertEqual(t_deltas[0].delta_active_tracks, 1)
+            self.assertEqual(t_deltas[0].delta_events, 1)
+            self.assertEqual(t_deltas[1].delta_active_tracks, 1)
+            self.assertEqual(t_deltas[1].delta_insights, 1)
 
 
 if __name__ == "__main__":
