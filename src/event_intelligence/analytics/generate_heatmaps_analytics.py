@@ -235,6 +235,52 @@ class ZoneOccupancyProfile:
         }
 
 
+@dataclass(frozen=True)
+class TemporalActivityBucket:
+    """Time-windowed activity histogram bucket across trajectories, events, and insights."""
+
+    bucket_index: int
+    start_time: float
+    end_time: float
+    active_tracks_count: int
+    trajectory_points_count: int
+    events_count: int
+    dwell_events_count: int = 0
+    line_crossings_count: int = 0
+    insights_count: int = 0
+    camera_id: str = ""
+
+    def __post_init__(self) -> None:
+        if self.bucket_index < 0:
+            raise ValueError("bucket_index must be >= 0")
+        if self.start_time < 0.0 or self.end_time <= self.start_time:
+            raise ValueError("must satisfy 0.0 <= start_time < end_time")
+        for field_name, val in (
+            ("active_tracks_count", self.active_tracks_count),
+            ("trajectory_points_count", self.trajectory_points_count),
+            ("events_count", self.events_count),
+            ("dwell_events_count", self.dwell_events_count),
+            ("line_crossings_count", self.line_crossings_count),
+            ("insights_count", self.insights_count),
+        ):
+            if val < 0:
+                raise ValueError(f"{field_name} must be >= 0")
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "camera_id": self.camera_id,
+            "bucket_index": self.bucket_index,
+            "start_time": round(self.start_time, 4),
+            "end_time": round(self.end_time, 4),
+            "active_tracks_count": self.active_tracks_count,
+            "trajectory_points_count": self.trajectory_points_count,
+            "events_count": self.events_count,
+            "dwell_events_count": self.dwell_events_count,
+            "line_crossings_count": self.line_crossings_count,
+            "insights_count": self.insights_count,
+        }
+
+
 def load_analytics_config(config_path: Path | str) -> AnalyticsConfig:
     """Load an AnalyticsConfig from a YAML file."""
     path = Path(config_path)
@@ -916,6 +962,109 @@ def compute_track_duration_stats(
     )
 
 
+def compute_temporal_activity_buckets(
+    points: Mapping[int, Sequence[TrajectoryPoint]] | Sequence[TrajectoryPoint],
+    events: Sequence[Any] = (),
+    *,
+    insights: Sequence[Any] = (),
+    bucket_seconds: float = 5.0,
+    total_duration_seconds: float | None = None,
+    camera_id: str = "",
+) -> list[TemporalActivityBucket]:
+    """Bin trajectory activity, events, and behavioral insights into fixed-duration time windows."""
+    if bucket_seconds <= 0.0:
+        raise ValueError(f"bucket_seconds must be > 0.0, got {bucket_seconds}")
+    if total_duration_seconds is not None and total_duration_seconds < 0.0:
+        raise ValueError(
+            f"total_duration_seconds must be >= 0.0, got {total_duration_seconds}"
+        )
+
+    flat_points = _flatten_trajectory_points(points)
+
+    max_ts = 0.0
+    for pt in flat_points:
+        max_ts = max(max_ts, float(pt.timestamp))
+    for ev in events:
+        max_ts = max(
+            max_ts,
+            float(getattr(ev, "end_time", getattr(ev, "start_time", 0.0))),
+        )
+    for ins in insights:
+        max_ts = max(
+            max_ts,
+            float(getattr(ins, "end_time", getattr(ins, "start_time", 0.0))),
+        )
+    if total_duration_seconds is not None:
+        max_ts = max(max_ts, float(total_duration_seconds))
+
+    if (
+        not flat_points
+        and not events
+        and not insights
+        and total_duration_seconds is None
+    ):
+        return []
+
+    num_buckets = max(1, math.floor(max_ts / bucket_seconds) + 1)
+    if total_duration_seconds is not None and max_ts > 0.0:
+        exact_div = math.isclose(
+            max_ts / bucket_seconds, round(max_ts / bucket_seconds), abs_tol=1e-9
+        )
+        if (
+            exact_div
+            and not any(float(pt.timestamp) >= max_ts for pt in flat_points)
+            and not any(
+                float(getattr(ev, "start_time", 0.0)) >= max_ts for ev in events
+            )
+        ):
+            num_buckets = max(1, round(max_ts / bucket_seconds))
+
+    tracks_per_bucket: list[set[int]] = [set() for _ in range(num_buckets)]
+    pts_per_bucket: list[int] = [0] * num_buckets
+    events_per_bucket: list[int] = [0] * num_buckets
+    dwell_per_bucket: list[int] = [0] * num_buckets
+    line_per_bucket: list[int] = [0] * num_buckets
+    insights_per_bucket: list[int] = [0] * num_buckets
+
+    def _bucket_idx(ts: float) -> int:
+        idx = int(max(0.0, ts) // bucket_seconds)
+        return min(idx, num_buckets - 1)
+
+    for pt in flat_points:
+        b = _bucket_idx(float(pt.timestamp))
+        tracks_per_bucket[b].add(int(pt.track_id))
+        pts_per_bucket[b] += 1
+
+    for ev in events:
+        b = _bucket_idx(float(getattr(ev, "start_time", 0.0)))
+        events_per_bucket[b] += 1
+        ev_type = str(getattr(ev, "event_type", ""))
+        if ev_type in {"dwell_time_event", "zone_dwell"}:
+            dwell_per_bucket[b] += 1
+        elif ev_type == "line_crossing":
+            line_per_bucket[b] += 1
+
+    for ins in insights:
+        b = _bucket_idx(float(getattr(ins, "start_time", 0.0)))
+        insights_per_bucket[b] += 1
+
+    return [
+        TemporalActivityBucket(
+            bucket_index=idx,
+            start_time=round(idx * bucket_seconds, 4),
+            end_time=round((idx + 1) * bucket_seconds, 4),
+            active_tracks_count=len(tracks_per_bucket[idx]),
+            trajectory_points_count=pts_per_bucket[idx],
+            events_count=events_per_bucket[idx],
+            dwell_events_count=dwell_per_bucket[idx],
+            line_crossings_count=line_per_bucket[idx],
+            insights_count=insights_per_bucket[idx],
+            camera_id=camera_id,
+        )
+        for idx in range(num_buckets)
+    ]
+
+
 def _load_any_events_csv(events_csv_path: Path) -> list[Any]:
     """Load either Phase 6 (7-column) or Phase 7 (9-column) events.csv."""
     if not events_csv_path.is_file():
@@ -1036,6 +1185,12 @@ def run_heatmaps_analytics(
         trajectory_points,
         bucket_edges_seconds=cfg.duration_bucket_edges_seconds,
     )
+    temporal_buckets = compute_temporal_activity_buckets(
+        trajectory_points,
+        events,
+        bucket_seconds=5.0,
+        total_duration_seconds=(frame_count / fps) if fps > 0 else None,
+    )
 
     zone_counts_path = write_zone_counts_csv(
         zone_counts, output_dir / "zone_counts.csv"
@@ -1116,6 +1271,7 @@ def run_heatmaps_analytics(
             for l in line_counts
         ],
         "track_duration_distribution": track_stats.to_dict(),
+        "temporal_activity_buckets": [b.to_dict() for b in temporal_buckets],
         "elapsed_seconds": round(elapsed_s, 4),
     }
 

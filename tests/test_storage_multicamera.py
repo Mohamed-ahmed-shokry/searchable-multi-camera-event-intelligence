@@ -554,6 +554,228 @@ class TestMultiCameraStorage(unittest.TestCase):
             with self.assertRaises(KeyError):
                 query_track_timeline(db_path, 999)
 
+    def test_query_temporal_activity_buckets_from_sqlite(self) -> None:
+        from event_intelligence.storage.search_events import query_temporal_activity
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            tmp = Path(tmpdir)
+            db_path = tmp / "intelligence.db"
+            traj_csv = tmp / "trajectories.csv"
+            traj_csv.write_text(
+                "track_id,frame_id,timestamp,x,y\n"
+                "1,0,1.0,20.0,20.0\n"
+                "2,1,2.5,30.0,30.0\n"
+                "1,2,7.0,40.0,40.0\n",
+                encoding="utf-8",
+            )
+            events_csv = tmp / "events.csv"
+            events_csv.write_text(
+                "event_id,event_type,track_id,zone_id,start_time,end_time,duration_seconds,snapshot_path,crop_path\n"
+                "evt_b1,dwell_time_event,1,lobby,1.0,3.0,2.0,snap.jpg,crop.jpg\n"
+                "evt_b2,line_crossing,1,gate:A->B,7.5,7.5,0.0,snap.jpg,crop.jpg\n",
+                encoding="utf-8",
+            )
+            cfg = SearchConfig(
+                source_name="cam_act.mp4",
+                camera_id="cam_act",
+                trajectories_csv=str(traj_csv),
+                events_csv=str(events_csv),
+                tracks_csv="",
+                detections_csv="",
+                tracking_summary_csv="",
+                trajectory_summary_csv="",
+                zone_counts_csv="",
+                line_counts_csv="",
+            )
+            ingest_intelligence_db(db_path, cfg, project_root=tmp)
+            insert_insights(
+                db_path,
+                [
+                    {
+                        "insight_id": "ins_act1",
+                        "camera_id": "cam_act",
+                        "insight_type": "loitering",
+                        "severity": "medium",
+                        "track_id": 1,
+                        "zone_id": "lobby",
+                        "start_time": 6.5,
+                        "end_time": 8.0,
+                        "duration": 1.5,
+                        "description": "Loitering",
+                    }
+                ],
+            )
+
+            buckets = query_temporal_activity(
+                db_path, bucket_seconds=5.0, camera_id="cam_act"
+            )
+            self.assertEqual(len(buckets), 2)
+            self.assertEqual(buckets[0].active_tracks_count, 2)
+            self.assertEqual(buckets[0].dwell_events_count, 1)
+            self.assertEqual(buckets[0].insights_count, 0)
+            self.assertEqual(buckets[1].active_tracks_count, 1)
+            self.assertEqual(buckets[1].line_crossings_count, 1)
+            self.assertEqual(buckets[1].insights_count, 1)
+
+            windowed = query_temporal_activity(
+                db_path,
+                bucket_seconds=5.0,
+                camera_id="cam_act",
+                min_time=5.0,
+                max_time=10.0,
+            )
+            self.assertEqual(len(windowed), 1)
+            self.assertEqual(windowed[0].start_time, 5.0)
+
+    def test_query_trajectories_polygon_spatial_filtering(self) -> None:
+        from event_intelligence.storage.search_events import query_trajectories
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            tmp = Path(tmpdir)
+            db_path = tmp / "intelligence.db"
+            traj_csv = tmp / "trajectories.csv"
+            # Triangle (0,0) - (100,0) - (0,100) has bbox [0,100]x[0,100].
+            # (20,20) is strictly inside; (80,80) is inside bbox but OUTSIDE triangle;
+            # (50,50) lies on hypotenuse (covered).
+            traj_csv.write_text(
+                "track_id,frame_id,timestamp,x,y\n"
+                "1,0,0.0,20.0,20.0\n"
+                "1,1,0.5,80.0,80.0\n"
+                "2,2,1.0,50.0,50.0\n",
+                encoding="utf-8",
+            )
+            cfg = SearchConfig(
+                source_name="cam_poly.mp4",
+                camera_id="cam_poly",
+                trajectories_csv=str(traj_csv),
+                tracks_csv="",
+                detections_csv="",
+                tracking_summary_csv="",
+                trajectory_summary_csv="",
+                events_csv="",
+                zone_counts_csv="",
+                line_counts_csv="",
+            )
+            ingest_intelligence_db(db_path, cfg, project_root=tmp)
+
+            triangle = [(0.0, 0.0), (100.0, 0.0), (0.0, 100.0)]
+            matched = query_trajectories(
+                db_path, camera_id="cam_poly", polygon=triangle
+            )
+            self.assertEqual(len(matched), 2)
+            self.assertEqual(
+                [(p.x, p.y) for p in matched], [(20.0, 20.0), (50.0, 50.0)]
+            )
+
+            limited = query_trajectories(
+                db_path, camera_id="cam_poly", polygon=triangle, limit=1
+            )
+            self.assertEqual(len(limited), 1)
+            self.assertEqual((limited[0].x, limited[0].y), (20.0, 20.0))
+
+            with self.assertRaises(ValueError):
+                query_trajectories(db_path, polygon=[(0.0, 0.0), (10.0, 10.0)])
+
+    def test_export_incident_bundle_for_event_and_insight(self) -> None:
+        from event_intelligence.storage.search_events import export_incident_bundle
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            tmp = Path(tmpdir)
+            db_path = tmp / "intelligence.db"
+            (tmp / "snapshots").mkdir()
+            (tmp / "crops").mkdir()
+            (tmp / "clips").mkdir()
+            (tmp / "snapshots" / "e1.jpg").write_bytes(b"snap-bytes")
+            (tmp / "crops" / "e1.jpg").write_bytes(b"crop-bytes")
+            (tmp / "clips" / "ins1.mp4").write_bytes(b"clip-bytes")
+
+            tracks_csv = tmp / "tracks.csv"
+            tracks_csv.write_text(
+                "frame_id,track_id,x1,y1,x2,y2,confidence\n"
+                "0,1,10,10,30,40,0.9\n"
+                "5,1,20,10,40,40,0.92\n",
+                encoding="utf-8",
+            )
+            traj_csv = tmp / "trajectories.csv"
+            traj_csv.write_text(
+                "track_id,frame_id,timestamp,x,y\n"
+                "1,0,0.0,20.0,40.0\n"
+                "1,5,1.0,30.0,40.0\n",
+                encoding="utf-8",
+            )
+            events_csv = tmp / "events.csv"
+            events_csv.write_text(
+                "event_id,event_type,track_id,zone_id,start_time,end_time,duration_seconds,snapshot_path,crop_path\n"
+                "evt_b01,dwell_time_event,1,lobby,0.0,1.0,1.0,snapshots/e1.jpg,crops/e1.jpg\n",
+                encoding="utf-8",
+            )
+            cfg = SearchConfig(
+                source_name="cam_bundle.mp4",
+                camera_id="cam_bundle",
+                tracks_csv=str(tracks_csv),
+                trajectories_csv=str(traj_csv),
+                events_csv=str(events_csv),
+                detections_csv="",
+                tracking_summary_csv="",
+                trajectory_summary_csv="",
+                zone_counts_csv="",
+                line_counts_csv="",
+            )
+            ingest_intelligence_db(db_path, cfg, project_root=tmp)
+            insert_insights(
+                db_path,
+                [
+                    {
+                        "insight_id": "ins_b01",
+                        "camera_id": "cam_bundle",
+                        "insight_type": "loitering",
+                        "severity": "high",
+                        "track_id": 1,
+                        "zone_id": "lobby",
+                        "start_time": 0.0,
+                        "end_time": 1.0,
+                        "duration": 1.0,
+                        "description": "Loitering alert",
+                        "evidence_snapshot_path": "snapshots/e1.jpg",
+                        "video_clip_path": "clips/ins1.mp4",
+                        "storyboard_path": "storyboards/missing.jpg",
+                    }
+                ],
+            )
+
+            ev_bundle_dir = tmp / "bundle_event"
+            ev_manifest = export_incident_bundle(
+                db_path, "evt_b01", ev_bundle_dir, evidence_root=tmp
+            )
+            self.assertEqual(ev_manifest.record_kind, "event")
+            self.assertEqual(ev_manifest.involved_track_ids, [1])
+            self.assertIn("snapshot", ev_manifest.copied_media)
+            self.assertIn("crop", ev_manifest.copied_media)
+            self.assertTrue((ev_bundle_dir / "manifest.json").is_file())
+            self.assertTrue((ev_bundle_dir / "incident_report.md").is_file())
+            self.assertTrue((ev_bundle_dir / "trajectories.csv").is_file())
+            self.assertTrue(
+                (ev_bundle_dir / ev_manifest.copied_media["snapshot"]).is_file()
+            )
+
+            ins_bundle_dir = tmp / "bundle_insight"
+            ins_manifest = export_incident_bundle(
+                db_path, "ins_b01", ins_bundle_dir, evidence_root=tmp
+            )
+            self.assertEqual(ins_manifest.record_kind, "insight")
+            self.assertIn("video_clip", ins_manifest.copied_media)
+            self.assertEqual(
+                ins_manifest.missing_media, ["storyboard:storyboards/missing.jpg"]
+            )
+            report_text = (ins_bundle_dir / "incident_report.md").read_text(
+                encoding="utf-8"
+            )
+            self.assertIn("Incident Case Bundle", report_text)
+            self.assertIn("Loitering alert", report_text)
+
+            with self.assertRaises(KeyError):
+                export_incident_bundle(db_path, "nonexistent_id", tmp / "bundle_bad")
+
 
 if __name__ == "__main__":
     unittest.main()

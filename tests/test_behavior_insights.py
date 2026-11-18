@@ -5,6 +5,7 @@ from __future__ import annotations
 import unittest
 from dataclasses import dataclass
 
+from event_intelligence.analytics import ZoneOccupancyProfile
 from event_intelligence.insights import (
     InsightConfig,
     InsightRecord,
@@ -19,6 +20,7 @@ from event_intelligence.insights import (
     detect_tailgating_insights,
     detect_wrong_way_insights,
     generate_all_insights,
+    generate_intelligence_report_markdown,
 )
 
 
@@ -393,6 +395,27 @@ class TestInsightDetectors(unittest.TestCase):
         # Should be sorted chronologically by start_time
         start_times = [ins.start_time for ins in insights]
         self.assertEqual(start_times, sorted(start_times))
+
+    def test_generate_intelligence_report_markdown_renders_occupancy_profiles(
+        self,
+    ) -> None:
+        profiles = [
+            ZoneOccupancyProfile(
+                zone_id="lobby",
+                peak_occupancy=4,
+                peak_timestamp_seconds=12.5,
+                active_seconds=45.0,
+                mean_active_occupancy=2.35,
+                crowded_seconds=8.5,
+            )
+        ]
+        md = generate_intelligence_report_markdown(
+            [],
+            run_id="test_occ_run",
+            zone_occupancy_profiles=profiles,
+        )
+        self.assertIn("## Zone Occupancy & Crowding Profile", md)
+        self.assertIn("| `lobby` | 4 | 12.5 | 45.0 | 2.35 | 8.5 |", md)
 
 
 if __name__ == "__main__":

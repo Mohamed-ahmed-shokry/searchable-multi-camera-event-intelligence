@@ -8,6 +8,7 @@ import argparse
 import csv
 import json
 import math
+import shutil
 import sqlite3
 from collections.abc import Sequence
 from contextlib import closing
@@ -17,6 +18,12 @@ from pathlib import Path
 from typing import Any
 
 import yaml
+from shapely.geometry import Point, Polygon
+
+from event_intelligence.analytics import (
+    TemporalActivityBucket,
+    compute_temporal_activity_buckets,
+)
 
 _PROJECT_ROOT = Path(__file__).resolve().parents[3]
 
@@ -526,6 +533,46 @@ class TrackTimelineDossier:
             "max_speed_px_s": round(self.max_speed_px_s, 2),
             "events": [e.to_dict() for e in self.events],
             "insights": [i.to_dict() for i in self.insights],
+        }
+
+
+@dataclass(frozen=True, slots=True)
+class IncidentBundleManifest:
+    """Manifest summarizing a self-contained exported incident case bundle."""
+
+    incident_id: str
+    record_kind: str
+    camera_id: str
+    bundle_dir: str
+    manifest_path: str
+    report_path: str
+    trajectories_csv_path: str
+    start_time: float
+    end_time: float
+    duration_seconds: float
+    involved_track_ids: list[int] = field(default_factory=list)
+    copied_media: dict[str, str] = field(default_factory=dict)
+    missing_media: list[str] = field(default_factory=list)
+    related_events_count: int = 0
+    related_insights_count: int = 0
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "incident_id": self.incident_id,
+            "record_kind": self.record_kind,
+            "camera_id": self.camera_id,
+            "bundle_dir": self.bundle_dir,
+            "manifest_path": self.manifest_path,
+            "report_path": self.report_path,
+            "trajectories_csv_path": self.trajectories_csv_path,
+            "start_time": round(self.start_time, 4),
+            "end_time": round(self.end_time, 4),
+            "duration_seconds": round(self.duration_seconds, 4),
+            "involved_track_ids": list(self.involved_track_ids),
+            "copied_media": dict(self.copied_media),
+            "missing_media": list(self.missing_media),
+            "related_events_count": self.related_events_count,
+            "related_insights_count": self.related_insights_count,
         }
 
 
@@ -1613,14 +1660,26 @@ def query_trajectories(
     min_time: float | None = None,
     max_time: float | None = None,
     bbox: tuple[float, float, float, float] | None = None,
+    polygon: Sequence[tuple[float, float]] | None = None,
     limit: int = 500,
 ) -> list[TrajectorySearchResult]:
-    """Query trajectory points from intelligence.db by camera, track, time window, or spatial bbox."""
+    """Query trajectory points from intelligence.db by camera, track, time window, bbox, or arbitrary polygon."""
     if limit <= 0:
         raise ValueError("limit must be positive")
     path = Path(db_path)
     if not path.is_file():
         raise FileNotFoundError(f"SQLite database not found: {path}")
+
+    poly_geom: Polygon | None = None
+    if polygon is not None:
+        if len(polygon) < 3:
+            raise ValueError(
+                f"polygon requires at least 3 vertices, got {len(polygon)}"
+            )
+        coords = [(float(pt[0]), float(pt[1])) for pt in polygon]
+        poly_geom = Polygon(coords)
+        if not poly_geom.is_valid or poly_geom.area <= 0.0:
+            raise ValueError("polygon forms an invalid or zero-area geometry")
 
     clauses: list[str] = []
     params: list[Any] = []
@@ -1657,27 +1716,45 @@ def query_trajectories(
         clauses.append("x >= ? AND x <= ? AND y >= ? AND y <= ?")
         params.extend([x1, x2, y1, y2])
 
+    if poly_geom is not None:
+        px1, py1, px2, py2 = poly_geom.bounds
+        clauses.append("x >= ? AND x <= ? AND y >= ? AND y <= ?")
+        params.extend([px1, px2, py1, py2])
+
     where_sql = f"WHERE {' AND '.join(clauses)}" if clauses else ""
-    sql = (
-        "SELECT camera_id, track_id, frame_id, timestamp, x, y "
-        f"FROM trajectories {where_sql} "
-        "ORDER BY camera_id ASC, track_id ASC, frame_id ASC LIMIT ?"
-    )
-    params.append(int(limit))
+    if poly_geom is None:
+        sql = (
+            "SELECT camera_id, track_id, frame_id, timestamp, x, y "
+            f"FROM trajectories {where_sql} "
+            "ORDER BY camera_id ASC, track_id ASC, frame_id ASC LIMIT ?"
+        )
+        params.append(int(limit))
+    else:
+        sql = (
+            "SELECT camera_id, track_id, frame_id, timestamp, x, y "
+            f"FROM trajectories {where_sql} "
+            "ORDER BY camera_id ASC, track_id ASC, frame_id ASC"
+        )
 
     results: list[TrajectorySearchResult] = []
     with closing(sqlite3.connect(path)) as conn:
         for row in conn.execute(sql, params):
+            x_val = float(row[4])
+            y_val = float(row[5])
+            if poly_geom is not None and not poly_geom.covers(Point(x_val, y_val)):
+                continue
             results.append(
                 TrajectorySearchResult(
                     camera_id=str(row[0] or ""),
                     track_id=int(row[1]),
                     frame_id=int(row[2]),
                     timestamp=float(row[3]),
-                    x=float(row[4]),
-                    y=float(row[5]),
+                    x=x_val,
+                    y=y_val,
                 )
             )
+            if len(results) >= int(limit):
+                break
     return results
 
 
@@ -1871,6 +1948,385 @@ def query_track_timeline(
             )
         )
     return dossiers
+
+
+def query_temporal_activity(
+    db_path: Path | str,
+    *,
+    bucket_seconds: float = 5.0,
+    camera_id: str | None = None,
+    min_time: float | None = None,
+    max_time: float | None = None,
+) -> list[TemporalActivityBucket]:
+    """Query intelligence.db and return time-windowed activity histogram buckets."""
+    if bucket_seconds <= 0.0:
+        raise ValueError(f"bucket_seconds must be > 0.0, got {bucket_seconds}")
+    path = Path(db_path)
+    if not path.is_file():
+        raise FileNotFoundError(f"SQLite database not found: {path}")
+
+    pts = query_trajectories(
+        path,
+        camera_id=camera_id,
+        min_time=min_time,
+        max_time=max_time,
+        limit=200000,
+    )
+    evs = query_events(
+        path,
+        camera_id=camera_id,
+        min_time=min_time,
+        max_time=max_time,
+        limit=10000,
+    )
+    ins = query_insights(
+        path,
+        camera_id=camera_id,
+        min_time=min_time,
+        max_time=max_time,
+        limit=10000,
+    )
+    if min_time is not None:
+        evs = [e for e in evs if e.start_time >= float(min_time)]
+        ins = [i for i in ins if i.start_time >= float(min_time)]
+    if max_time is not None:
+        evs = [e for e in evs if e.start_time <= float(max_time)]
+        ins = [i for i in ins if i.start_time <= float(max_time)]
+
+    buckets = compute_temporal_activity_buckets(
+        pts,
+        evs,
+        insights=ins,
+        bucket_seconds=bucket_seconds,
+        total_duration_seconds=max_time,
+        camera_id=(camera_id.strip() if camera_id else ""),
+    )
+    if min_time is not None:
+        buckets = [b for b in buckets if b.end_time > float(min_time)]
+    if max_time is not None:
+        buckets = [b for b in buckets if b.start_time <= float(max_time)]
+    return buckets
+
+
+def _resolve_evidence_file(
+    raw_path: str | None,
+    *,
+    db_path: Path,
+    camera_id: str,
+    evidence_root: Path | None,
+) -> Path | None:
+    """Resolve an evidence media path against evidence_root, db_path parent, or cameras/<camera_id>/."""
+    if not raw_path or not str(raw_path).strip():
+        return None
+    p = Path(str(raw_path).strip())
+    if p.is_absolute():
+        return p
+    candidates: list[Path] = []
+    if evidence_root is not None:
+        candidates.append(evidence_root / p)
+        if camera_id:
+            candidates.append(evidence_root / "cameras" / camera_id / p)
+    db_dir = db_path.resolve().parent
+    candidates.append(db_dir / p)
+    if camera_id:
+        candidates.append(db_dir / "cameras" / camera_id / p)
+    for cand in candidates:
+        if cand.is_file():
+            return cand
+    return candidates[0] if candidates else p
+
+
+def export_incident_bundle(
+    db_path: Path | str,
+    incident_id: str,
+    output_dir: Path | str,
+    *,
+    camera_id: str | None = None,
+    evidence_root: Path | str | None = None,
+) -> IncidentBundleManifest:
+    """Export a self-contained forensic case directory for any event_id or insight_id."""
+    target_id = incident_id.strip()
+    if not target_id:
+        raise ValueError("incident_id must be non-empty")
+    path = Path(db_path)
+    if not path.is_file():
+        raise FileNotFoundError(f"SQLite database not found: {path}")
+
+    ev_root = Path(evidence_root) if evidence_root is not None else None
+    cam_filter = camera_id.strip() if camera_id and camera_id.strip() else None
+
+    record_kind = ""
+    primary_payload: dict[str, Any] = {}
+    rec_cam = ""
+    start_time = 0.0
+    end_time = 0.0
+    duration = 0.0
+    media_specs: dict[str, str | None] = {}
+    track_ids: list[int] = []
+
+    with closing(sqlite3.connect(path)) as conn:
+        if cam_filter:
+            ins_row = conn.execute(
+                "SELECT camera_id, insight_id, insight_type, severity, track_id, zone_id, "
+                "start_time, end_time, duration, description, evidence_snapshot_path, "
+                "evidence_crop_path, video_clip_path, storyboard_path, details_json "
+                "FROM insights WHERE insight_id = ? AND camera_id = ?",
+                (target_id, cam_filter),
+            ).fetchone()
+        else:
+            ins_row = conn.execute(
+                "SELECT camera_id, insight_id, insight_type, severity, track_id, zone_id, "
+                "start_time, end_time, duration, description, evidence_snapshot_path, "
+                "evidence_crop_path, video_clip_path, storyboard_path, details_json "
+                "FROM insights WHERE insight_id = ?",
+                (target_id,),
+            ).fetchone()
+
+        if ins_row is not None:
+            record_kind = "insight"
+            try:
+                details = json.loads(ins_row[14]) if ins_row[14] else {}
+            except (json.JSONDecodeError, TypeError):
+                details = {}
+            ins_obj = InsightSearchResult(
+                camera_id=str(ins_row[0] or ""),
+                insight_id=str(ins_row[1]),
+                insight_type=str(ins_row[2]),
+                severity=str(ins_row[3]),
+                track_id=ins_row[4],
+                zone_id=ins_row[5],
+                start_time=float(ins_row[6]),
+                end_time=float(ins_row[7]),
+                duration=float(ins_row[8]),
+                description=str(ins_row[9]),
+                evidence_snapshot_path=ins_row[10],
+                evidence_crop_path=ins_row[11],
+                video_clip_path=str(ins_row[12] or ""),
+                storyboard_path=str(ins_row[13] or ""),
+                details=details,
+            )
+            primary_payload = ins_obj.to_dict()
+            rec_cam = ins_obj.camera_id
+            start_time = ins_obj.start_time
+            end_time = ins_obj.end_time
+            duration = ins_obj.duration
+            media_specs = {
+                "snapshot": ins_obj.evidence_snapshot_path,
+                "crop": ins_obj.evidence_crop_path,
+                "video_clip": ins_obj.video_clip_path or None,
+                "storyboard": ins_obj.storyboard_path or None,
+            }
+            if ins_obj.track_id is not None:
+                track_ids.append(int(ins_obj.track_id))
+            for key in (
+                "track_id_a",
+                "track_id_b",
+                "leader_track_id",
+                "follower_track_id",
+            ):
+                if details.get(key) is not None and int(details[key]) not in track_ids:
+                    track_ids.append(int(details[key]))
+            for tid in details.get("involved_track_ids") or ():
+                if int(tid) not in track_ids:
+                    track_ids.append(int(tid))
+        else:
+            if cam_filter:
+                ev_row = conn.execute(
+                    "SELECT camera_id, event_id, event_type, track_id, zone_id, start_time, "
+                    "end_time, duration_seconds, snapshot_path, crop_path, video_clip_path, "
+                    "storyboard_path FROM events WHERE event_id = ? AND camera_id = ?",
+                    (target_id, cam_filter),
+                ).fetchone()
+            else:
+                ev_row = conn.execute(
+                    "SELECT camera_id, event_id, event_type, track_id, zone_id, start_time, "
+                    "end_time, duration_seconds, snapshot_path, crop_path, video_clip_path, "
+                    "storyboard_path FROM events WHERE event_id = ?",
+                    (target_id,),
+                ).fetchone()
+            if ev_row is None:
+                raise KeyError(
+                    f"Incident ID {target_id!r} not found in events or insights of {path}"
+                )
+            record_kind = "event"
+            ev_obj = EventSearchResult(
+                camera_id=str(ev_row[0] or ""),
+                event_id=str(ev_row[1]),
+                event_type=str(ev_row[2]),
+                track_id=int(ev_row[3]),
+                zone_id=str(ev_row[4]),
+                start_time=float(ev_row[5]),
+                end_time=float(ev_row[6]),
+                duration_seconds=float(ev_row[7]),
+                snapshot_path=str(ev_row[8] or ""),
+                crop_path=str(ev_row[9] or ""),
+                video_clip_path=str(ev_row[10] or ""),
+                storyboard_path=str(ev_row[11] or ""),
+            )
+            primary_payload = ev_obj.to_dict()
+            rec_cam = ev_obj.camera_id
+            start_time = ev_obj.start_time
+            end_time = ev_obj.end_time
+            duration = ev_obj.duration_seconds
+            media_specs = {
+                "snapshot": ev_obj.snapshot_path or None,
+                "crop": ev_obj.crop_path or None,
+                "video_clip": ev_obj.video_clip_path or None,
+                "storyboard": ev_obj.storyboard_path or None,
+            }
+            track_ids.append(int(ev_obj.track_id))
+
+    bundle_dir = Path(output_dir).resolve()
+    media_dir = bundle_dir / "media"
+    bundle_dir.mkdir(parents=True, exist_ok=True)
+    media_dir.mkdir(parents=True, exist_ok=True)
+
+    copied_media: dict[str, str] = {}
+    missing_media: list[str] = []
+    for media_kind, raw_rel in media_specs.items():
+        if not raw_rel:
+            continue
+        resolved = _resolve_evidence_file(
+            raw_rel, db_path=path, camera_id=rec_cam, evidence_root=ev_root
+        )
+        if resolved is not None and resolved.is_file():
+            dest_name = f"{media_kind}_{resolved.name}"
+            dest_path = media_dir / dest_name
+            shutil.copy2(resolved, dest_path)
+            copied_media[media_kind] = f"media/{dest_name}"
+        else:
+            missing_media.append(f"{media_kind}:{raw_rel}")
+
+    query_cam = rec_cam if rec_cam and "->" not in rec_cam else None
+    dossiers: list[TrackTimelineDossier] = []
+    related_events: list[EventSearchResult] = []
+    related_insights: list[InsightSearchResult] = []
+    traj_rows: list[TrajectorySearchResult] = []
+
+    for tid in track_ids:
+        try:
+            dossiers.extend(query_track_timeline(path, tid, camera_id=query_cam))
+        except KeyError:
+            pass
+        traj_rows.extend(
+            query_trajectories(
+                path,
+                camera_id=query_cam,
+                track_id=tid,
+                min_time=max(0.0, start_time - 2.0),
+                max_time=end_time + 2.0,
+                limit=5000,
+            )
+        )
+
+    seen_ev_ids: set[tuple[str, str]] = set()
+    seen_ins_ids: set[tuple[str, str]] = set()
+    for d in dossiers:
+        for e in d.events:
+            k = (e.camera_id, e.event_id)
+            if k not in seen_ev_ids:
+                seen_ev_ids.add(k)
+                related_events.append(e)
+        for ins_item in d.insights:
+            k = (ins_item.camera_id, ins_item.insight_id)
+            if k not in seen_ins_ids:
+                seen_ins_ids.add(k)
+                related_insights.append(ins_item)
+
+    traj_csv_path = bundle_dir / "trajectories.csv"
+    with traj_csv_path.open("w", encoding="utf-8", newline="") as handle:
+        writer = csv.writer(handle)
+        writer.writerow(["camera_id", "track_id", "frame_id", "timestamp", "x", "y"])
+        for pt in sorted(
+            traj_rows, key=lambda p: (p.camera_id, p.track_id, p.frame_id)
+        ):
+            writer.writerow(
+                [
+                    pt.camera_id,
+                    pt.track_id,
+                    pt.frame_id,
+                    f"{pt.timestamp:.4f}",
+                    f"{pt.x:.2f}",
+                    f"{pt.y:.2f}",
+                ]
+            )
+
+    report_lines = [
+        f"# Incident Case Bundle — `{target_id}`",
+        "",
+        f"- **Kind:** `{record_kind}`",
+        f"- **Camera:** `{rec_cam or 'default'}`",
+        f"- **Time Window:** `{start_time:.2f}s` – `{end_time:.2f}s` (`{duration:.2f}s`)",
+        f"- **Involved Tracks:** `{track_ids}`",
+        f"- **Trajectory Samples Exported:** `{len(traj_rows)}` (`trajectories.csv`)",
+        "",
+        "## Primary Record",
+        "",
+        "```json",
+        json.dumps(primary_payload, indent=2),
+        "```",
+        "",
+        "## Copied Media Evidence",
+        "",
+    ]
+    if copied_media:
+        for mkind, rel_path in copied_media.items():
+            report_lines.append(f"- **{mkind}:** [{rel_path}]({rel_path})")
+    else:
+        report_lines.append("- None copied.")
+    if missing_media:
+        report_lines.append("")
+        report_lines.append("### Missing Source Media")
+        report_lines.append("")
+        for miss in missing_media:
+            report_lines.append(f"- `{miss}`")
+
+    report_lines.extend(
+        [
+            "",
+            f"## Track Timelines ({len(dossiers)})",
+            "",
+        ]
+    )
+    for d in dossiers:
+        report_lines.append(
+            f"- **Track `{d.track_id}` (`{d.camera_id or 'default'}`):** "
+            f"frames `{d.start_frame}..{d.end_frame}` (`{d.duration_seconds:.2f}s`), "
+            f"path `{d.path_length_px:.1f}px`, mean speed `{d.mean_speed_px_s:.1f} px/s`, "
+            f"max speed `{d.max_speed_px_s:.1f} px/s`, `{len(d.events)}` event(s), "
+            f"`{len(d.insights)}` insight(s)"
+        )
+
+    report_path = bundle_dir / "incident_report.md"
+    report_path.write_text("\n".join(report_lines) + "\n", encoding="utf-8")
+
+    manifest_path = bundle_dir / "manifest.json"
+    manifest = IncidentBundleManifest(
+        incident_id=target_id,
+        record_kind=record_kind,
+        camera_id=rec_cam,
+        bundle_dir=str(bundle_dir),
+        manifest_path=str(manifest_path),
+        report_path=str(report_path),
+        trajectories_csv_path=str(traj_csv_path),
+        start_time=start_time,
+        end_time=end_time,
+        duration_seconds=duration,
+        involved_track_ids=track_ids,
+        copied_media=copied_media,
+        missing_media=missing_media,
+        related_events_count=len(related_events),
+        related_insights_count=len(related_insights),
+    )
+    manifest_payload = {
+        **manifest.to_dict(),
+        "primary_record": primary_payload,
+        "track_dossiers": [d.to_dict() for d in dossiers],
+    }
+    manifest_path.write_text(
+        json.dumps(manifest_payload, indent=2) + "\n", encoding="utf-8"
+    )
+    return manifest
 
 
 def lookup_event_evidence(
@@ -2375,6 +2831,30 @@ def build_parser() -> argparse.ArgumentParser:
         help="Spatial bounding box filter 'x1,y1,x2,y2' for trajectory queries.",
     )
     parser.add_argument(
+        "--polygon",
+        type=str,
+        default=None,
+        help="Arbitrary polygon spatial filter 'x1,y1;x2,y2;x3,y3;...' for trajectory queries.",
+    )
+    parser.add_argument(
+        "--activity-buckets",
+        type=float,
+        default=None,
+        help="Bucket size in seconds to compute a temporal activity histogram.",
+    )
+    parser.add_argument(
+        "--export-incident",
+        type=str,
+        default=None,
+        help="Export a self-contained forensic case bundle for an event_id or insight_id.",
+    )
+    parser.add_argument(
+        "--bundle-dir",
+        type=Path,
+        default=None,
+        help="Target directory for --export-incident (defaults to <db_dir>/incident_bundles/<id>).",
+    )
+    parser.add_argument(
         "--zone-stats",
         action="store_true",
         help="Query aggregated zone activity metrics (zone_counts table).",
@@ -2468,6 +2948,53 @@ def main(argv: list[str] | None = None) -> int:
                     f"{s.total_detections} detections, {s.total_tracks} tracks, "
                     f"{s.total_events} events ({s.total_dwell_seconds:.2f}s dwell), "
                     f"{s.zones_active} zones active, {s.lines_active} lines active"
+                )
+        return 0
+
+    if args.export_incident is not None:
+        target_bundle = (
+            args.bundle_dir
+            if args.bundle_dir is not None
+            else (db_path.resolve().parent / "incident_bundles" / args.export_incident)
+        )
+        manifest = export_incident_bundle(
+            db_path,
+            args.export_incident,
+            target_bundle,
+            camera_id=args.camera_id,
+            evidence_root=args.evidence_root,
+        )
+        if args.json:
+            print(json.dumps(manifest.to_dict(), indent=2))
+        else:
+            print(
+                f"Exported {manifest.record_kind} incident bundle '{manifest.incident_id}' "
+                f"-> {manifest.bundle_dir} (tracks={manifest.involved_track_ids}, "
+                f"media={len(manifest.copied_media)} copied, {len(manifest.missing_media)} missing)"
+            )
+        return 0
+
+    if args.activity_buckets is not None:
+        buckets = query_temporal_activity(
+            db_path,
+            bucket_seconds=args.activity_buckets,
+            camera_id=args.camera_id,
+            min_time=args.min_time,
+            max_time=args.max_time,
+        )
+        if args.json:
+            print(json.dumps([b.to_dict() for b in buckets], indent=2))
+        else:
+            print(
+                f"=== Temporal Activity Histogram ({len(buckets)} bucket(s), "
+                f"step={args.activity_buckets:.2f}s) ==="
+            )
+            for b in buckets:
+                print(
+                    f"  [{b.start_time:.1f}s..{b.end_time:.1f}s] "
+                    f"tracks={b.active_tracks_count} pts={b.trajectory_points_count} "
+                    f"events={b.events_count} (dwell={b.dwell_events_count}, "
+                    f"lines={b.line_crossings_count}) insights={b.insights_count}"
                 )
         return 0
 
@@ -2584,7 +3111,7 @@ def main(argv: list[str] | None = None) -> int:
                 )
         return 0
 
-    if args.trajectories or args.bbox is not None:
+    if args.trajectories or args.bbox is not None or args.polygon is not None:
         parsed_bbox: tuple[float, float, float, float] | None = None
         if args.bbox is not None:
             parts = [p.strip() for p in args.bbox.split(",") if p.strip()]
@@ -2598,6 +3125,21 @@ def main(argv: list[str] | None = None) -> int:
                 float(parts[2]),
                 float(parts[3]),
             )
+        parsed_polygon: list[tuple[float, float]] | None = None
+        if args.polygon is not None:
+            raw_verts = [v.strip() for v in args.polygon.split(";") if v.strip()]
+            if len(raw_verts) < 3:
+                raise ValueError(
+                    f"--polygon requires at least 3 semicolon-separated 'x,y' vertices, got {args.polygon!r}"
+                )
+            parsed_polygon = []
+            for vert in raw_verts:
+                xy = [c.strip() for c in vert.split(",") if c.strip()]
+                if len(xy) != 2:
+                    raise ValueError(
+                        f"Each --polygon vertex must be 'x,y', got {vert!r}"
+                    )
+                parsed_polygon.append((float(xy[0]), float(xy[1])))
         traj_pts = query_trajectories(
             db_path,
             camera_id=args.camera_id,
@@ -2605,6 +3147,7 @@ def main(argv: list[str] | None = None) -> int:
             min_time=args.min_time,
             max_time=args.max_time,
             bbox=parsed_bbox,
+            polygon=parsed_polygon,
             limit=args.limit,
         )
         if args.json:

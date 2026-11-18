@@ -398,6 +398,103 @@ class TestSearchMultiCameraCli(unittest.TestCase):
         self.assertEqual(rc_txt, 0)
         self.assertIn("Track Timeline Dossier: track_id=1", buf_tt_txt.getvalue())
 
+    def test_cli_polygon_activity_buckets_and_export_incident(self) -> None:
+        from event_intelligence.storage.search_events import ingest_intelligence_db
+
+        (self.tmp / "snap.jpg").write_bytes(b"jpg-data")
+        (self.tmp / "crop.jpg").write_bytes(b"crop-data")
+        tracks_f = self.tmp / "tracks_11g.csv"
+        tracks_f.write_text(
+            "frame_id,track_id,x1,y1,x2,y2,confidence\n"
+            "0,1,10,10,30,50,0.9\n"
+            "10,1,40,50,60,90,0.95\n",
+            encoding="utf-8",
+        )
+        traj_f = self.tmp / "traj_11g.csv"
+        traj_f.write_text(
+            "track_id,frame_id,timestamp,x,y\n1,0,1.0,20.0,20.0\n1,10,6.5,80.0,80.0\n",
+            encoding="utf-8",
+        )
+        events_f = self.tmp / "events_11g.csv"
+        events_f.write_text(
+            "event_id,event_type,track_id,zone_id,start_time,end_time,duration_seconds,snapshot_path,crop_path\n"
+            "ev_11g,dwell_time_event,1,lobby,1.0,6.5,5.5,snap.jpg,crop.jpg\n",
+            encoding="utf-8",
+        )
+        db_11g = self.tmp / "search_11g.db"
+        cfg = SearchConfig(
+            source_name="cam_11g.mp4",
+            camera_id="cam_11g",
+            tracks_csv=str(tracks_f),
+            trajectories_csv=str(traj_f),
+            events_csv=str(events_f),
+            detections_csv="",
+            tracking_summary_csv="",
+            trajectory_summary_csv="",
+            zone_counts_csv="",
+            line_counts_csv="",
+        )
+        ingest_intelligence_db(db_11g, cfg, project_root=self.tmp)
+
+        # 1. --polygon (triangle covers (20,20) but excludes (80,80))
+        buf_poly = io.StringIO()
+        with redirect_stdout(buf_poly):
+            rc_poly = search_main(
+                [
+                    "--db",
+                    str(db_11g),
+                    "--polygon",
+                    "0,0;100,0;0,100",
+                    "--json",
+                ]
+            )
+        self.assertEqual(rc_poly, 0)
+        poly_rows = json.loads(buf_poly.getvalue())
+        self.assertEqual(len(poly_rows), 1)
+        self.assertEqual((poly_rows[0]["x"], poly_rows[0]["y"]), (20.0, 20.0))
+
+        # 2. --activity-buckets (JSON & text)
+        buf_act = io.StringIO()
+        with redirect_stdout(buf_act):
+            rc_act = search_main(
+                ["--db", str(db_11g), "--activity-buckets", "5.0", "--json"]
+            )
+        self.assertEqual(rc_act, 0)
+        act_rows = json.loads(buf_act.getvalue())
+        self.assertEqual(len(act_rows), 2)
+        self.assertEqual(act_rows[0]["dwell_events_count"], 1)
+
+        buf_act_txt = io.StringIO()
+        with redirect_stdout(buf_act_txt):
+            rc_act_txt = search_main(["--db", str(db_11g), "--activity-buckets", "5.0"])
+        self.assertEqual(rc_act_txt, 0)
+        self.assertIn("Temporal Activity Histogram", buf_act_txt.getvalue())
+
+        # 3. --export-incident & --bundle-dir
+        bundle_out = self.tmp / "exported_case"
+        buf_exp = io.StringIO()
+        with redirect_stdout(buf_exp):
+            rc_exp = search_main(
+                [
+                    "--db",
+                    str(db_11g),
+                    "--export-incident",
+                    "ev_11g",
+                    "--bundle-dir",
+                    str(bundle_out),
+                    "--evidence-root",
+                    str(self.tmp),
+                    "--json",
+                ]
+            )
+        self.assertEqual(rc_exp, 0)
+        manifest = json.loads(buf_exp.getvalue())
+        self.assertEqual(manifest["incident_id"], "ev_11g")
+        self.assertTrue((bundle_out / "manifest.json").is_file())
+        self.assertTrue((bundle_out / "incident_report.md").is_file())
+        self.assertTrue((bundle_out / "trajectories.csv").is_file())
+        self.assertIn("snapshot", manifest["copied_media"])
+
 
 if __name__ == "__main__":
     unittest.main()

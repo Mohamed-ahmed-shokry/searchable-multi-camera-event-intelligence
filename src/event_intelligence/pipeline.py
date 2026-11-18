@@ -19,6 +19,7 @@ import yaml
 from event_intelligence.analytics import (
     accumulate_trajectory_grid,
     compute_line_counts,
+    compute_temporal_activity_buckets,
     compute_track_duration_stats,
     compute_zone_counts,
     compute_zone_occupancy_profiles,
@@ -46,6 +47,8 @@ from event_intelligence.evidence import (
     VALID_BEST_FRAME_STRATEGIES,
     extract_event_storyboard,
     extract_event_video_clip,
+    index_track_detections,
+    read_evidence_events_csv,
     run_visual_evidence,
 )
 from event_intelligence.insights import (
@@ -73,6 +76,8 @@ from event_intelligence.storage import (
     query_camera_summary,
     query_events,
     query_insights,
+    query_line_counts,
+    query_zone_counts,
 )
 from event_intelligence.tracking import (
     FrameTracks,
@@ -142,6 +147,9 @@ class PipelineConfig:
     clip_post_roll_seconds: float = 1.0
     render_clip_telemetry: bool = True
     extract_storyboards: bool = False
+    scene_configs_by_camera: Mapping[str, str] = field(default_factory=dict)
+    precomputed_tracks_by_camera: Mapping[str, str] = field(default_factory=dict)
+    precomputed_detections_by_camera: Mapping[str, str] = field(default_factory=dict)
 
     def __post_init__(self) -> None:
         if not self.model_name.strip():
@@ -208,6 +216,11 @@ class PipelineConfig:
             "clip_post_roll_seconds": self.clip_post_roll_seconds,
             "render_clip_telemetry": self.render_clip_telemetry,
             "extract_storyboards": self.extract_storyboards,
+            "scene_configs_by_camera": dict(self.scene_configs_by_camera),
+            "precomputed_tracks_by_camera": dict(self.precomputed_tracks_by_camera),
+            "precomputed_detections_by_camera": dict(
+                self.precomputed_detections_by_camera
+            ),
             "insight_config": (
                 self.insight_config.to_dict() if self.insight_config else None
             ),
@@ -426,6 +439,21 @@ def load_pipeline_config(path: Path | str | None = None) -> PipelineConfig:
         extract_storyboards=bool(
             raw.get("extract_storyboards", defaults.extract_storyboards)
         ),
+        scene_configs_by_camera={
+            str(k): str(v)
+            for k, v in (raw.get("scene_configs_by_camera") or {}).items()
+            if v is not None
+        },
+        precomputed_tracks_by_camera={
+            str(k): str(v)
+            for k, v in (raw.get("precomputed_tracks_by_camera") or {}).items()
+            if v is not None
+        },
+        precomputed_detections_by_camera={
+            str(k): str(v)
+            for k, v in (raw.get("precomputed_detections_by_camera") or {}).items()
+            if v is not None
+        },
     )
 
 
@@ -746,6 +774,13 @@ def run_pipeline(
     )
     line_counts = compute_line_counts(raw_events, scene_config=scene_cfg)
     duration_stats = compute_track_duration_stats(flat_points)
+    temporal_buckets = compute_temporal_activity_buckets(
+        flat_points,
+        raw_events,
+        bucket_seconds=5.0,
+        total_duration_seconds=(total_frames / fps) if fps > 0 else None,
+        camera_id=src_path.stem,
+    )
 
     zone_counts_csv_path = write_zone_counts_csv(
         zone_counts, run_dir / "zone_counts.csv"
@@ -788,6 +823,7 @@ def run_pipeline(
         ],
         "track_duration_distribution": duration_stats.to_dict(),
         "zone_occupancy_profiles": [p.to_dict() for p in occupancy_profiles],
+        "temporal_activity_buckets": [b.to_dict() for b in temporal_buckets],
         "total_path_length_px": round(sum(s.path_length_px for s in traj_summaries), 2),
     }
     (run_dir / "analytics_summary.json").write_text(
@@ -821,9 +857,14 @@ def run_pipeline(
             writer.release()
 
     # Phase 11d: Generate behavioral insights & anomaly intelligence
+    enriched_events = (
+        read_evidence_events_csv(run_dir / "events.csv")
+        if (run_dir / "events.csv").is_file()
+        else raw_events
+    )
     ins_cfg = cfg.insight_config if cfg.insight_config is not None else InsightConfig()
     insights = generate_all_insights(
-        events=raw_events,
+        events=enriched_events,
         trajectories=trajectories,
         config=ins_cfg,
         traces=traces,
@@ -831,30 +872,46 @@ def run_pipeline(
     )
 
     if (cfg.extract_video_clips or cfg.extract_storyboards) and insights:
+        real_dets_by_track = index_track_detections(frame_tracks)
         enriched_insights = []
         for ins in insights:
-            ins_track_id = ins.track_id if ins.track_id is not None else -1
-            ins_track_dets = (
-                {
-                    pt.frame_id: TrackDetection(
+            candidate_tids: list[int] = []
+            if ins.track_id is not None:
+                candidate_tids.append(int(ins.track_id))
+            details_map = ins.details if isinstance(ins.details, Mapping) else {}
+            for extra_key in (
+                "track_id_b",
+                "leader_track_id",
+                "follower_track_id",
+            ):
+                if details_map.get(extra_key) is not None:
+                    tid_val = int(details_map[extra_key])
+                    if tid_val not in candidate_tids:
+                        candidate_tids.append(tid_val)
+            for inv_tid in details_map.get("involved_track_ids") or ():
+                tid_val = int(inv_tid)
+                if tid_val not in candidate_tids:
+                    candidate_tids.append(tid_val)
+
+            ins_track_id = candidate_tids[0] if candidate_tids else -1
+            ins_track_dets: dict[int, TrackDetection] = {}
+            ins_traj_pts: dict[int, tuple[float, float]] = {}
+
+            for c_tid in reversed(candidate_tids):
+                for pt in trajectories.get(c_tid, []):
+                    ins_traj_pts[pt.frame_id] = (pt.x, pt.y)
+                    ins_track_dets[pt.frame_id] = TrackDetection(
                         frame_id=pt.frame_id,
-                        track_id=ins_track_id,
+                        track_id=c_tid,
                         x1=pt.x - 15.0,
                         y1=pt.y - 30.0,
                         x2=pt.x + 15.0,
                         y2=pt.y,
                         confidence=0.9,
                     )
-                    for pt in trajectories.get(ins_track_id, [])
-                }
-                if ins_track_id in trajectories
-                else {}
-            )
-            ins_traj_pts = (
-                {pt.frame_id: (pt.x, pt.y) for pt in trajectories.get(ins_track_id, [])}
-                if ins_track_id in trajectories
-                else {}
-            )
+                for fid, real_det in real_dets_by_track.get(c_tid, {}).items():
+                    ins_track_dets[fid] = real_det
+
             ins_ev = EventRecord(
                 event_id=ins.insight_id,
                 event_type="dwell_time_event",
@@ -933,6 +990,7 @@ def run_pipeline(
         },
         zone_counts=zone_counts,
         line_counts=line_counts,
+        zone_occupancy_profiles=occupancy_profiles,
     )
     write_intelligence_report(report_md, run_dir / "intelligence_report.md")
 
@@ -1030,18 +1088,32 @@ def run_multi_camera_pipeline(
         cam_scene_cfg = (
             scene_configs_by_camera.get(cam_id)
             if scene_configs_by_camera and cam_id in scene_configs_by_camera
-            else cfg.scene_config_path
+            else (
+                cfg.scene_configs_by_camera.get(cam_id)
+                if cfg.scene_configs_by_camera and cam_id in cfg.scene_configs_by_camera
+                else cfg.scene_config_path
+            )
         )
         cam_tracks = (
             precomputed_tracks_by_camera.get(cam_id)
             if precomputed_tracks_by_camera and cam_id in precomputed_tracks_by_camera
-            else cfg.precomputed_tracks_csv
+            else (
+                cfg.precomputed_tracks_by_camera.get(cam_id)
+                if cfg.precomputed_tracks_by_camera
+                and cam_id in cfg.precomputed_tracks_by_camera
+                else cfg.precomputed_tracks_csv
+            )
         )
         cam_dets = (
             precomputed_detections_by_camera.get(cam_id)
             if precomputed_detections_by_camera
             and cam_id in precomputed_detections_by_camera
-            else cfg.precomputed_detections_csv
+            else (
+                cfg.precomputed_detections_by_camera.get(cam_id)
+                if cfg.precomputed_detections_by_camera
+                and cam_id in cfg.precomputed_detections_by_camera
+                else cfg.precomputed_detections_csv
+            )
         )
         cam_pipeline_cfg = PipelineConfig(
             model_name=cfg.model_name,
@@ -1190,6 +1262,8 @@ def run_multi_camera_pipeline(
             "elapsed_seconds": time.perf_counter() - t0,
         },
         camera_summaries=query_camera_summary(master_db),
+        zone_counts=query_zone_counts(master_db, limit=500),
+        line_counts=query_line_counts(master_db, limit=500),
     )
     write_intelligence_report(
         master_report_md, master_run_dir / "intelligence_report.md"
@@ -1380,6 +1454,9 @@ def main(argv: list[str] | None = None) -> int:
         clip_post_roll_seconds=base_cfg.clip_post_roll_seconds,
         render_clip_telemetry=base_cfg.render_clip_telemetry,
         extract_storyboards=True if args.storyboards else base_cfg.extract_storyboards,
+        scene_configs_by_camera=base_cfg.scene_configs_by_camera,
+        precomputed_tracks_by_camera=base_cfg.precomputed_tracks_by_camera,
+        precomputed_detections_by_camera=base_cfg.precomputed_detections_by_camera,
     )
 
     videos: list[Path] = []
