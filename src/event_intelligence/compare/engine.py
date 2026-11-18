@@ -10,7 +10,16 @@ from typing import Any
 
 import yaml
 
-from event_intelligence.compare.types import ConfigDiffEntry, RunSnapshot
+from event_intelligence.compare.types import (
+    ConfigDiffEntry,
+    LineMetricDelta,
+    RunSnapshot,
+    ZoneMetricDelta,
+)
+from event_intelligence.storage.search_events import (
+    query_line_counts,
+    query_zone_counts,
+)
 
 
 def _resolve_run_and_db_paths(run_or_db_path: Path | str) -> tuple[Path, Path]:
@@ -198,3 +207,87 @@ def diff_run_configs(
                 )
             )
     return diffs
+
+
+def compute_zone_deltas(
+    baseline_db: Path | str,
+    candidate_db: Path | str,
+    *,
+    camera_id: str | None = None,
+) -> list[ZoneMetricDelta]:
+    """Compute signed per-zone entry, exit, dwell, and peak occupancy deltas between two DBs."""
+    _, b_db = _resolve_run_and_db_paths(baseline_db)
+    _, c_db = _resolve_run_and_db_paths(candidate_db)
+
+    b_rows = query_zone_counts(b_db, camera_id=camera_id, limit=1000)
+    c_rows = query_zone_counts(c_db, camera_id=camera_id, limit=1000)
+
+    b_cams = {r.camera_id for r in b_rows}
+    c_cams = {r.camera_id for r in c_rows}
+    align_by_zone_only = (
+        camera_id is None and len(b_cams) == 1 and len(c_cams) == 1 and b_cams != c_cams
+    )
+
+    b_map = {("" if align_by_zone_only else r.camera_id, r.zone_id): r for r in b_rows}
+    c_map = {("" if align_by_zone_only else r.camera_id, r.zone_id): r for r in c_rows}
+
+    deltas: list[ZoneMetricDelta] = []
+    for cam, zid in sorted(set(b_map.keys()) | set(c_map.keys())):
+        br = b_map.get((cam, zid))
+        cr = c_map.get((cam, zid))
+        deltas.append(
+            ZoneMetricDelta(
+                camera_id=cam,
+                zone_id=zid,
+                baseline_entries=br.entry_count if br else 0,
+                candidate_entries=cr.entry_count if cr else 0,
+                baseline_exits=br.exit_count if br else 0,
+                candidate_exits=cr.exit_count if cr else 0,
+                baseline_dwell_seconds=br.total_dwell_seconds if br else 0.0,
+                candidate_dwell_seconds=cr.total_dwell_seconds if cr else 0.0,
+                baseline_peak_occupancy=br.peak_occupancy if br else 0,
+                candidate_peak_occupancy=cr.peak_occupancy if cr else 0,
+            )
+        )
+    return deltas
+
+
+def compute_line_deltas(
+    baseline_db: Path | str,
+    candidate_db: Path | str,
+    *,
+    camera_id: str | None = None,
+) -> list[LineMetricDelta]:
+    """Compute signed per-line directional crossing deltas between two DBs."""
+    _, b_db = _resolve_run_and_db_paths(baseline_db)
+    _, c_db = _resolve_run_and_db_paths(candidate_db)
+
+    b_rows = query_line_counts(b_db, camera_id=camera_id, limit=1000)
+    c_rows = query_line_counts(c_db, camera_id=camera_id, limit=1000)
+
+    b_cams = {r.camera_id for r in b_rows}
+    c_cams = {r.camera_id for r in c_rows}
+    align_by_line_only = (
+        camera_id is None and len(b_cams) == 1 and len(c_cams) == 1 and b_cams != c_cams
+    )
+
+    b_map = {("" if align_by_line_only else r.camera_id, r.line_id): r for r in b_rows}
+    c_map = {("" if align_by_line_only else r.camera_id, r.line_id): r for r in c_rows}
+
+    deltas: list[LineMetricDelta] = []
+    for cam, lid in sorted(set(b_map.keys()) | set(c_map.keys())):
+        br = b_map.get((cam, lid))
+        cr = c_map.get((cam, lid))
+        deltas.append(
+            LineMetricDelta(
+                camera_id=cam,
+                line_id=lid,
+                baseline_ab=br.crossings_ab if br else 0,
+                candidate_ab=cr.crossings_ab if cr else 0,
+                baseline_ba=br.crossings_ba if br else 0,
+                candidate_ba=cr.crossings_ba if cr else 0,
+                baseline_total=br.total if br else 0,
+                candidate_total=cr.total if cr else 0,
+            )
+        )
+    return deltas
