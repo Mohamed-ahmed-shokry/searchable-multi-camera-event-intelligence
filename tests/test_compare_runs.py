@@ -21,6 +21,12 @@ from event_intelligence.compare.engine import (
     discover_runs,
     load_run_snapshot,
 )
+from event_intelligence.compare.report import (
+    generate_comparison_markdown,
+    generate_trends_markdown,
+    write_comparison_artifacts,
+    write_trends_artifacts,
+)
 from event_intelligence.compare.types import (
     ConfigDiffEntry,
     InsightTypeDelta,
@@ -561,6 +567,66 @@ class TestCompareEngine(unittest.TestCase):
 
             with self.assertRaises(ValueError):
                 analyze_multi_run_trends(found, z_score_threshold=0.0)
+
+    def test_markdown_report_generators_and_artifact_writers(self) -> None:
+        base = RunSnapshot(
+            "run_a", "/a", "/a/db", 1, 10, 2, 10, 2, 0, 0, 4.0, 2.0, 50.0
+        )
+        cand = RunSnapshot(
+            "run_b", "/b", "/b/db", 1, 18, 4, 20, 6, 2, 1, 11.0, 3.0, 80.0
+        )
+        comp = RunComparisonReport(
+            baseline=base,
+            candidate=cand,
+            config_diffs=[ConfigDiffEntry("confidence_threshold", 0.4, 0.3)],
+            zone_deltas=[ZoneMetricDelta("cam1", "lobby", 2, 5, 2, 4, 4.0, 11.0, 1, 3)],
+            line_deltas=[LineMetricDelta("cam1", "door", 1, 3, 1, 2, 2, 5)],
+            insight_deltas=[InsightTypeDelta("loitering", 0, 2, 0, 1)],
+            temporal_deltas=[TemporalBucketDelta(0, 0.0, 5.0, 2, 4, 2, 6, 0, 2)],
+            spatial_shift=SpatialShiftSummary(
+                grid_shape=(15, 20),
+                frame_width=320,
+                frame_height=240,
+                mean_abs_delta=0.1,
+                max_increase=0.7,
+                max_decrease=-0.3,
+                hotspot_increase_xy=(200.0, 120.0),
+                hotspot_decrease_xy=(40.0, 120.0),
+                diff_image_path="/tmp/heatmap_diff.png",
+            ),
+        )
+        comp_md = generate_comparison_markdown(comp)
+        self.assertIn("# Run Comparison Report — `run_a` vs `run_b`", comp_md)
+        self.assertIn("## Configuration Drift", comp_md)
+        self.assertIn("## Zone Activity Deltas", comp_md)
+        self.assertIn("## Line Crossing Deltas", comp_md)
+        self.assertIn("## Behavioral Insight Deltas", comp_md)
+        self.assertIn("## Temporal Activity Histogram Deltas", comp_md)
+        self.assertIn("[heatmap_diff.png](heatmap_diff.png)", comp_md)
+
+        trends = MultiRunTrendReport(
+            runs=[base, cand],
+            z_score_threshold=1.0,
+            metric_baselines={
+                "events_count": {"mean": 4.0, "std": 2.0, "min": 2.0, "max": 6.0}
+            },
+            anomalies=[
+                RunBaselineAnomaly("run_b", "events_count", 6.0, 4.0, 2.0, 1.0, "above")
+            ],
+        )
+        trends_md = generate_trends_markdown(trends)
+        self.assertIn("# Multi-Run Baseline & Trend Analytics (2 Runs)", trends_md)
+        self.assertIn("Cross-Run Baseline Anomalies", trends_md)
+        self.assertIn("`run_b`", trends_md)
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            out = Path(tmpdir)
+            c_json, c_md = write_comparison_artifacts(comp, out / "comp")
+            t_json, t_md = write_trends_artifacts(trends, out / "trends")
+            self.assertTrue(c_json.is_file())
+            self.assertTrue(c_md.is_file())
+            self.assertTrue(t_json.is_file())
+            self.assertTrue(t_md.is_file())
 
 
 if __name__ == "__main__":
