@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import sqlite3
 import statistics
 from collections.abc import Mapping, Sequence
@@ -409,7 +410,26 @@ def _infer_frame_dimensions(
     *,
     camera_id: str | None = None,
 ) -> tuple[int, int]:
-    """Infer (width, height) from cameras metadata or fallback to trajectory coordinate bounds."""
+    """Infer (width, height) from video_info.json, cameras table, or trajectory bounds."""
+    for db_p in db_paths:
+        vinfo_candidates = [db_p.parent / "video_info.json"]
+        if camera_id and camera_id.strip():
+            vinfo_candidates.insert(
+                0, db_p.parent / "cameras" / camera_id.strip() / "video_info.json"
+            )
+        for vinfo_path in vinfo_candidates:
+            if vinfo_path.is_file():
+                try:
+                    raw = json.loads(vinfo_path.read_text(encoding="utf-8"))
+                    entry = raw[0] if isinstance(raw, list) and raw else raw
+                    if isinstance(entry, dict):
+                        vw = int(entry.get("width", 0))
+                        vh = int(entry.get("height", 0))
+                        if vw > 0 and vh > 0:
+                            return vw, vh
+                except (json.JSONDecodeError, ValueError, TypeError, OSError):
+                    pass
+
     for db_p in db_paths:
         with closing(sqlite3.connect(db_p)) as conn:
             if not _table_exists(conn, "cameras"):
