@@ -2,16 +2,20 @@
 
 from __future__ import annotations
 
+import io
+import json
 import tempfile
 import unittest
+from contextlib import redirect_stdout
 from pathlib import Path
 from typing import Any
 
 import cv2
 import yaml
 
-from event_intelligence.compare.engine import (
+from event_intelligence.compare import (
     analyze_multi_run_trends,
+    compare_runs,
     compute_insight_deltas,
     compute_line_deltas,
     compute_spatial_density_diff,
@@ -19,14 +23,13 @@ from event_intelligence.compare.engine import (
     compute_zone_deltas,
     diff_run_configs,
     discover_runs,
-    load_run_snapshot,
-)
-from event_intelligence.compare.report import (
     generate_comparison_markdown,
     generate_trends_markdown,
+    load_run_snapshot,
     write_comparison_artifacts,
     write_trends_artifacts,
 )
+from event_intelligence.compare.__main__ import main as compare_main
 from event_intelligence.compare.types import (
     ConfigDiffEntry,
     InsightTypeDelta,
@@ -627,6 +630,130 @@ class TestCompareEngine(unittest.TestCase):
             self.assertTrue(c_md.is_file())
             self.assertTrue(t_json.is_file())
             self.assertTrue(t_md.is_file())
+
+    def test_compare_runs_and_cli_pairwise_and_trends_end_to_end(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            root = Path(tmpdir)
+            runs_root = root / "runs"
+            run_a = _create_synthetic_run(
+                runs_root / "run_baseline",
+                trajectories_rows=[
+                    (1, 0, 0.5, 40.0, 100.0),
+                    (1, 5, 2.5, 45.0, 105.0),
+                ],
+                events_rows=[("e1", "dwell_time_event", 1, "lobby", 0.5, 2.5, 2.0)],
+                zone_counts_rows=[("lobby", 1, 1, 2.0, 1)],
+                line_counts_rows=[("gate", 1, 0, 1)],
+                run_config={
+                    "confidence_threshold": 0.4,
+                    "tracker_config": "bytetrack.yaml",
+                },
+            )
+            run_b = _create_synthetic_run(
+                runs_root / "run_candidate",
+                trajectories_rows=[
+                    (1, 0, 0.5, 240.0, 100.0),
+                    (2, 2, 1.5, 245.0, 105.0),
+                    (2, 8, 6.5, 250.0, 110.0),
+                ],
+                events_rows=[
+                    ("e1", "dwell_time_event", 1, "lobby", 0.5, 3.5, 3.0),
+                    ("e2", "dwell_time_event", 2, "lobby", 1.5, 6.5, 5.0),
+                ],
+                zone_counts_rows=[("lobby", 2, 2, 8.0, 2)],
+                line_counts_rows=[("gate", 3, 1, 4)],
+                insights=[
+                    {
+                        "insight_id": "ins_1",
+                        "camera_id": "cam_main",
+                        "insight_type": "loitering",
+                        "severity": "high",
+                        "track_id": 2,
+                        "zone_id": "lobby",
+                        "start_time": 1.5,
+                        "end_time": 6.5,
+                        "duration": 5.0,
+                        "description": "Loitering detected",
+                    }
+                ],
+                run_config={
+                    "confidence_threshold": 0.3,
+                    "tracker_config": "botsort.yaml",
+                },
+            )
+
+            # Direct compare_runs call
+            out_direct = root / "direct_out"
+            rep = compare_runs(run_a, run_b, output_dir=out_direct)
+            self.assertEqual(rep.kpi_deltas["events_delta"], 1)
+            self.assertEqual(len(rep.config_diffs), 2)
+            self.assertTrue((out_direct / "comparison_report.json").is_file())
+            self.assertTrue((out_direct / "comparison_report.md").is_file())
+            self.assertTrue((out_direct / "heatmap_diff.png").is_file())
+
+            # Pairwise CLI (JSON & text)
+            cli_out = root / "cli_pair_out"
+            buf_json = io.StringIO()
+            with redirect_stdout(buf_json):
+                rc = compare_main(
+                    [
+                        "--baseline",
+                        str(run_a),
+                        "--candidate",
+                        str(run_b),
+                        "--output-dir",
+                        str(cli_out),
+                        "--json",
+                    ]
+                )
+            self.assertEqual(rc, 0)
+            payload = json.loads(buf_json.getvalue())
+            self.assertEqual(payload["baseline"]["run_id"], "run_baseline")
+            self.assertEqual(payload["candidate"]["run_id"], "run_candidate")
+            self.assertTrue((cli_out / "heatmap_diff.png").is_file())
+
+            buf_txt = io.StringIO()
+            with redirect_stdout(buf_txt):
+                rc_txt = compare_main(
+                    [
+                        "--baseline",
+                        str(run_a),
+                        "--candidate",
+                        str(run_b),
+                        "--no-heatmap-diff",
+                    ]
+                )
+            self.assertEqual(rc_txt, 0)
+            self.assertIn(
+                "Run Comparison: run_baseline vs run_candidate", buf_txt.getvalue()
+            )
+
+            # Multi-run trends CLI (JSON & text)
+            trends_out = root / "cli_trends_out"
+            buf_tr = io.StringIO()
+            with redirect_stdout(buf_tr):
+                rc_tr = compare_main(
+                    [
+                        "--runs-root",
+                        str(runs_root),
+                        "--z-threshold",
+                        "0.5",
+                        "--output-dir",
+                        str(trends_out),
+                        "--json",
+                    ]
+                )
+            self.assertEqual(rc_tr, 0)
+            tr_payload = json.loads(buf_tr.getvalue())
+            self.assertEqual(tr_payload["runs_count"], 2)
+            self.assertTrue((trends_out / "trends_report.json").is_file())
+            self.assertTrue((trends_out / "trends_report.md").is_file())
+
+            buf_tr_txt = io.StringIO()
+            with redirect_stdout(buf_tr_txt):
+                rc_tr_txt = compare_main(["--runs", str(run_a), str(run_b)])
+            self.assertEqual(rc_tr_txt, 0)
+            self.assertIn("Multi-Run Baseline Trends (2 run(s)", buf_tr_txt.getvalue())
 
 
 if __name__ == "__main__":
