@@ -17,12 +17,14 @@ from event_intelligence.analytics import (
     accumulate_trajectory_grid,
     smooth_and_normalize_heatmap,
 )
+from event_intelligence.compare.report import write_comparison_artifacts
 from event_intelligence.compare.types import (
     ConfigDiffEntry,
     InsightTypeDelta,
     LineMetricDelta,
     MultiRunTrendReport,
     RunBaselineAnomaly,
+    RunComparisonReport,
     RunSnapshot,
     SpatialShiftSummary,
     TemporalBucketDelta,
@@ -647,3 +649,68 @@ def analyze_multi_run_trends(
         anomalies=anomalies,
         camera_filter=camera_id,
     )
+
+
+def compare_runs(
+    baseline_path: Path | str,
+    candidate_path: Path | str,
+    *,
+    camera_id: str | None = None,
+    bucket_seconds: float = 5.0,
+    output_dir: Path | str | None = None,
+    render_heatmap_diff: bool = True,
+    grid_bin_size_px: int = 16,
+    gaussian_sigma_px: float = 24.0,
+) -> RunComparisonReport:
+    """Orchestrate a complete pairwise comparison between a baseline run and candidate run."""
+    base_snap = load_run_snapshot(baseline_path, camera_id=camera_id)
+    cand_snap = load_run_snapshot(candidate_path, camera_id=camera_id)
+
+    config_diffs = diff_run_configs(
+        base_snap.config_snapshot, cand_snap.config_snapshot
+    )
+    zone_deltas = compute_zone_deltas(
+        base_snap.db_path, cand_snap.db_path, camera_id=camera_id
+    )
+    line_deltas = compute_line_deltas(
+        base_snap.db_path, cand_snap.db_path, camera_id=camera_id
+    )
+    insight_deltas = compute_insight_deltas(
+        base_snap.db_path, cand_snap.db_path, camera_id=camera_id
+    )
+    temporal_deltas = compute_temporal_bucket_deltas(
+        base_snap.db_path,
+        cand_snap.db_path,
+        bucket_seconds=bucket_seconds,
+        camera_id=camera_id,
+    )
+
+    out_path = Path(output_dir).resolve() if output_dir is not None else None
+    diff_img_path = (
+        (out_path / "heatmap_diff.png")
+        if (out_path is not None and render_heatmap_diff)
+        else None
+    )
+    spatial_shift = compute_spatial_density_diff(
+        base_snap.db_path,
+        cand_snap.db_path,
+        grid_bin_size_px=grid_bin_size_px,
+        gaussian_sigma_px=gaussian_sigma_px,
+        camera_id=camera_id,
+        output_image_path=diff_img_path,
+    )
+
+    report = RunComparisonReport(
+        baseline=base_snap,
+        candidate=cand_snap,
+        camera_filter=camera_id,
+        config_diffs=config_diffs,
+        zone_deltas=zone_deltas,
+        line_deltas=line_deltas,
+        insight_deltas=insight_deltas,
+        temporal_deltas=temporal_deltas,
+        spatial_shift=spatial_shift,
+    )
+    if out_path is not None:
+        write_comparison_artifacts(report, out_path)
+    return report
