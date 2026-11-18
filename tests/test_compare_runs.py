@@ -755,6 +755,28 @@ class TestCompareEngine(unittest.TestCase):
             self.assertEqual(rc_tr_txt, 0)
             self.assertIn("Multi-Run Baseline Trends (2 run(s)", buf_tr_txt.getvalue())
 
+    def test_spatial_diff_prefers_video_info_json_dimensions(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            root = Path(tmpdir)
+            run_a = _create_synthetic_run(
+                root / "run_vinfo_a",
+                trajectories_rows=[(1, 0, 0.0, 100.0, 100.0)],
+                width=1920,
+                height=1080,
+            )
+            run_b = _create_synthetic_run(
+                root / "run_vinfo_b",
+                trajectories_rows=[(1, 0, 0.0, 500.0, 300.0)],
+                width=1920,
+                height=1080,
+            )
+            (run_b / "video_info.json").write_text(
+                json.dumps([{"name": "clip.mp4", "width": 768, "height": 432}]),
+                encoding="utf-8",
+            )
+            shift = compute_spatial_density_diff(run_a, run_b)
+            self.assertEqual((shift.frame_width, shift.frame_height), (768, 432))
+
 
 if __name__ == "__main__":
     unittest.main()
