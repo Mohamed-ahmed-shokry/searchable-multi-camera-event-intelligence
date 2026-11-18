@@ -8,13 +8,20 @@ from contextlib import closing
 from pathlib import Path
 from typing import Any
 
+import cv2
+import numpy as np
 import yaml
 
+from event_intelligence.analytics import (
+    accumulate_trajectory_grid,
+    smooth_and_normalize_heatmap,
+)
 from event_intelligence.compare.types import (
     ConfigDiffEntry,
     InsightTypeDelta,
     LineMetricDelta,
     RunSnapshot,
+    SpatialShiftSummary,
     TemporalBucketDelta,
     ZoneMetricDelta,
 )
@@ -22,8 +29,10 @@ from event_intelligence.storage.search_events import (
     query_insights,
     query_line_counts,
     query_temporal_activity,
+    query_trajectories,
     query_zone_counts,
 )
+from event_intelligence.trajectories import TrajectoryPoint
 
 
 def _resolve_run_and_db_paths(run_or_db_path: Path | str) -> tuple[Path, Path]:
@@ -387,3 +396,169 @@ def compute_temporal_bucket_deltas(
             )
         )
     return deltas
+
+
+def _infer_frame_dimensions(
+    db_paths: list[Path],
+    trajectories: list[Any],
+    *,
+    camera_id: str | None = None,
+) -> tuple[int, int]:
+    """Infer (width, height) from cameras metadata or fallback to trajectory coordinate bounds."""
+    for db_p in db_paths:
+        with closing(sqlite3.connect(db_p)) as conn:
+            if not _table_exists(conn, "cameras"):
+                continue
+            if camera_id and camera_id.strip():
+                row = conn.execute(
+                    "SELECT width, height FROM cameras WHERE camera_id = ?",
+                    (camera_id.strip(),),
+                ).fetchone()
+            else:
+                row = conn.execute(
+                    "SELECT width, height FROM cameras ORDER BY camera_id LIMIT 1"
+                ).fetchone()
+            if row and int(row[0]) > 0 and int(row[1]) > 0:
+                return int(row[0]), int(row[1])
+
+    max_x = max((float(p.x) for p in trajectories), default=0.0)
+    max_y = max((float(p.y) for p in trajectories), default=0.0)
+    return max(64, int(max_x) + 16), max(64, int(max_y) + 16)
+
+
+def _render_diverging_diff_image(
+    delta: np.ndarray,
+    *,
+    reference_frame: np.ndarray | None = None,
+    hotspot_increase_xy: tuple[float, float] | None = None,
+    hotspot_decrease_xy: tuple[float, float] | None = None,
+) -> np.ndarray:
+    """Render a diverging blue (decreased) vs red (increased) spatial density diff image."""
+    height, width = int(delta.shape[0]), int(delta.shape[1])
+    if reference_frame is not None and reference_frame.ndim == 3:
+        base = cv2.resize(
+            reference_frame, (width, height), interpolation=cv2.INTER_LINEAR
+        ).astype(np.float32)
+    else:
+        base = np.full((height, width, 3), (28.0, 28.0, 32.0), dtype=np.float32)
+
+    pos = np.clip(delta, 0.0, 1.0)
+    neg = np.clip(-delta, 0.0, 1.0)
+
+    overlay = base.copy()
+    pos_w = np.where(pos > 0.02, 0.72 * (pos**0.7), 0.0)[..., np.newaxis]
+    neg_w = np.where(neg > 0.02, 0.72 * (neg**0.7), 0.0)[..., np.newaxis]
+
+    red_layer = np.full_like(base, (40.0, 45.0, 255.0))
+    blue_layer = np.full_like(base, (255.0, 140.0, 35.0))
+
+    overlay = overlay * (1.0 - pos_w) + red_layer * pos_w
+    overlay = overlay * (1.0 - neg_w) + blue_layer * neg_w
+    img = np.clip(overlay, 0.0, 255.0).astype(np.uint8)
+
+    if hotspot_increase_xy is not None:
+        ix, iy = int(round(hotspot_increase_xy[0])), int(round(hotspot_increase_xy[1]))
+        cv2.circle(img, (ix, iy), 8, (60, 60, 255), 2, cv2.LINE_AA)
+    if hotspot_decrease_xy is not None:
+        dx, dy = int(round(hotspot_decrease_xy[0])), int(round(hotspot_decrease_xy[1]))
+        cv2.circle(img, (dx, dy), 8, (255, 160, 50), 2, cv2.LINE_AA)
+
+    if width >= 180 and height >= 60:
+        hud_w = min(width - 16, 330)
+        cv2.rectangle(img, (8, 8), (8 + hud_w, 44), (18, 18, 22), -1)
+        cv2.rectangle(img, (8, 8), (8 + hud_w, 44), (110, 110, 120), 1, cv2.LINE_AA)
+        cv2.putText(
+            img,
+            "Spatial Diff: Blue=Decrease | Red=Increase",
+            (14, 30),
+            cv2.FONT_HERSHEY_SIMPLEX,
+            0.40,
+            (240, 240, 245),
+            1,
+            cv2.LINE_AA,
+        )
+    return img
+
+
+def compute_spatial_density_diff(
+    baseline_db: Path | str,
+    candidate_db: Path | str,
+    *,
+    frame_width: int | None = None,
+    frame_height: int | None = None,
+    grid_bin_size_px: int = 16,
+    gaussian_sigma_px: float = 24.0,
+    camera_id: str | None = None,
+    output_image_path: Path | str | None = None,
+    reference_frame: np.ndarray | None = None,
+) -> SpatialShiftSummary:
+    """Compute normalized 2D spatial trajectory density difference (candidate - baseline)."""
+    _, b_db = _resolve_run_and_db_paths(baseline_db)
+    _, c_db = _resolve_run_and_db_paths(candidate_db)
+
+    b_rows = query_trajectories(b_db, camera_id=camera_id, limit=200000)
+    c_rows = query_trajectories(c_db, camera_id=camera_id, limit=200000)
+
+    if frame_width is not None and frame_height is not None:
+        w, h = int(frame_width), int(frame_height)
+    else:
+        w, h = _infer_frame_dimensions(
+            [c_db, b_db], [*b_rows, *c_rows], camera_id=camera_id
+        )
+
+    b_pts = [
+        TrajectoryPoint(r.track_id, r.frame_id, r.timestamp, r.x, r.y) for r in b_rows
+    ]
+    c_pts = [
+        TrajectoryPoint(r.track_id, r.frame_id, r.timestamp, r.x, r.y) for r in c_rows
+    ]
+
+    b_grid, b_full = accumulate_trajectory_grid(
+        b_pts, frame_width=w, frame_height=h, grid_bin_size_px=grid_bin_size_px
+    )
+    _, c_full = accumulate_trajectory_grid(
+        c_pts, frame_width=w, frame_height=h, grid_bin_size_px=grid_bin_size_px
+    )
+
+    b_norm = smooth_and_normalize_heatmap(b_full, gaussian_sigma_px=gaussian_sigma_px)
+    c_norm = smooth_and_normalize_heatmap(c_full, gaussian_sigma_px=gaussian_sigma_px)
+    delta = (c_norm - b_norm).astype(np.float32)
+
+    mean_abs = float(np.mean(np.abs(delta))) if delta.size > 0 else 0.0
+    max_inc = float(delta.max()) if delta.size > 0 else 0.0
+    max_dec = float(delta.min()) if delta.size > 0 else 0.0
+
+    inc_xy: tuple[float, float] | None = None
+    if max_inc > 1e-6:
+        iy, ix = np.unravel_index(int(np.argmax(delta)), delta.shape)
+        inc_xy = (float(ix), float(iy))
+
+    dec_xy: tuple[float, float] | None = None
+    if max_dec < -1e-6:
+        dy, dx = np.unravel_index(int(np.argmin(delta)), delta.shape)
+        dec_xy = (float(dx), float(dy))
+
+    diff_img_str = ""
+    if output_image_path is not None:
+        out_img = Path(output_image_path)
+        out_img.parent.mkdir(parents=True, exist_ok=True)
+        rendered = _render_diverging_diff_image(
+            delta,
+            reference_frame=reference_frame,
+            hotspot_increase_xy=inc_xy,
+            hotspot_decrease_xy=dec_xy,
+        )
+        cv2.imwrite(str(out_img), rendered)
+        diff_img_str = str(out_img)
+
+    return SpatialShiftSummary(
+        grid_shape=(int(b_grid.shape[0]), int(b_grid.shape[1])),
+        frame_width=w,
+        frame_height=h,
+        mean_abs_delta=mean_abs,
+        max_increase=max_inc,
+        max_decrease=max_dec,
+        hotspot_increase_xy=inc_xy,
+        hotspot_decrease_xy=dec_xy,
+        diff_image_path=diff_img_str,
+    )
