@@ -9,10 +9,13 @@ runnable package:
 - spatial: polygon zone and directed tripwire line reasoning
 - events: stateful zone dwell-time state machine with hysteresis
 - evidence: best-frame event snapshots and padded person crops
-- analytics: spatial density heatmaps and zone/line count summaries
+- analytics: spatial density heatmaps, zone/line count summaries, and temporal histograms
 - evaluation: quantitative MOT17 and qualitative surveillance evaluation
-- storage: SQLite intelligence.db ingestion and CLI/programmatic search
+- insights: automated behavioral anomaly detection and executive intelligence reports
+- storage: SQLite intelligence.db ingestion, polygon search, and incident case bundling
+- compare: multi-run comparison, spatial density diffing, and cross-run baseline analytics
 - pipeline: single-command end-to-end CV pipeline runner
+- search: structured SQLite query and forensics CLI
 """
 
 from __future__ import annotations
