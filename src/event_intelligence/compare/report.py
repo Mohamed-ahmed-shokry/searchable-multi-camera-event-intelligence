@@ -185,7 +185,7 @@ def generate_trends_markdown(report: MultiRunTrendReport) -> str:
             [
                 "> [!WARNING]",
                 f"> **{len(report.anomalies)} Cross-Run Baseline Anomalies** detected:",
-                "",
+                ">",
             ]
         )
         for an in report.anomalies:
