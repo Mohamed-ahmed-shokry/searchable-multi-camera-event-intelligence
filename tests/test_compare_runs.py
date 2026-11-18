@@ -9,7 +9,7 @@ from typing import Any
 
 import yaml
 
-from event_intelligence.compare.engine import load_run_snapshot
+from event_intelligence.compare.engine import diff_run_configs, load_run_snapshot
 from event_intelligence.compare.types import (
     ConfigDiffEntry,
     InsightTypeDelta,
@@ -306,6 +306,41 @@ class TestCompareEngine(unittest.TestCase):
 
             with self.assertRaises(FileNotFoundError):
                 load_run_snapshot(Path(tmpdir) / "missing_run")
+
+    def test_diff_run_configs_flattens_nested_keys(self) -> None:
+        base_cfg = {
+            "confidence_threshold": 0.4,
+            "tracker_config": "bytetrack.yaml",
+            "insight_config": {
+                "min_loitering_seconds": 15.0,
+                "max_zone_occupancy": 3,
+            },
+        }
+        cand_cfg = {
+            "confidence_threshold": 0.3,
+            "tracker_config": "bytetrack.yaml",
+            "insight_config": {
+                "min_loitering_seconds": 15.0,
+                "max_zone_occupancy": 5,
+            },
+            "extract_video_clips": True,
+        }
+        diffs = diff_run_configs(base_cfg, cand_cfg)
+        by_key = {d.key: d for d in diffs}
+        self.assertEqual(
+            set(by_key.keys()),
+            {
+                "confidence_threshold",
+                "extract_video_clips",
+                "insight_config.max_zone_occupancy",
+            },
+        )
+        self.assertEqual(by_key["confidence_threshold"].baseline_value, 0.4)
+        self.assertEqual(by_key["confidence_threshold"].candidate_value, 0.3)
+        self.assertIsNone(by_key["extract_video_clips"].baseline_value)
+        self.assertTrue(by_key["extract_video_clips"].candidate_value)
+        self.assertEqual(by_key["insight_config.max_zone_occupancy"].candidate_value, 5)
+        self.assertEqual(diff_run_configs(base_cfg, base_cfg), [])
 
 
 if __name__ == "__main__":
