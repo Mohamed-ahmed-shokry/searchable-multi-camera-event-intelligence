@@ -9,7 +9,12 @@ from typing import Any
 
 import yaml
 
-from event_intelligence.compare.engine import diff_run_configs, load_run_snapshot
+from event_intelligence.compare.engine import (
+    compute_line_deltas,
+    compute_zone_deltas,
+    diff_run_configs,
+    load_run_snapshot,
+)
 from event_intelligence.compare.types import (
     ConfigDiffEntry,
     InsightTypeDelta,
@@ -341,6 +346,44 @@ class TestCompareEngine(unittest.TestCase):
         self.assertTrue(by_key["extract_video_clips"].candidate_value)
         self.assertEqual(by_key["insight_config.max_zone_occupancy"].candidate_value, 5)
         self.assertEqual(diff_run_configs(base_cfg, base_cfg), [])
+
+    def test_compute_zone_and_line_deltas(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            root = Path(tmpdir)
+            run_a = _create_synthetic_run(
+                root / "run_a",
+                camera_id="cam_mon",
+                zone_counts_rows=[
+                    ("lobby", 5, 5, 12.0, 2),
+                    ("aisle", 2, 2, 4.0, 1),
+                ],
+                line_counts_rows=[("door", 3, 2, 5)],
+            )
+            run_b = _create_synthetic_run(
+                root / "run_b",
+                camera_id="cam_tue",
+                zone_counts_rows=[
+                    ("lobby", 8, 7, 20.5, 4),
+                    ("vault", 1, 1, 3.0, 1),
+                ],
+                line_counts_rows=[("door", 6, 1, 7), ("side_gate", 2, 0, 2)],
+            )
+
+            z_deltas = compute_zone_deltas(run_a, run_b)
+            z_by_id = {z.zone_id: z for z in z_deltas}
+            self.assertEqual(set(z_by_id.keys()), {"aisle", "lobby", "vault"})
+            self.assertEqual(z_by_id["lobby"].delta_entries, 3)
+            self.assertAlmostEqual(z_by_id["lobby"].delta_dwell_seconds, 8.5)
+            self.assertEqual(z_by_id["lobby"].delta_peak_occupancy, 2)
+            self.assertEqual(z_by_id["aisle"].delta_entries, -2)
+            self.assertEqual(z_by_id["vault"].delta_entries, 1)
+
+            l_deltas = compute_line_deltas(run_a, run_b)
+            l_by_id = {ln.line_id: ln for ln in l_deltas}
+            self.assertEqual(l_by_id["door"].delta_ab, 3)
+            self.assertEqual(l_by_id["door"].delta_ba, -1)
+            self.assertEqual(l_by_id["door"].delta_total, 2)
+            self.assertEqual(l_by_id["side_gate"].delta_total, 2)
 
 
 if __name__ == "__main__":
