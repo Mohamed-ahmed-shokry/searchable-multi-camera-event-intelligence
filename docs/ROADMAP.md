@@ -2237,15 +2237,15 @@ uv run --locked python -m event_intelligence.compare --runs-root outputs/runs --
 
 ### Micro-Task Breakdown
 
-- [x] 1. `docs(roadmap): define Phase 11h multi-run comparison and baseline analytics scope`
-- [ ] 2. `types(compare): add RunSnapshot and ConfigDiffEntry dataclasses`
-- [ ] 3. `types(compare): add ZoneMetricDelta, LineMetricDelta, InsightTypeDelta, and TemporalBucketDelta`
-- [ ] 4. `types(compare): add SpatialShiftSummary, RunComparisonReport, RunBaselineAnomaly, and MultiRunTrendReport`
-- [ ] 5. `test(compare): add unit tests for compare domain dataclasses and validation`
-- [ ] 6. `feat(compare): implement load_run_snapshot for run directory and SQLite KPI extraction`
-- [ ] 7. `test(compare): add unit tests for load_run_snapshot`
-- [ ] 8. `feat(compare): implement recursive diff_run_configs for run_config.yaml drift tracking`
-- [ ] 9. `test(compare): add unit tests for diff_run_configs`
+- [x] 1. `docs(roadmap): define Phase 11h multi-run comparison and baseline analytics scope` (`7069770`)
+- [x] 2. `types(compare): add RunSnapshot and ConfigDiffEntry dataclasses` (`d340612`)
+- [x] 3. `types(compare): add ZoneMetricDelta, LineMetricDelta, InsightTypeDelta, and TemporalBucketDelta` (`2520f56`)
+- [x] 4. `types(compare): add SpatialShiftSummary, RunComparisonReport, RunBaselineAnomaly, and MultiRunTrendReport` (`52bdd6b`)
+- [x] 5. `test(compare): add unit tests for compare domain dataclasses and validation` (`1b68461`)
+- [x] 6. `feat(compare): implement load_run_snapshot for run directory and SQLite KPI extraction` (`c6ec25c`)
+- [x] 7. `test(compare): add unit tests for load_run_snapshot` (`5d41ffb`)
+- [x] 8. `feat(compare): implement recursive diff_run_configs for run_config.yaml drift tracking` (`e395886`)
+- [x] 9. `test(compare): add unit tests for diff_run_configs` (`31b2b4c`)
 - [ ] 10. `feat(compare): implement compute_zone_deltas and compute_line_deltas`
 - [ ] 11. `test(compare): add unit tests for compute_zone_deltas and compute_line_deltas`
 - [ ] 12. `feat(compare): implement compute_insight_deltas and compute_temporal_bucket_deltas`
