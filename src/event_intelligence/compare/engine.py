@@ -3,7 +3,8 @@
 from __future__ import annotations
 
 import sqlite3
-from collections.abc import Mapping
+import statistics
+from collections.abc import Mapping, Sequence
 from contextlib import closing
 from pathlib import Path
 from typing import Any
@@ -20,6 +21,8 @@ from event_intelligence.compare.types import (
     ConfigDiffEntry,
     InsightTypeDelta,
     LineMetricDelta,
+    MultiRunTrendReport,
+    RunBaselineAnomaly,
     RunSnapshot,
     SpatialShiftSummary,
     TemporalBucketDelta,
@@ -561,4 +564,86 @@ def compute_spatial_density_diff(
         hotspot_increase_xy=inc_xy,
         hotspot_decrease_xy=dec_xy,
         diff_image_path=diff_img_str,
+    )
+
+
+_TREND_METRICS: tuple[str, ...] = (
+    "detections_count",
+    "tracks_count",
+    "events_count",
+    "insights_count",
+    "high_critical_insights_count",
+    "total_dwell_seconds",
+)
+
+
+def discover_runs(runs_root: Path | str) -> list[Path]:
+    """Discover all subdirectories under runs_root containing an intelligence.db file."""
+    root = Path(runs_root).resolve()
+    if not root.is_dir():
+        raise FileNotFoundError(f"Runs root directory not found: {root}")
+    found = [
+        child
+        for child in sorted(root.iterdir(), key=lambda p: p.name)
+        if child.is_dir() and (child / "intelligence.db").is_file()
+    ]
+    return found
+
+
+def analyze_multi_run_trends(
+    run_paths: Sequence[Path | str],
+    *,
+    camera_id: str | None = None,
+    z_score_threshold: float = 1.5,
+) -> MultiRunTrendReport:
+    """Compute cross-run KPI baseline statistics and flag statistical z-score anomalies."""
+    if z_score_threshold <= 0.0:
+        raise ValueError(f"z_score_threshold must be > 0.0, got {z_score_threshold}")
+
+    snapshots = [load_run_snapshot(rp, camera_id=camera_id) for rp in run_paths]
+    if not snapshots:
+        return MultiRunTrendReport(
+            runs=[],
+            z_score_threshold=z_score_threshold,
+            metric_baselines={},
+            anomalies=[],
+            camera_filter=camera_id,
+        )
+
+    metric_baselines: dict[str, dict[str, float]] = {}
+    anomalies: list[RunBaselineAnomaly] = []
+
+    for metric_name in _TREND_METRICS:
+        values = [float(getattr(s, metric_name)) for s in snapshots]
+        mean_v = statistics.mean(values)
+        std_v = statistics.pstdev(values) if len(values) >= 2 else 0.0
+        metric_baselines[metric_name] = {
+            "mean": round(mean_v, 4),
+            "std": round(std_v, 4),
+            "min": round(min(values), 4),
+            "max": round(max(values), 4),
+        }
+        if len(values) >= 2 and std_v > 1e-9:
+            for snap, val in zip(snapshots, values, strict=True):
+                z = (val - mean_v) / std_v
+                if abs(z) >= z_score_threshold:
+                    anomalies.append(
+                        RunBaselineAnomaly(
+                            run_id=snap.run_id,
+                            metric_name=metric_name,
+                            value=val,
+                            baseline_mean=mean_v,
+                            baseline_std=std_v,
+                            z_score=z,
+                            direction="above" if z > 0 else "below",
+                        )
+                    )
+
+    anomalies.sort(key=lambda a: (-abs(a.z_score), a.run_id, a.metric_name))
+    return MultiRunTrendReport(
+        runs=snapshots,
+        z_score_threshold=z_score_threshold,
+        metric_baselines=metric_baselines,
+        anomalies=anomalies,
+        camera_filter=camera_id,
     )
