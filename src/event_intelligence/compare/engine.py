@@ -12,12 +12,16 @@ import yaml
 
 from event_intelligence.compare.types import (
     ConfigDiffEntry,
+    InsightTypeDelta,
     LineMetricDelta,
     RunSnapshot,
+    TemporalBucketDelta,
     ZoneMetricDelta,
 )
 from event_intelligence.storage.search_events import (
+    query_insights,
     query_line_counts,
+    query_temporal_activity,
     query_zone_counts,
 )
 
@@ -288,6 +292,98 @@ def compute_line_deltas(
                 candidate_ba=cr.crossings_ba if cr else 0,
                 baseline_total=br.total if br else 0,
                 candidate_total=cr.total if cr else 0,
+            )
+        )
+    return deltas
+
+
+def compute_insight_deltas(
+    baseline_db: Path | str,
+    candidate_db: Path | str,
+    *,
+    camera_id: str | None = None,
+) -> list[InsightTypeDelta]:
+    """Compute signed per-insight-type count and high/critical severity deltas between two DBs."""
+    _, b_db = _resolve_run_and_db_paths(baseline_db)
+    _, c_db = _resolve_run_and_db_paths(candidate_db)
+
+    def _safe_insights(db: Path) -> list[Any]:
+        with closing(sqlite3.connect(db)) as conn:
+            if not _table_exists(conn, "insights"):
+                return []
+        return query_insights(db, camera_id=camera_id, limit=10000)
+
+    b_ins = _safe_insights(b_db)
+    c_ins = _safe_insights(c_db)
+
+    b_counts: dict[str, int] = {}
+    b_hc: dict[str, int] = {}
+    for item in b_ins:
+        b_counts[item.insight_type] = b_counts.get(item.insight_type, 0) + 1
+        if item.severity.lower() in {"high", "critical"}:
+            b_hc[item.insight_type] = b_hc.get(item.insight_type, 0) + 1
+
+    c_counts: dict[str, int] = {}
+    c_hc: dict[str, int] = {}
+    for item in c_ins:
+        c_counts[item.insight_type] = c_counts.get(item.insight_type, 0) + 1
+        if item.severity.lower() in {"high", "critical"}:
+            c_hc[item.insight_type] = c_hc.get(item.insight_type, 0) + 1
+
+    all_types = sorted(set(b_counts.keys()) | set(c_counts.keys()))
+    return [
+        InsightTypeDelta(
+            insight_type=itype,
+            baseline_count=b_counts.get(itype, 0),
+            candidate_count=c_counts.get(itype, 0),
+            baseline_high_critical=b_hc.get(itype, 0),
+            candidate_high_critical=c_hc.get(itype, 0),
+        )
+        for itype in all_types
+    ]
+
+
+def compute_temporal_bucket_deltas(
+    baseline_db: Path | str,
+    candidate_db: Path | str,
+    *,
+    bucket_seconds: float = 5.0,
+    camera_id: str | None = None,
+) -> list[TemporalBucketDelta]:
+    """Compare time-windowed activity histograms between two runs bucket-by-bucket."""
+    if bucket_seconds <= 0.0:
+        raise ValueError(f"bucket_seconds must be > 0.0, got {bucket_seconds}")
+    _, b_db = _resolve_run_and_db_paths(baseline_db)
+    _, c_db = _resolve_run_and_db_paths(candidate_db)
+
+    b_buckets = query_temporal_activity(
+        b_db, bucket_seconds=bucket_seconds, camera_id=camera_id
+    )
+    c_buckets = query_temporal_activity(
+        c_db, bucket_seconds=bucket_seconds, camera_id=camera_id
+    )
+
+    b_by_idx = {b.bucket_index: b for b in b_buckets}
+    c_by_idx = {b.bucket_index: b for b in c_buckets}
+    all_idxs = sorted(set(b_by_idx.keys()) | set(c_by_idx.keys()))
+
+    deltas: list[TemporalBucketDelta] = []
+    for idx in all_idxs:
+        bb = b_by_idx.get(idx)
+        cb = c_by_idx.get(idx)
+        start_t = round(idx * bucket_seconds, 4)
+        end_t = round((idx + 1) * bucket_seconds, 4)
+        deltas.append(
+            TemporalBucketDelta(
+                bucket_index=idx,
+                start_time=start_t,
+                end_time=end_t,
+                baseline_active_tracks=bb.active_tracks_count if bb else 0,
+                candidate_active_tracks=cb.active_tracks_count if cb else 0,
+                baseline_events=bb.events_count if bb else 0,
+                candidate_events=cb.events_count if cb else 0,
+                baseline_insights=bb.insights_count if bb else 0,
+                candidate_insights=cb.insights_count if cb else 0,
             )
         )
     return deltas
