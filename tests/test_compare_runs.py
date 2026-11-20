@@ -851,6 +851,68 @@ class TestCompareEngine(unittest.TestCase):
             },
         )
 
+    def test_regression_gate_markdown_and_csv_artifact_exports(self) -> None:
+        from event_intelligence.compare.engine import evaluate_regression_gate
+        from event_intelligence.compare.types import RegressionPolicy
+
+        base = RunSnapshot(
+            "run_a", "/a", "/a/db", 1, 100, 10, 100, 10, 0, 0, 20.0, 2.0, 50.0
+        )
+        cand = RunSnapshot(
+            "run_b", "/b", "/b/db", 1, 50, 5, 50, 4, 2, 2, 8.0, 1.5, 40.0
+        )
+        raw_rep = RunComparisonReport(
+            baseline=base,
+            candidate=cand,
+            zone_deltas=[ZoneMetricDelta("cam1", "lobby", 5, 2, 5, 2, 20.0, 8.0, 3, 1)],
+            line_deltas=[LineMetricDelta("cam1", "door", 4, 2, 1, 1, 5, 3)],
+            temporal_deltas=[TemporalBucketDelta(0, 0.0, 5.0, 5, 2, 5, 2, 0, 2)],
+        )
+        gate = evaluate_regression_gate(raw_rep, RegressionPolicy())
+        rep = RunComparisonReport(
+            baseline=base,
+            candidate=cand,
+            zone_deltas=raw_rep.zone_deltas,
+            line_deltas=raw_rep.line_deltas,
+            temporal_deltas=raw_rep.temporal_deltas,
+            regression_gate=gate,
+        )
+        md = generate_comparison_markdown(rep)
+        self.assertIn("## Automated Regression Gate", md)
+        self.assertIn("**`FAIL`**", md)
+        self.assertIn("`max_tracks_drop_pct`", md)
+
+        trends = MultiRunTrendReport(
+            runs=[base, cand],
+            z_score_threshold=1.0,
+            metric_baselines={
+                "events_count": {"mean": 7.0, "std": 3.0, "min": 4.0, "max": 10.0}
+            },
+            anomalies=[
+                RunBaselineAnomaly(
+                    "run_b", "events_count", 4.0, 7.0, 3.0, -1.0, "below"
+                )
+            ],
+        )
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            out = Path(tmpdir)
+            write_comparison_artifacts(rep, out / "comp")
+            for fname in ("zone_deltas.csv", "line_deltas.csv", "temporal_deltas.csv"):
+                csv_file = out / "comp" / fname
+                self.assertTrue(csv_file.is_file(), f"Missing {fname}")
+                self.assertGreaterEqual(
+                    len(csv_file.read_text(encoding="utf-8").splitlines()), 2
+                )
+
+            write_trends_artifacts(trends, out / "trends")
+            for fname in ("runs_catalog.csv", "baseline_anomalies.csv"):
+                csv_file = out / "trends" / fname
+                self.assertTrue(csv_file.is_file(), f"Missing {fname}")
+                self.assertGreaterEqual(
+                    len(csv_file.read_text(encoding="utf-8").splitlines()), 2
+                )
+
 
 if __name__ == "__main__":
     unittest.main()
