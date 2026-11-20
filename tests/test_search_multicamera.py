@@ -495,6 +495,23 @@ class TestSearchMultiCameraCli(unittest.TestCase):
         self.assertTrue((bundle_out / "trajectories.csv").is_file())
         self.assertIn("snapshot", manifest["copied_media"])
 
+    def test_cli_cameras_flag_json_and_text(self) -> None:
+        buf_json = io.StringIO()
+        with redirect_stdout(buf_json):
+            rc = search_main(["--db", str(self.db_path), "--cameras", "--json"])
+        self.assertEqual(rc, 0)
+        cams = json.loads(buf_json.getvalue())
+        self.assertEqual([c["camera_id"] for c in cams], ["corridor", "lobby"])
+
+        buf_txt = io.StringIO()
+        with redirect_stdout(buf_txt):
+            rc_txt = search_main(
+                ["--db", str(self.db_path), "--cameras", "--camera", "lobby"]
+            )
+        self.assertEqual(rc_txt, 0)
+        self.assertIn("Registered Cameras (1)", buf_txt.getvalue())
+        self.assertIn("[lobby]", buf_txt.getvalue())
+
 
 if __name__ == "__main__":
     unittest.main()
