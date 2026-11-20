@@ -777,6 +777,80 @@ class TestCompareEngine(unittest.TestCase):
             shift = compute_spatial_density_diff(run_a, run_b)
             self.assertEqual((shift.frame_width, shift.frame_height), (768, 432))
 
+    def test_regression_policy_yaml_and_evaluate_regression_gate(self) -> None:
+        from event_intelligence.compare.engine import (
+            evaluate_regression_gate,
+            load_regression_policy,
+            save_regression_policy,
+        )
+        from event_intelligence.compare.types import RegressionPolicy
+
+        with self.assertRaises(ValueError):
+            RegressionPolicy(max_tracks_drop_pct=150.0)
+        with self.assertRaises(ValueError):
+            RegressionPolicy(max_high_critical_insights_increase=-1)
+        with self.assertRaises(ValueError):
+            RegressionPolicy(min_detections_ratio=-0.5)
+
+        pol = RegressionPolicy(
+            max_tracks_drop_pct=20.0,
+            max_events_drop_pct=20.0,
+            max_dwell_drop_pct=25.0,
+            max_high_critical_insights_increase=1,
+            max_spatial_shift_mean_abs=0.15,
+            min_detections_ratio=0.8,
+            allow_config_drift=False,
+        )
+        with tempfile.TemporaryDirectory() as tmpdir:
+            p_path = Path(tmpdir) / "policy.yaml"
+            save_regression_policy(pol, p_path)
+            loaded = load_regression_policy(p_path)
+            self.assertEqual(loaded, pol)
+
+        # Passing report
+        base = RunSnapshot(
+            "base", "/b", "/b/db", 1, 100, 10, 100, 10, 1, 1, 20.0, 2.0, 50.0
+        )
+        good_cand = RunSnapshot(
+            "cand", "/c", "/c/db", 1, 95, 10, 95, 10, 2, 2, 19.0, 2.0, 50.0
+        )
+        good_rep = RunComparisonReport(
+            baseline=base,
+            candidate=good_cand,
+            spatial_shift=SpatialShiftSummary((10, 10), 160, 160, 0.05, 0.1, -0.1),
+        )
+        pass_res = evaluate_regression_gate(good_rep, pol)
+        self.assertTrue(pass_res.passed)
+        self.assertEqual(pass_res.error_count, 0)
+        self.assertEqual(pass_res.checks_evaluated, 7)
+
+        # Failing report triggering all 7 rules
+        bad_cand = RunSnapshot(
+            "bad", "/c", "/c/db", 1, 50, 5, 50, 4, 5, 5, 10.0, 1.0, 20.0
+        )
+        bad_rep = RunComparisonReport(
+            baseline=base,
+            candidate=bad_cand,
+            config_diffs=[ConfigDiffEntry("confidence_threshold", 0.4, 0.7)],
+            spatial_shift=SpatialShiftSummary((10, 10), 160, 160, 0.40, 0.8, -0.8),
+        )
+        fail_res = evaluate_regression_gate(bad_rep, pol)
+        self.assertFalse(fail_res.passed)
+        self.assertEqual(fail_res.error_count, 7)
+        violated_rules = {v.rule_name for v in fail_res.violations}
+        self.assertEqual(
+            violated_rules,
+            {
+                "max_tracks_drop_pct",
+                "max_events_drop_pct",
+                "max_dwell_drop_pct",
+                "max_high_critical_insights_increase",
+                "max_spatial_shift_mean_abs",
+                "min_detections_ratio",
+                "allow_config_drift",
+            },
+        )
+
 
 if __name__ == "__main__":
     unittest.main()
