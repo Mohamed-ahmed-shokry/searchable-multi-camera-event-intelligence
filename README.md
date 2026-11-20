@@ -138,10 +138,11 @@ uv run --locked python -m event_intelligence.search --db outputs/runs/people_det
 uv run --locked python -m event_intelligence.search --db outputs/runs/people_detection/intelligence.db --activity-buckets 5.0 --json
 uv run --locked python -m event_intelligence.search --db outputs/runs/people_detection/intelligence.db --track-timeline 1 --json
 uv run --locked python -m event_intelligence.search --db outputs/runs/people_detection/intelligence.db --zone-stats --json
+uv run --locked python -m event_intelligence.search --db outputs/runs/people_detection/intelligence.db --cameras --json
 uv run --locked python -m event_intelligence.search --db outputs/runs/people_detection/intelligence.db --export-incident evt_0001 --bundle-dir outputs/bundles/evt_0001 --json
 
 # Compare two pipeline runs (KPI, config, zone/line, insight, temporal & spatial diff) or analyze multi-run baseline trends
-uv run --locked python -m event_intelligence.compare --baseline outputs/runs/<run_a> --candidate outputs/runs/<run_b> --output-dir outputs/comparisons/<diff_id> --json
+uv run --locked python -m event_intelligence.compare --baseline outputs/runs/<run_a> --candidate outputs/runs/<run_b> --policy configs/regression_policy.yaml --fail-on-regression --output-dir outputs/comparisons/<diff_id> --json
 uv run --locked python -m event_intelligence.compare --runs-root outputs/runs --z-threshold 1.5 --output-dir outputs/comparisons/trends --json
 ```
 
@@ -369,7 +370,7 @@ These can be valuable later, but the first priority is a working CV intelligence
 
 ## Repository Status
 
-The repository has completed **Phase 0 (Foundation)**, **Phase 1 (Video Inspection & Dataset Validation)**, **Phase 2 (Person Detection)**, **Phase 3 (Person Tracking & Early Quantitative MOT17 Checkpoint)**, **Phase 4 (Trajectory Extraction)**, **Phase 5 (Zone and Line Reasoning)**, **Phase 6 (Dwell-Time Events)**, **Phase 7 (Visual Evidence)**, **Phase 8 (Heatmaps and Analytics)**, **Phase 9 (CV Evaluation)**, **Phase 10 (Searchable Outputs)**, and **Phase 11/11c/11d/11e/11f/11g/11h (CV Pipeline Integration, Multi-Camera Intelligence, Automated Behavioral Insights, Dynamic Video Evidence Clips & Storyboards, Crowd Occupancy/Tailgating/Proximity Search, Temporal Activity Histograms/Polygon Search/Incident Bundling, and Multi-Run Comparison & Cross-Run Baseline Analytics)**.
+The repository has completed **Phase 0 (Foundation)**, **Phase 1 (Video Inspection & Dataset Validation)**, **Phase 2 (Person Detection)**, **Phase 3 (Person Tracking & Early Quantitative MOT17 Checkpoint)**, **Phase 4 (Trajectory Extraction)**, **Phase 5 (Zone and Line Reasoning)**, **Phase 6 (Dwell-Time Events)**, **Phase 7 (Visual Evidence)**, **Phase 8 (Heatmaps and Analytics)**, **Phase 9 (CV Evaluation)**, **Phase 10 (Searchable Outputs)**, and **Phase 11/11c/11d/11e/11f/11g/11h/11i (CV Pipeline Integration, Multi-Camera Intelligence, Automated Behavioral Insights, Dynamic Video Evidence Clips & Storyboards, Crowd Occupancy/Tailgating/Proximity Search, Temporal Activity Histograms/Polygon Search/Incident Bundling, Multi-Run Comparison & Baseline Analytics, and True Camera Metadata Persistence & Automated CV Regression Gates)**.
 
 Completed capabilities:
 
@@ -395,7 +396,7 @@ Completed capabilities:
   - **Zone & line activity stats search:** `uv run --locked python -m event_intelligence.search --db outputs/runs/<run_id>/intelligence.db --zone-stats --line-stats`
   - **Camera filtering:** `uv run --locked python -m event_intelligence.search --db outputs/runs/<run_id>/intelligence.db --camera entrance --tracks --json`
   - **Evaluation benchmark CLI:** `uv run --locked python -m event_intelligence.evaluation --help`
-  - **Multi-run comparison & baseline trends CLI:** `uv run --locked python -m event_intelligence.compare --baseline outputs/runs/<run_a> --candidate outputs/runs/<run_b> --output-dir outputs/comparisons/<diff_id>` and `--runs-root outputs/runs` (emits `comparison_report.md`, `heatmap_diff.png`, and `trends_report.md`)
+  - **Multi-run comparison & regression gates CLI:** `uv run --locked python -m event_intelligence.compare --baseline outputs/runs/<run_a> --candidate outputs/runs/<run_b> --policy configs/regression_policy.yaml --fail-on-regression --output-dir outputs/comparisons/<diff_id>` and `--runs-root outputs/runs` (emits `comparison_report.md`, `heatmap_diff.png`, `zone_deltas.csv`, `line_deltas.csv`, `temporal_deltas.csv`, `trends_report.md`, `runs_catalog.csv`, and `baseline_anomalies.csv`)
   - **Surveillance Intelligence Report:** Automatically generates `intelligence_report.md` with executive metrics, high/critical security alerts, and clickable snapshot, video clip, and storyboard evidence links.
 
 Next recommended step:
