@@ -304,6 +304,7 @@ class RunComparisonReport:
     insight_deltas: list[InsightTypeDelta] = field(default_factory=list)
     temporal_deltas: list[TemporalBucketDelta] = field(default_factory=list)
     spatial_shift: SpatialShiftSummary | None = None
+    regression_gate: RegressionGateResult | None = None
 
     @property
     def kpi_deltas(self) -> dict[str, int | float]:
@@ -337,6 +338,11 @@ class RunComparisonReport:
             "temporal_deltas": [t.to_dict() for t in self.temporal_deltas],
             "spatial_shift": (
                 self.spatial_shift.to_dict() if self.spatial_shift is not None else None
+            ),
+            "regression_gate": (
+                self.regression_gate.to_dict()
+                if self.regression_gate is not None
+                else None
             ),
         }
 
