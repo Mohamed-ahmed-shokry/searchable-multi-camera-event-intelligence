@@ -337,7 +337,7 @@ def write_trends_artifacts(
     report: MultiRunTrendReport,
     output_dir: Path | str,
 ) -> tuple[Path, Path]:
-    """Write trends_report.json and trends_report.md into output_dir."""
+    """Write trends_report.json, trends_report.md, runs_catalog.csv, and baseline_anomalies.csv."""
     out = Path(output_dir)
     out.mkdir(parents=True, exist_ok=True)
     json_path = out / "trends_report.json"
@@ -348,4 +348,47 @@ def write_trends_artifacts(
     md_path.write_text(
         generate_trends_markdown(report).strip() + "\n", encoding="utf-8"
     )
+
+    with (out / "runs_catalog.csv").open("w", encoding="utf-8", newline="") as handle:
+        writer = csv.DictWriter(
+            handle,
+            fieldnames=[
+                "run_id",
+                "run_dir",
+                "cameras_count",
+                "detections_count",
+                "tracks_count",
+                "trajectories_count",
+                "events_count",
+                "insights_count",
+                "high_critical_insights_count",
+                "total_dwell_seconds",
+                "mean_track_duration_seconds",
+                "mean_path_length_px",
+            ],
+            extrasaction="ignore",
+        )
+        writer.writeheader()
+        for r in report.runs:
+            writer.writerow(r.to_dict())
+
+    with (out / "baseline_anomalies.csv").open(
+        "w", encoding="utf-8", newline=""
+    ) as handle:
+        writer = csv.DictWriter(
+            handle,
+            fieldnames=[
+                "run_id",
+                "metric_name",
+                "value",
+                "baseline_mean",
+                "baseline_std",
+                "z_score",
+                "direction",
+            ],
+        )
+        writer.writeheader()
+        for an in report.anomalies:
+            writer.writerow(an.to_dict())
+
     return json_path, md_path
