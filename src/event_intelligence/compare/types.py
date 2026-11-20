@@ -393,3 +393,108 @@ class MultiRunTrendReport:
             },
             "anomalies": [a.to_dict() for a in self.anomalies],
         }
+
+
+@dataclass(frozen=True, slots=True)
+class RegressionPolicy:
+    """Configurable thresholds for automated CI/CV run regression gating."""
+
+    max_tracks_drop_pct: float | None = 25.0
+    max_events_drop_pct: float | None = 25.0
+    max_dwell_drop_pct: float | None = 30.0
+    max_high_critical_insights_increase: int | None = 3
+    max_spatial_shift_mean_abs: float | None = 0.25
+    min_detections_ratio: float | None = 0.75
+    allow_config_drift: bool = True
+
+    def __post_init__(self) -> None:
+        for name, val in (
+            ("max_tracks_drop_pct", self.max_tracks_drop_pct),
+            ("max_events_drop_pct", self.max_events_drop_pct),
+            ("max_dwell_drop_pct", self.max_dwell_drop_pct),
+        ):
+            if val is not None and not (0.0 <= val <= 100.0):
+                raise ValueError(f"{name} must be in [0.0, 100.0], got {val}")
+        if (
+            self.max_high_critical_insights_increase is not None
+            and self.max_high_critical_insights_increase < 0
+        ):
+            raise ValueError("max_high_critical_insights_increase must be >= 0")
+        if (
+            self.max_spatial_shift_mean_abs is not None
+            and self.max_spatial_shift_mean_abs < 0.0
+        ):
+            raise ValueError("max_spatial_shift_mean_abs must be >= 0.0")
+        if self.min_detections_ratio is not None and self.min_detections_ratio < 0.0:
+            raise ValueError("min_detections_ratio must be >= 0.0")
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "max_tracks_drop_pct": self.max_tracks_drop_pct,
+            "max_events_drop_pct": self.max_events_drop_pct,
+            "max_dwell_drop_pct": self.max_dwell_drop_pct,
+            "max_high_critical_insights_increase": self.max_high_critical_insights_increase,
+            "max_spatial_shift_mean_abs": self.max_spatial_shift_mean_abs,
+            "min_detections_ratio": self.min_detections_ratio,
+            "allow_config_drift": self.allow_config_drift,
+        }
+
+
+@dataclass(frozen=True, slots=True)
+class RegressionViolation:
+    """Single rule violation detected by evaluate_regression_gate."""
+
+    rule_name: str
+    severity: str
+    metric_name: str
+    baseline_value: float
+    candidate_value: float
+    threshold: float
+    message: str
+
+    def __post_init__(self) -> None:
+        if not self.rule_name.strip():
+            raise ValueError("rule_name must be non-empty")
+        if self.severity not in {"error", "warning"}:
+            raise ValueError(
+                f"severity must be 'error' or 'warning', got {self.severity!r}"
+            )
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "rule_name": self.rule_name,
+            "severity": self.severity,
+            "metric_name": self.metric_name,
+            "baseline_value": round(self.baseline_value, 4),
+            "candidate_value": round(self.candidate_value, 4),
+            "threshold": round(self.threshold, 4),
+            "message": self.message,
+        }
+
+
+@dataclass(frozen=True, slots=True)
+class RegressionGateResult:
+    """Outcome of evaluating a RunComparisonReport against a RegressionPolicy."""
+
+    passed: bool
+    policy: RegressionPolicy
+    checks_evaluated: int
+    violations: list[RegressionViolation] = field(default_factory=list)
+
+    @property
+    def error_count(self) -> int:
+        return sum(1 for v in self.violations if v.severity == "error")
+
+    @property
+    def warning_count(self) -> int:
+        return sum(1 for v in self.violations if v.severity == "warning")
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "passed": self.passed,
+            "checks_evaluated": self.checks_evaluated,
+            "error_count": self.error_count,
+            "warning_count": self.warning_count,
+            "policy": self.policy.to_dict(),
+            "violations": [v.to_dict() for v in self.violations],
+        }
