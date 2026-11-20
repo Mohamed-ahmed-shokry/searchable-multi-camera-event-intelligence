@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import csv
 import json
 from pathlib import Path
 
@@ -185,7 +186,7 @@ def write_comparison_artifacts(
     report: RunComparisonReport,
     output_dir: Path | str,
 ) -> tuple[Path, Path]:
-    """Write comparison_report.json and comparison_report.md into output_dir."""
+    """Write comparison_report.json, comparison_report.md, and delta CSV tables into output_dir."""
     out = Path(output_dir)
     out.mkdir(parents=True, exist_ok=True)
     json_path = out / "comparison_report.json"
@@ -196,6 +197,76 @@ def write_comparison_artifacts(
     md_path.write_text(
         generate_comparison_markdown(report).strip() + "\n", encoding="utf-8"
     )
+
+    with (out / "zone_deltas.csv").open("w", encoding="utf-8", newline="") as handle:
+        writer = csv.DictWriter(
+            handle,
+            fieldnames=[
+                "camera_id",
+                "zone_id",
+                "baseline_entries",
+                "candidate_entries",
+                "delta_entries",
+                "baseline_exits",
+                "candidate_exits",
+                "delta_exits",
+                "baseline_dwell_seconds",
+                "candidate_dwell_seconds",
+                "delta_dwell_seconds",
+                "baseline_peak_occupancy",
+                "candidate_peak_occupancy",
+                "delta_peak_occupancy",
+            ],
+        )
+        writer.writeheader()
+        for z in report.zone_deltas:
+            writer.writerow(z.to_dict())
+
+    with (out / "line_deltas.csv").open("w", encoding="utf-8", newline="") as handle:
+        writer = csv.DictWriter(
+            handle,
+            fieldnames=[
+                "camera_id",
+                "line_id",
+                "baseline_ab",
+                "candidate_ab",
+                "delta_ab",
+                "baseline_ba",
+                "candidate_ba",
+                "delta_ba",
+                "baseline_total",
+                "candidate_total",
+                "delta_total",
+            ],
+        )
+        writer.writeheader()
+        for ln in report.line_deltas:
+            writer.writerow(ln.to_dict())
+
+    with (out / "temporal_deltas.csv").open(
+        "w", encoding="utf-8", newline=""
+    ) as handle:
+        writer = csv.DictWriter(
+            handle,
+            fieldnames=[
+                "bucket_index",
+                "start_time",
+                "end_time",
+                "baseline_active_tracks",
+                "candidate_active_tracks",
+                "delta_active_tracks",
+                "baseline_events",
+                "candidate_events",
+                "delta_events",
+                "baseline_insights",
+                "candidate_insights",
+                "delta_insights",
+            ],
+        )
+        writer.writeheader()
+        for tb in report.temporal_deltas:
+            writer.writerow(tb.to_dict())
+
     return json_path, md_path
 
 
