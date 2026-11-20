@@ -2286,7 +2286,7 @@ uv run --locked python -m event_intelligence.compare --runs-root outputs/runs --
 
 ---
 
-## Phase: 11i — True Camera Metadata Persistence, Automated CV Regression Gates & CSV Comparison Exports (2026-11-20)
+## Completed Phase: 11i — True Camera Metadata Persistence, Automated CV Regression Gates & CSV Comparison Exports (2026-11-20)
 
 ### Objective
 
@@ -2314,13 +2314,13 @@ Close camera metadata persistence gaps in `intelligence.db`, add a CI-ready **Au
 
 | # | Criterion | Status | Evidence |
 |---|-----------|--------|----------|
-| 1 | `run_pipeline` and `run_multi_camera_pipeline` persist true video `fps`, `width`, `height`, `total_frames`, and UTC `created_at` in SQLite `cameras` table | ⏳ | Pending |
-| 2 | `query_cameras` and `event_intelligence.search --cameras` return accurate camera metadata in JSON and text formats | ⏳ | Pending |
-| 3 | `RegressionPolicy`, `load_regression_policy`, `save_regression_policy`, and `configs/regression_policy.yaml` validate and round-trip cleanly | ⏳ | Pending |
-| 4 | `evaluate_regression_gate` accurately evaluates all policy rules (tracks/events/dwell drop %, high/critical insight spike, spatial shift, detections ratio, config drift) | ⏳ | Pending |
-| 5 | `python -m event_intelligence.compare --policy <yaml> --fail-on-regression` returns exit `0` on pass and exit `2` on violation, and renders the gate section in `comparison_report.md` | ⏳ | Pending |
-| 6 | `write_comparison_artifacts` and `write_trends_artifacts` export structured CSV tables (`zone_deltas.csv`, `line_deltas.csv`, `temporal_deltas.csv`, `runs_catalog.csv`, `baseline_anomalies.csv`) | ⏳ | Pending |
-| 7 | All local CI-parity checks (`uv sync --locked`, `ruff check .`, `ruff format --check .`, `pytest -v`) and remote GitHub Actions CI workflow runs pass 100% | ⏳ | Pending |
+| 1 | `run_pipeline` and `run_multi_camera_pipeline` persist true video `fps`, `width`, `height`, `total_frames`, and UTC `created_at` in SQLite `cameras` table | ✅ | `176714b`, verified by `test_run_pipeline_persists_true_camera_metadata_in_sqlite` (`f31ea80`) and real run `phase11i_verify` (`768x432 @ 12.0 fps, 45 frames`) |
+| 2 | `query_cameras` and `event_intelligence.search --cameras` return accurate camera metadata in JSON and text formats | ✅ | `6a2a9bc`, `025ea62`, `80a4cd8`, verified by `test_query_cameras_returns_metadata_and_filters` (`50ca043`), `test_cli_cameras_flag_json_and_text` (`4f53cae`), and real CLI `--cameras --json` |
+| 3 | `RegressionPolicy`, `load_regression_policy`, `save_regression_policy`, and `configs/regression_policy.yaml` validate and round-trip cleanly | ✅ | `dcb9396`, `1716005`, `7656c97`, verified by `test_regression_policy_yaml_and_evaluate_regression_gate` (`fe37408`) |
+| 4 | `evaluate_regression_gate` accurately evaluates all policy rules (tracks/events/dwell drop %, high/critical insight spike, spatial shift, detections ratio, config drift) | ✅ | `e13bcc5`, `27ecd9f`, verified across all 7 rules in `test_regression_policy_yaml_and_evaluate_regression_gate` (`fe37408`) |
+| 5 | `python -m event_intelligence.compare --policy <yaml> --fail-on-regression` returns exit `0` on pass and exit `2` on violation, and renders the gate section in `comparison_report.md` | ✅ | `8e25c63`, `e5d156f`, verified by `test_cli_policy_and_fail_on_regression_exit_codes` (`78c8aa8`) and real CLI runs (`pass_gate_exit=0`, `fail_gate_exit=2`) |
+| 6 | `write_comparison_artifacts` and `write_trends_artifacts` export structured CSV tables (`zone_deltas.csv`, `line_deltas.csv`, `temporal_deltas.csv`, `runs_catalog.csv`, `baseline_anomalies.csv`) | ✅ | `beef583`, `28da692`, verified by `test_regression_gate_markdown_and_csv_artifact_exports` (`3517f78`) and `outputs/comparisons/verify_11i/` |
+| 7 | All local CI-parity checks (`uv sync --locked`, `ruff check .`, `ruff format --check .`, `pytest -v`) and remote GitHub Actions CI workflow runs pass 100% | ✅ | `252 passed, 56 subtests passed`, `ruff check .` (0 errors), `ruff format --check .` (118 files clean), remote CI runs `44662664978`, `44662842429`, `44663098854`, `44663300384` green |
 
 ### Validation & CI Plan
 
@@ -2340,30 +2340,52 @@ uv run --locked python -m event_intelligence.compare --baseline outputs/runs/pha
 
 ### Micro-Task Breakdown
 
-- [x] 1. `docs(roadmap): define Phase 11i camera metadata persistence and regression gates scope`
-- [ ] 2. `fix(pipeline): persist true CameraMetadata fps, dimensions, frame count, and UTC timestamp in intelligence.db`
-- [ ] 3. `test(pipeline): verify run_pipeline persists true video CameraMetadata in intelligence.db`
-- [ ] 4. `feat(storage): implement query_cameras for SQLite camera registry inspection`
-- [ ] 5. `test(storage): add unit tests for query_cameras`
-- [ ] 6. `feat(storage): export query_cameras in storage and search modules`
-- [ ] 7. `feat(search): add --cameras CLI flag and handler in search_events`
-- [ ] 8. `test(search): add CLI integration tests for --cameras flag`
-- [ ] 9. `types(compare): add RegressionPolicy, RegressionViolation, and RegressionGateResult dataclasses`
-- [ ] 10. `types(compare): attach optional regression_gate field to RunComparisonReport`
-- [ ] 11. `feat(compare): implement load_regression_policy and save_regression_policy YAML helpers`
-- [ ] 12. `feat(config): add default configs/regression_policy.yaml for automated CV regression gates`
-- [ ] 13. `feat(compare): implement evaluate_regression_gate rule evaluator in engine.py`
-- [ ] 14. `test(compare): add unit tests for RegressionPolicy YAML I/O and evaluate_regression_gate`
-- [ ] 15. `feat(compare): wire optional policy evaluation into compare_runs orchestrator`
-- [ ] 16. `feat(compare): render Automated Regression Gate section in generate_comparison_markdown`
-- [ ] 17. `feat(compare): export zone_deltas.csv, line_deltas.csv, and temporal_deltas.csv in write_comparison_artifacts`
-- [ ] 18. `feat(compare): export runs_catalog.csv and baseline_anomalies.csv in write_trends_artifacts`
-- [ ] 19. `test(compare): add unit tests for regression gate Markdown rendering and CSV artifact exports`
-- [ ] 20. `feat(compare): export regression gate types and functions in compare/__init__.py`
-- [ ] 21. `feat(compare): add --policy and --fail-on-regression flags to compare CLI`
-- [ ] 22. `test(compare): add CLI integration tests for --policy and --fail-on-regression exit codes`
-- [ ] 23. `docs(readme): document --cameras search flag, regression gates, and CSV comparison exports`
-- [ ] 24. `docs(roadmap): complete Phase 11i criteria, decision log, and CI log`
+- [x] 1. `docs(roadmap): define Phase 11i camera metadata persistence and regression gates scope` (`c4aa83d`)
+- [x] 2. `fix(pipeline): persist true CameraMetadata fps, dimensions, frame count, and UTC timestamp in intelligence.db` (`176714b`)
+- [x] 3. `test(pipeline): verify run_pipeline persists true video CameraMetadata in intelligence.db` (`f31ea80`)
+- [x] 4. `feat(storage): implement query_cameras for SQLite camera registry inspection` (`6a2a9bc`)
+- [x] 5. `test(storage): add unit tests for query_cameras` (`50ca043`)
+- [x] 6. `feat(storage): export query_cameras in storage and search modules` (`025ea62`)
+- [x] 7. `feat(search): add --cameras CLI flag and handler in search_events` (`80a4cd8`)
+- [x] 8. `test(search): add CLI integration tests for --cameras flag` (`4f53cae`)
+- [x] 9. `types(compare): add RegressionPolicy, RegressionViolation, and RegressionGateResult dataclasses` (`dcb9396`)
+- [x] 10. `types(compare): attach optional regression_gate field to RunComparisonReport` (`06fe858`)
+- [x] 11. `feat(compare): implement load_regression_policy and save_regression_policy YAML helpers` (`1716005`)
+- [x] 12. `feat(config): add default configs/regression_policy.yaml for automated CV regression gates` (`7656c97`)
+- [x] 13. `feat(compare): implement evaluate_regression_gate rule evaluator in engine.py` (`e13bcc5`)
+- [x] 14. `test(compare): add unit tests for RegressionPolicy YAML I/O and evaluate_regression_gate` (`fe37408`)
+- [x] 15. `feat(compare): wire optional policy evaluation into compare_runs orchestrator` (`27ecd9f`)
+- [x] 16. `feat(compare): render Automated Regression Gate section in generate_comparison_markdown` (`8e25c63`)
+- [x] 17. `feat(compare): export zone_deltas.csv, line_deltas.csv, and temporal_deltas.csv in write_comparison_artifacts` (`beef583`)
+- [x] 18. `feat(compare): export runs_catalog.csv and baseline_anomalies.csv in write_trends_artifacts` (`28da692`)
+- [x] 19. `test(compare): add unit tests for regression gate Markdown rendering and CSV artifact exports` (`3517f78`)
+- [x] 20. `feat(compare): export regression gate types and functions in compare/__init__.py` (`03e5afa`)
+- [x] 21. `feat(compare): add --policy and --fail-on-regression flags to compare CLI` (`e5d156f`)
+- [x] 22. `test(compare): add CLI integration tests for --policy and --fail-on-regression exit codes` (`78c8aa8`)
+- [x] 23. `docs(readme): document --cameras search flag, regression gates, and CSV comparison exports` (`d5b9bc6`)
+- [x] 24. `docs(roadmap): complete Phase 11i criteria, decision log, and CI log`
+
+### Decision Log (Phase 11i)
+
+| Decision | Options Considered | Chosen & Rationale |
+|----------|-------------------|--------------------|
+| Non-Zero Exit Code for `--fail-on-regression` | (a) Exit `1` (same as generic runtime/argparse errors); (b) Exit `2` specifically for regression gate policy failure | **(b) Exit code `2`** — distinguishes an intentional CI policy violation from unexpected Python exceptions (`1`) while remaining standard non-zero for CI shell checks. |
+| Optional Rule Disabling in `RegressionPolicy` | (a) Require every threshold to be numeric; (b) Allow `None` on numeric thresholds so teams can selectively enable only desired gates in YAML | **(b) Nullable (`float \| None`) thresholds** — lets users disable individual rules in `regression_policy.yaml` cleanly without magic sentinel values like `-1` or `999999`. |
+| CSV Artifact Emission Scope | (a) Add a separate `--csv` flag; (b) Always emit `zone_deltas.csv`, `line_deltas.csv`, `temporal_deltas.csv` (pairwise) and `runs_catalog.csv`, `baseline_anomalies.csv` (trends) whenever `--output-dir` is specified | **(b) Emit automatically with `--output-dir`** — keeps the output directory contract consistent with `run_pipeline` where JSON, Markdown, and CSV artifacts are always produced together. |
+| Base Branch for Phase 11i | (a) Branch from `origin/main` (missing PR #17 merged into `phase/11g`); (b) Branch from `origin/phase/11g-temporal-analytics-and-incident-bundling` (`515ad77`, which contains all of `main` + 11g + 11h) | **(b) Branch from `515ad77`** — preserves Phase 11h (`event_intelligence.compare`) as the clean foundation for Phase 11i with zero merge conflicts against `main`. |
+
+### CI & Validation Log (Phase 11i)
+
+| Command | Result | Notes |
+|---------|--------|-------|
+| `uv sync --locked` | ✅ exit 0 | clean locked environment (`152 packages`) |
+| `uv run --locked ruff check .` | ✅ `All checks passed!` | repo-wide lint gate (118 files clean) |
+| `uv run --locked ruff format --check .` | ✅ `118 files already formatted` | repo-wide format gate |
+| `uv run --locked pytest -q` | ✅ `252 passed, 56 subtests passed` | full test suite across 19 test files (`6` new tests added) |
+| `uv run --locked python -m event_intelligence.pipeline --video data/fallback_clips/people-detection.mp4 --config configs/pipeline.yaml --run-id phase11i_verify --max-frames 45 --no-video --json` | ✅ exit 0 | persisted true camera metadata (`768x432 @ 12.0 fps, 45 frames`, UTC `created_at`) |
+| `uv run --locked python -m event_intelligence.search --db outputs/runs/phase11i_verify/intelligence.db --cameras --json` | ✅ exit 0 | verified true camera metadata returned from SQLite |
+| `uv run --locked python -m event_intelligence.compare --baseline outputs/runs/phase11g_verify --candidate outputs/runs/phase11i_verify --policy configs/regression_policy.yaml --fail-on-regression --output-dir outputs/comparisons/verify_11i` | ✅ exit 0 (`PASS`) | 6 checks evaluated, 0 errors; wrote JSON, Markdown, `heatmap_diff.png`, and 3 delta CSVs |
+| `uv run --locked python -m event_intelligence.compare --baseline outputs/runs/phase11g_verify --candidate outputs/runs/phase11f_verify --policy configs/regression_policy.yaml --fail-on-regression --no-heatmap-diff` | ✅ exit 2 (`FAIL`) | verified automated regression gate catches 3 errors (`max_events_drop_pct`, `max_dwell_drop_pct`, `min_detections_ratio`) |
 
 
 
