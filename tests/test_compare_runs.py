@@ -913,6 +913,89 @@ class TestCompareEngine(unittest.TestCase):
                     len(csv_file.read_text(encoding="utf-8").splitlines()), 2
                 )
 
+    def test_cli_policy_and_fail_on_regression_exit_codes(self) -> None:
+        from event_intelligence.compare import RegressionPolicy, save_regression_policy
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            root = Path(tmpdir)
+            run_base = _create_synthetic_run(
+                root / "run_base",
+                trajectories_rows=[
+                    (1, 0, 0.0, 50.0, 50.0),
+                    (2, 1, 1.0, 60.0, 60.0),
+                ],
+                events_rows=[
+                    ("e1", "dwell_time_event", 1, "lobby", 0.0, 5.0, 5.0),
+                    ("e2", "dwell_time_event", 2, "lobby", 1.0, 6.0, 5.0),
+                ],
+                run_config={"confidence_threshold": 0.4},
+            )
+            run_good = _create_synthetic_run(
+                root / "run_good",
+                trajectories_rows=[
+                    (1, 0, 0.0, 50.0, 50.0),
+                    (2, 1, 1.0, 60.0, 60.0),
+                ],
+                events_rows=[
+                    ("e1", "dwell_time_event", 1, "lobby", 0.0, 5.0, 5.0),
+                    ("e2", "dwell_time_event", 2, "lobby", 1.0, 6.0, 5.0),
+                ],
+                run_config={"confidence_threshold": 0.4},
+            )
+            run_regressed = _create_synthetic_run(
+                root / "run_regressed",
+                trajectories_rows=[(1, 0, 0.0, 50.0, 50.0)],
+                events_rows=[],
+                run_config={"confidence_threshold": 0.8},
+            )
+
+            pol_path = save_regression_policy(
+                RegressionPolicy(
+                    max_tracks_drop_pct=20.0,
+                    max_events_drop_pct=20.0,
+                    allow_config_drift=False,
+                ),
+                root / "strict_policy.yaml",
+            )
+
+            # Passing gate -> exit 0
+            buf_pass = io.StringIO()
+            with redirect_stdout(buf_pass):
+                rc_pass = compare_main(
+                    [
+                        "--baseline",
+                        str(run_base),
+                        "--candidate",
+                        str(run_good),
+                        "--policy",
+                        str(pol_path),
+                        "--fail-on-regression",
+                        "--no-heatmap-diff",
+                        "--json",
+                    ]
+                )
+            self.assertEqual(rc_pass, 0)
+            pass_payload = json.loads(buf_pass.getvalue())
+            self.assertTrue(pass_payload["regression_gate"]["passed"])
+
+            # Failing gate -> exit 2
+            buf_fail = io.StringIO()
+            with redirect_stdout(buf_fail):
+                rc_fail = compare_main(
+                    [
+                        "--baseline",
+                        str(run_base),
+                        "--candidate",
+                        str(run_regressed),
+                        "--policy",
+                        str(pol_path),
+                        "--fail-on-regression",
+                        "--no-heatmap-diff",
+                    ]
+                )
+            self.assertEqual(rc_fail, 2)
+            self.assertIn("Regression Gate: FAIL", buf_fail.getvalue())
+
 
 if __name__ == "__main__":
     unittest.main()
