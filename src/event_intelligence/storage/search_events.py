@@ -1380,6 +1380,43 @@ def query_tracks(
     return results
 
 
+def query_cameras(
+    db_path: Path | str,
+    *,
+    camera_id: str | None = None,
+) -> list[CameraMetadata]:
+    """Query registered camera stream metadata (resolution, fps, total frames, timestamp) from intelligence.db."""
+    path = Path(db_path)
+    if not path.is_file():
+        raise FileNotFoundError(f"SQLite database not found: {path}")
+
+    clauses: list[str] = []
+    params: list[Any] = []
+    if camera_id is not None and camera_id.strip():
+        clauses.append("camera_id = ?")
+        params.append(camera_id.strip())
+    where_sql = f"WHERE {' AND '.join(clauses)}" if clauses else ""
+    sql = (
+        "SELECT camera_id, source_name, fps, width, height, total_frames, created_at "
+        f"FROM cameras {where_sql} ORDER BY camera_id ASC"
+    )
+    results: list[CameraMetadata] = []
+    with closing(sqlite3.connect(path)) as conn:
+        for row in conn.execute(sql, params).fetchall():
+            results.append(
+                CameraMetadata(
+                    camera_id=str(row[0]),
+                    source_name=str(row[1]),
+                    fps=float(row[2]),
+                    width=int(row[3]),
+                    height=int(row[4]),
+                    total_frames=int(row[5]),
+                    created_at=str(row[6] or ""),
+                )
+            )
+    return results
+
+
 def query_camera_summary(
     db_path: Path | str,
 ) -> list[CameraActivitySummary]:
