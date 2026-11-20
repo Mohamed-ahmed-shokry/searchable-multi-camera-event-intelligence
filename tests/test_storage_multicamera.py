@@ -776,6 +776,74 @@ class TestMultiCameraStorage(unittest.TestCase):
             with self.assertRaises(KeyError):
                 export_incident_bundle(db_path, "nonexistent_id", tmp / "bundle_bad")
 
+    def test_query_cameras_returns_metadata_and_filters(self) -> None:
+        from event_intelligence.storage.search_events import (
+            CameraMetadata,
+            ingest_multi_camera_intelligence_db,
+            query_cameras,
+        )
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            tmp = Path(tmpdir)
+            db_path = tmp / "intelligence.db"
+            cfg_a = SearchConfig(
+                source_name="entrance.mp4",
+                camera_id="entrance",
+                detections_csv="",
+                tracks_csv="",
+                tracking_summary_csv="",
+                trajectories_csv="",
+                trajectory_summary_csv="",
+                events_csv="",
+                zone_counts_csv="",
+                line_counts_csv="",
+            )
+            cfg_b = SearchConfig(
+                source_name="lobby.mp4",
+                camera_id="lobby",
+                detections_csv="",
+                tracks_csv="",
+                tracking_summary_csv="",
+                trajectories_csv="",
+                trajectory_summary_csv="",
+                events_csv="",
+                zone_counts_csv="",
+                line_counts_csv="",
+            )
+            ingest_multi_camera_intelligence_db(
+                db_path,
+                [cfg_a, cfg_b],
+                project_root=tmp,
+                cameras_metadata=[
+                    CameraMetadata(
+                        camera_id="entrance",
+                        source_name="entrance.mp4",
+                        fps=12.0,
+                        width=768,
+                        height=432,
+                        total_frames=596,
+                        created_at="2026-11-20T00:00:00+00:00",
+                    ),
+                    CameraMetadata(
+                        camera_id="lobby",
+                        source_name="lobby.mp4",
+                        fps=25.0,
+                        width=1280,
+                        height=720,
+                        total_frames=300,
+                        created_at="2026-11-20T00:00:01+00:00",
+                    ),
+                ],
+            )
+            all_cams = query_cameras(db_path)
+            self.assertEqual([c.camera_id for c in all_cams], ["entrance", "lobby"])
+            self.assertEqual((all_cams[0].width, all_cams[0].height), (768, 432))
+            self.assertEqual(all_cams[0].fps, 12.0)
+
+            only_lobby = query_cameras(db_path, camera_id="lobby")
+            self.assertEqual(len(only_lobby), 1)
+            self.assertEqual(only_lobby[0].total_frames, 300)
+
 
 if __name__ == "__main__":
     unittest.main()
