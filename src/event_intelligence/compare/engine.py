@@ -24,6 +24,7 @@ from event_intelligence.compare.types import (
     InsightTypeDelta,
     LineMetricDelta,
     MultiRunTrendReport,
+    RegressionPolicy,
     RunBaselineAnomaly,
     RunComparisonReport,
     RunSnapshot,
@@ -734,3 +735,67 @@ def compare_runs(
     if out_path is not None:
         write_comparison_artifacts(report, out_path)
     return report
+
+
+def load_regression_policy(path: Path | str | None = None) -> RegressionPolicy:
+    """Load a RegressionPolicy from a YAML file, or return defaults if None."""
+    if path is None:
+        return RegressionPolicy()
+    policy_path = Path(path)
+    if not policy_path.is_file():
+        raise FileNotFoundError(f"Regression policy file not found: {policy_path}")
+    raw = yaml.safe_load(policy_path.read_text(encoding="utf-8"))
+    if raw is None:
+        return RegressionPolicy()
+    if not isinstance(raw, dict):
+        raise TypeError("Regression policy YAML root must be a mapping")
+
+    defaults = RegressionPolicy()
+
+    def _opt_float(key: str, default: float | None) -> float | None:
+        if key not in raw:
+            return default
+        val = raw[key]
+        return float(val) if val is not None else None
+
+    def _opt_int(key: str, default: int | None) -> int | None:
+        if key not in raw:
+            return default
+        val = raw[key]
+        return int(val) if val is not None else None
+
+    return RegressionPolicy(
+        max_tracks_drop_pct=_opt_float(
+            "max_tracks_drop_pct", defaults.max_tracks_drop_pct
+        ),
+        max_events_drop_pct=_opt_float(
+            "max_events_drop_pct", defaults.max_events_drop_pct
+        ),
+        max_dwell_drop_pct=_opt_float(
+            "max_dwell_drop_pct", defaults.max_dwell_drop_pct
+        ),
+        max_high_critical_insights_increase=_opt_int(
+            "max_high_critical_insights_increase",
+            defaults.max_high_critical_insights_increase,
+        ),
+        max_spatial_shift_mean_abs=_opt_float(
+            "max_spatial_shift_mean_abs", defaults.max_spatial_shift_mean_abs
+        ),
+        min_detections_ratio=_opt_float(
+            "min_detections_ratio", defaults.min_detections_ratio
+        ),
+        allow_config_drift=bool(
+            raw.get("allow_config_drift", defaults.allow_config_drift)
+        ),
+    )
+
+
+def save_regression_policy(policy: RegressionPolicy, path: Path | str) -> Path:
+    """Serialize a RegressionPolicy to YAML."""
+    out_path = Path(path)
+    out_path.parent.mkdir(parents=True, exist_ok=True)
+    out_path.write_text(
+        yaml.safe_dump(policy.to_dict(), sort_keys=False),
+        encoding="utf-8",
+    )
+    return out_path
