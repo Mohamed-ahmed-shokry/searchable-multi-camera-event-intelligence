@@ -2835,6 +2835,11 @@ def build_parser() -> argparse.ArgumentParser:
         help="Query activity breakdown grouped by registered camera stream.",
     )
     parser.add_argument(
+        "--cameras",
+        action="store_true",
+        help="List registered camera metadata (resolution, fps, total frames, timestamp).",
+    )
+    parser.add_argument(
         "--evidence-event-id",
         type=str,
         default=None,
@@ -2972,6 +2977,21 @@ def main(argv: list[str] | None = None) -> int:
             return 0
 
     db_path = args.db if args.db is not None else (args.output_dir / "intelligence.db")
+
+    if args.cameras:
+        cams = query_cameras(db_path, camera_id=args.camera_id)
+        if args.json:
+            print(json.dumps([c.to_dict() for c in cams], indent=2))
+        else:
+            print(f"=== Registered Cameras ({len(cams)}) ===")
+            for c in cams:
+                ts_label = f" created_at={c.created_at}" if c.created_at else ""
+                print(
+                    f"  [{c.camera_id}] source={c.source_name} "
+                    f"{c.width}x{c.height} @ {c.fps:.2f} fps "
+                    f"({c.total_frames} frames){ts_label}"
+                )
+        return 0
 
     if args.camera_summary:
         summaries = query_camera_summary(db_path)
