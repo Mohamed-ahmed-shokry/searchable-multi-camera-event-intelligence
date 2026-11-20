@@ -684,6 +684,7 @@ def compare_runs(
     render_heatmap_diff: bool = True,
     grid_bin_size_px: int = 16,
     gaussian_sigma_px: float = 24.0,
+    policy: RegressionPolicy | None = None,
 ) -> RunComparisonReport:
     """Orchestrate a complete pairwise comparison between a baseline run and candidate run."""
     base_snap = load_run_snapshot(baseline_path, camera_id=camera_id)
@@ -734,6 +735,20 @@ def compare_runs(
         temporal_deltas=temporal_deltas,
         spatial_shift=spatial_shift,
     )
+    if policy is not None:
+        gate_res = evaluate_regression_gate(report, policy)
+        report = RunComparisonReport(
+            baseline=report.baseline,
+            candidate=report.candidate,
+            camera_filter=report.camera_filter,
+            config_diffs=report.config_diffs,
+            zone_deltas=report.zone_deltas,
+            line_deltas=report.line_deltas,
+            insight_deltas=report.insight_deltas,
+            temporal_deltas=report.temporal_deltas,
+            spatial_shift=report.spatial_shift,
+            regression_gate=gate_res,
+        )
     if out_path is not None:
         write_comparison_artifacts(report, out_path)
     return report
