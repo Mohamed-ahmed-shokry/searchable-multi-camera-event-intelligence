@@ -147,6 +147,37 @@ def generate_comparison_markdown(report: RunComparisonReport) -> str:
             lines.append(f"- **Diff Heatmap:** [{img_name}]({img_name})")
         lines.append("")
 
+    if report.regression_gate is not None:
+        gate = report.regression_gate
+        status_badge = "PASS" if gate.passed else "FAIL"
+        lines.extend(
+            [
+                "## Automated Regression Gate",
+                "",
+                (
+                    f"- **Gate Status:** **`{status_badge}`** "
+                    f"(`{gate.checks_evaluated}` check(s) evaluated, "
+                    f"`{gate.error_count}` error(s), `{gate.warning_count}` warning(s))"
+                ),
+                "",
+            ]
+        )
+        if gate.violations:
+            lines.extend(
+                [
+                    "| Rule | Severity | Metric | Baseline | Candidate | Threshold | Message |",
+                    "| --- | --- | --- | ---: | ---: | ---: | --- |",
+                ]
+            )
+            for v in gate.violations:
+                clean_msg = v.message.replace("|", "/")
+                lines.append(
+                    f"| `{v.rule_name}` | **`{v.severity}`** | `{v.metric_name}` | "
+                    f"{v.baseline_value:.4f} | {v.candidate_value:.4f} | "
+                    f"{v.threshold:.4f} | {clean_msg} |"
+                )
+            lines.append("")
+
     return "\n".join(lines)
 
 
