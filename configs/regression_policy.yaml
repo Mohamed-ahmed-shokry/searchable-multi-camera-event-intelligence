@@ -1,0 +1,9 @@
+# Phase 11i: Automated CV Regression Gate Policy for event_intelligence.compare
+# Used with: python -m event_intelligence.compare --baseline <A> --candidate <B> --policy configs/regression_policy.yaml --fail-on-regression
+max_tracks_drop_pct: 25.0
+max_events_drop_pct: 25.0
+max_dwell_drop_pct: 30.0
+max_high_critical_insights_increase: 3
+max_spatial_shift_mean_abs: 0.25
+min_detections_ratio: 0.75
+allow_config_drift: true

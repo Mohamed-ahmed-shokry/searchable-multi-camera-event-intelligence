@@ -777,6 +777,225 @@ class TestCompareEngine(unittest.TestCase):
             shift = compute_spatial_density_diff(run_a, run_b)
             self.assertEqual((shift.frame_width, shift.frame_height), (768, 432))
 
+    def test_regression_policy_yaml_and_evaluate_regression_gate(self) -> None:
+        from event_intelligence.compare.engine import (
+            evaluate_regression_gate,
+            load_regression_policy,
+            save_regression_policy,
+        )
+        from event_intelligence.compare.types import RegressionPolicy
+
+        with self.assertRaises(ValueError):
+            RegressionPolicy(max_tracks_drop_pct=150.0)
+        with self.assertRaises(ValueError):
+            RegressionPolicy(max_high_critical_insights_increase=-1)
+        with self.assertRaises(ValueError):
+            RegressionPolicy(min_detections_ratio=-0.5)
+
+        pol = RegressionPolicy(
+            max_tracks_drop_pct=20.0,
+            max_events_drop_pct=20.0,
+            max_dwell_drop_pct=25.0,
+            max_high_critical_insights_increase=1,
+            max_spatial_shift_mean_abs=0.15,
+            min_detections_ratio=0.8,
+            allow_config_drift=False,
+        )
+        with tempfile.TemporaryDirectory() as tmpdir:
+            p_path = Path(tmpdir) / "policy.yaml"
+            save_regression_policy(pol, p_path)
+            loaded = load_regression_policy(p_path)
+            self.assertEqual(loaded, pol)
+
+        # Passing report
+        base = RunSnapshot(
+            "base", "/b", "/b/db", 1, 100, 10, 100, 10, 1, 1, 20.0, 2.0, 50.0
+        )
+        good_cand = RunSnapshot(
+            "cand", "/c", "/c/db", 1, 95, 10, 95, 10, 2, 2, 19.0, 2.0, 50.0
+        )
+        good_rep = RunComparisonReport(
+            baseline=base,
+            candidate=good_cand,
+            spatial_shift=SpatialShiftSummary((10, 10), 160, 160, 0.05, 0.1, -0.1),
+        )
+        pass_res = evaluate_regression_gate(good_rep, pol)
+        self.assertTrue(pass_res.passed)
+        self.assertEqual(pass_res.error_count, 0)
+        self.assertEqual(pass_res.checks_evaluated, 7)
+
+        # Failing report triggering all 7 rules
+        bad_cand = RunSnapshot(
+            "bad", "/c", "/c/db", 1, 50, 5, 50, 4, 5, 5, 10.0, 1.0, 20.0
+        )
+        bad_rep = RunComparisonReport(
+            baseline=base,
+            candidate=bad_cand,
+            config_diffs=[ConfigDiffEntry("confidence_threshold", 0.4, 0.7)],
+            spatial_shift=SpatialShiftSummary((10, 10), 160, 160, 0.40, 0.8, -0.8),
+        )
+        fail_res = evaluate_regression_gate(bad_rep, pol)
+        self.assertFalse(fail_res.passed)
+        self.assertEqual(fail_res.error_count, 7)
+        violated_rules = {v.rule_name for v in fail_res.violations}
+        self.assertEqual(
+            violated_rules,
+            {
+                "max_tracks_drop_pct",
+                "max_events_drop_pct",
+                "max_dwell_drop_pct",
+                "max_high_critical_insights_increase",
+                "max_spatial_shift_mean_abs",
+                "min_detections_ratio",
+                "allow_config_drift",
+            },
+        )
+
+    def test_regression_gate_markdown_and_csv_artifact_exports(self) -> None:
+        from event_intelligence.compare.engine import evaluate_regression_gate
+        from event_intelligence.compare.types import RegressionPolicy
+
+        base = RunSnapshot(
+            "run_a", "/a", "/a/db", 1, 100, 10, 100, 10, 0, 0, 20.0, 2.0, 50.0
+        )
+        cand = RunSnapshot(
+            "run_b", "/b", "/b/db", 1, 50, 5, 50, 4, 2, 2, 8.0, 1.5, 40.0
+        )
+        raw_rep = RunComparisonReport(
+            baseline=base,
+            candidate=cand,
+            zone_deltas=[ZoneMetricDelta("cam1", "lobby", 5, 2, 5, 2, 20.0, 8.0, 3, 1)],
+            line_deltas=[LineMetricDelta("cam1", "door", 4, 2, 1, 1, 5, 3)],
+            temporal_deltas=[TemporalBucketDelta(0, 0.0, 5.0, 5, 2, 5, 2, 0, 2)],
+        )
+        gate = evaluate_regression_gate(raw_rep, RegressionPolicy())
+        rep = RunComparisonReport(
+            baseline=base,
+            candidate=cand,
+            zone_deltas=raw_rep.zone_deltas,
+            line_deltas=raw_rep.line_deltas,
+            temporal_deltas=raw_rep.temporal_deltas,
+            regression_gate=gate,
+        )
+        md = generate_comparison_markdown(rep)
+        self.assertIn("## Automated Regression Gate", md)
+        self.assertIn("**`FAIL`**", md)
+        self.assertIn("`max_tracks_drop_pct`", md)
+
+        trends = MultiRunTrendReport(
+            runs=[base, cand],
+            z_score_threshold=1.0,
+            metric_baselines={
+                "events_count": {"mean": 7.0, "std": 3.0, "min": 4.0, "max": 10.0}
+            },
+            anomalies=[
+                RunBaselineAnomaly(
+                    "run_b", "events_count", 4.0, 7.0, 3.0, -1.0, "below"
+                )
+            ],
+        )
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            out = Path(tmpdir)
+            write_comparison_artifacts(rep, out / "comp")
+            for fname in ("zone_deltas.csv", "line_deltas.csv", "temporal_deltas.csv"):
+                csv_file = out / "comp" / fname
+                self.assertTrue(csv_file.is_file(), f"Missing {fname}")
+                self.assertGreaterEqual(
+                    len(csv_file.read_text(encoding="utf-8").splitlines()), 2
+                )
+
+            write_trends_artifacts(trends, out / "trends")
+            for fname in ("runs_catalog.csv", "baseline_anomalies.csv"):
+                csv_file = out / "trends" / fname
+                self.assertTrue(csv_file.is_file(), f"Missing {fname}")
+                self.assertGreaterEqual(
+                    len(csv_file.read_text(encoding="utf-8").splitlines()), 2
+                )
+
+    def test_cli_policy_and_fail_on_regression_exit_codes(self) -> None:
+        from event_intelligence.compare import RegressionPolicy, save_regression_policy
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            root = Path(tmpdir)
+            run_base = _create_synthetic_run(
+                root / "run_base",
+                trajectories_rows=[
+                    (1, 0, 0.0, 50.0, 50.0),
+                    (2, 1, 1.0, 60.0, 60.0),
+                ],
+                events_rows=[
+                    ("e1", "dwell_time_event", 1, "lobby", 0.0, 5.0, 5.0),
+                    ("e2", "dwell_time_event", 2, "lobby", 1.0, 6.0, 5.0),
+                ],
+                run_config={"confidence_threshold": 0.4},
+            )
+            run_good = _create_synthetic_run(
+                root / "run_good",
+                trajectories_rows=[
+                    (1, 0, 0.0, 50.0, 50.0),
+                    (2, 1, 1.0, 60.0, 60.0),
+                ],
+                events_rows=[
+                    ("e1", "dwell_time_event", 1, "lobby", 0.0, 5.0, 5.0),
+                    ("e2", "dwell_time_event", 2, "lobby", 1.0, 6.0, 5.0),
+                ],
+                run_config={"confidence_threshold": 0.4},
+            )
+            run_regressed = _create_synthetic_run(
+                root / "run_regressed",
+                trajectories_rows=[(1, 0, 0.0, 50.0, 50.0)],
+                events_rows=[],
+                run_config={"confidence_threshold": 0.8},
+            )
+
+            pol_path = save_regression_policy(
+                RegressionPolicy(
+                    max_tracks_drop_pct=20.0,
+                    max_events_drop_pct=20.0,
+                    allow_config_drift=False,
+                ),
+                root / "strict_policy.yaml",
+            )
+
+            # Passing gate -> exit 0
+            buf_pass = io.StringIO()
+            with redirect_stdout(buf_pass):
+                rc_pass = compare_main(
+                    [
+                        "--baseline",
+                        str(run_base),
+                        "--candidate",
+                        str(run_good),
+                        "--policy",
+                        str(pol_path),
+                        "--fail-on-regression",
+                        "--no-heatmap-diff",
+                        "--json",
+                    ]
+                )
+            self.assertEqual(rc_pass, 0)
+            pass_payload = json.loads(buf_pass.getvalue())
+            self.assertTrue(pass_payload["regression_gate"]["passed"])
+
+            # Failing gate -> exit 2
+            buf_fail = io.StringIO()
+            with redirect_stdout(buf_fail):
+                rc_fail = compare_main(
+                    [
+                        "--baseline",
+                        str(run_base),
+                        "--candidate",
+                        str(run_regressed),
+                        "--policy",
+                        str(pol_path),
+                        "--fail-on-regression",
+                        "--no-heatmap-diff",
+                    ]
+                )
+            self.assertEqual(rc_fail, 2)
+            self.assertIn("Regression Gate: FAIL", buf_fail.getvalue())
+
 
 if __name__ == "__main__":
     unittest.main()

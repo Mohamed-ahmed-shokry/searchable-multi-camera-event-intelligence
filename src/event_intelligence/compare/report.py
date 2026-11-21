@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import csv
 import json
 from pathlib import Path
 
@@ -147,6 +148,37 @@ def generate_comparison_markdown(report: RunComparisonReport) -> str:
             lines.append(f"- **Diff Heatmap:** [{img_name}]({img_name})")
         lines.append("")
 
+    if report.regression_gate is not None:
+        gate = report.regression_gate
+        status_badge = "PASS" if gate.passed else "FAIL"
+        lines.extend(
+            [
+                "## Automated Regression Gate",
+                "",
+                (
+                    f"- **Gate Status:** **`{status_badge}`** "
+                    f"(`{gate.checks_evaluated}` check(s) evaluated, "
+                    f"`{gate.error_count}` error(s), `{gate.warning_count}` warning(s))"
+                ),
+                "",
+            ]
+        )
+        if gate.violations:
+            lines.extend(
+                [
+                    "| Rule | Severity | Metric | Baseline | Candidate | Threshold | Message |",
+                    "| --- | --- | --- | ---: | ---: | ---: | --- |",
+                ]
+            )
+            for v in gate.violations:
+                clean_msg = v.message.replace("|", "/")
+                lines.append(
+                    f"| `{v.rule_name}` | **`{v.severity}`** | `{v.metric_name}` | "
+                    f"{v.baseline_value:.4f} | {v.candidate_value:.4f} | "
+                    f"{v.threshold:.4f} | {clean_msg} |"
+                )
+            lines.append("")
+
     return "\n".join(lines)
 
 
@@ -154,7 +186,7 @@ def write_comparison_artifacts(
     report: RunComparisonReport,
     output_dir: Path | str,
 ) -> tuple[Path, Path]:
-    """Write comparison_report.json and comparison_report.md into output_dir."""
+    """Write comparison_report.json, comparison_report.md, and delta CSV tables into output_dir."""
     out = Path(output_dir)
     out.mkdir(parents=True, exist_ok=True)
     json_path = out / "comparison_report.json"
@@ -165,6 +197,76 @@ def write_comparison_artifacts(
     md_path.write_text(
         generate_comparison_markdown(report).strip() + "\n", encoding="utf-8"
     )
+
+    with (out / "zone_deltas.csv").open("w", encoding="utf-8", newline="") as handle:
+        writer = csv.DictWriter(
+            handle,
+            fieldnames=[
+                "camera_id",
+                "zone_id",
+                "baseline_entries",
+                "candidate_entries",
+                "delta_entries",
+                "baseline_exits",
+                "candidate_exits",
+                "delta_exits",
+                "baseline_dwell_seconds",
+                "candidate_dwell_seconds",
+                "delta_dwell_seconds",
+                "baseline_peak_occupancy",
+                "candidate_peak_occupancy",
+                "delta_peak_occupancy",
+            ],
+        )
+        writer.writeheader()
+        for z in report.zone_deltas:
+            writer.writerow(z.to_dict())
+
+    with (out / "line_deltas.csv").open("w", encoding="utf-8", newline="") as handle:
+        writer = csv.DictWriter(
+            handle,
+            fieldnames=[
+                "camera_id",
+                "line_id",
+                "baseline_ab",
+                "candidate_ab",
+                "delta_ab",
+                "baseline_ba",
+                "candidate_ba",
+                "delta_ba",
+                "baseline_total",
+                "candidate_total",
+                "delta_total",
+            ],
+        )
+        writer.writeheader()
+        for ln in report.line_deltas:
+            writer.writerow(ln.to_dict())
+
+    with (out / "temporal_deltas.csv").open(
+        "w", encoding="utf-8", newline=""
+    ) as handle:
+        writer = csv.DictWriter(
+            handle,
+            fieldnames=[
+                "bucket_index",
+                "start_time",
+                "end_time",
+                "baseline_active_tracks",
+                "candidate_active_tracks",
+                "delta_active_tracks",
+                "baseline_events",
+                "candidate_events",
+                "delta_events",
+                "baseline_insights",
+                "candidate_insights",
+                "delta_insights",
+            ],
+        )
+        writer.writeheader()
+        for tb in report.temporal_deltas:
+            writer.writerow(tb.to_dict())
+
     return json_path, md_path
 
 
@@ -235,7 +337,7 @@ def write_trends_artifacts(
     report: MultiRunTrendReport,
     output_dir: Path | str,
 ) -> tuple[Path, Path]:
-    """Write trends_report.json and trends_report.md into output_dir."""
+    """Write trends_report.json, trends_report.md, runs_catalog.csv, and baseline_anomalies.csv."""
     out = Path(output_dir)
     out.mkdir(parents=True, exist_ok=True)
     json_path = out / "trends_report.json"
@@ -246,4 +348,47 @@ def write_trends_artifacts(
     md_path.write_text(
         generate_trends_markdown(report).strip() + "\n", encoding="utf-8"
     )
+
+    with (out / "runs_catalog.csv").open("w", encoding="utf-8", newline="") as handle:
+        writer = csv.DictWriter(
+            handle,
+            fieldnames=[
+                "run_id",
+                "run_dir",
+                "cameras_count",
+                "detections_count",
+                "tracks_count",
+                "trajectories_count",
+                "events_count",
+                "insights_count",
+                "high_critical_insights_count",
+                "total_dwell_seconds",
+                "mean_track_duration_seconds",
+                "mean_path_length_px",
+            ],
+            extrasaction="ignore",
+        )
+        writer.writeheader()
+        for r in report.runs:
+            writer.writerow(r.to_dict())
+
+    with (out / "baseline_anomalies.csv").open(
+        "w", encoding="utf-8", newline=""
+    ) as handle:
+        writer = csv.DictWriter(
+            handle,
+            fieldnames=[
+                "run_id",
+                "metric_name",
+                "value",
+                "baseline_mean",
+                "baseline_std",
+                "z_score",
+                "direction",
+            ],
+        )
+        writer.writeheader()
+        for an in report.anomalies:
+            writer.writerow(an.to_dict())
+
     return json_path, md_path

@@ -24,6 +24,9 @@ from event_intelligence.compare.types import (
     InsightTypeDelta,
     LineMetricDelta,
     MultiRunTrendReport,
+    RegressionGateResult,
+    RegressionPolicy,
+    RegressionViolation,
     RunBaselineAnomaly,
     RunComparisonReport,
     RunSnapshot,
@@ -681,6 +684,7 @@ def compare_runs(
     render_heatmap_diff: bool = True,
     grid_bin_size_px: int = 16,
     gaussian_sigma_px: float = 24.0,
+    policy: RegressionPolicy | None = None,
 ) -> RunComparisonReport:
     """Orchestrate a complete pairwise comparison between a baseline run and candidate run."""
     base_snap = load_run_snapshot(baseline_path, camera_id=camera_id)
@@ -731,6 +735,253 @@ def compare_runs(
         temporal_deltas=temporal_deltas,
         spatial_shift=spatial_shift,
     )
+    if policy is not None:
+        gate_res = evaluate_regression_gate(report, policy)
+        report = RunComparisonReport(
+            baseline=report.baseline,
+            candidate=report.candidate,
+            camera_filter=report.camera_filter,
+            config_diffs=report.config_diffs,
+            zone_deltas=report.zone_deltas,
+            line_deltas=report.line_deltas,
+            insight_deltas=report.insight_deltas,
+            temporal_deltas=report.temporal_deltas,
+            spatial_shift=report.spatial_shift,
+            regression_gate=gate_res,
+        )
     if out_path is not None:
         write_comparison_artifacts(report, out_path)
     return report
+
+
+def load_regression_policy(path: Path | str | None = None) -> RegressionPolicy:
+    """Load a RegressionPolicy from a YAML file, or return defaults if None."""
+    if path is None:
+        return RegressionPolicy()
+    policy_path = Path(path)
+    if not policy_path.is_file():
+        raise FileNotFoundError(f"Regression policy file not found: {policy_path}")
+    raw = yaml.safe_load(policy_path.read_text(encoding="utf-8"))
+    if raw is None:
+        return RegressionPolicy()
+    if not isinstance(raw, dict):
+        raise TypeError("Regression policy YAML root must be a mapping")
+
+    defaults = RegressionPolicy()
+
+    def _opt_float(key: str, default: float | None) -> float | None:
+        if key not in raw:
+            return default
+        val = raw[key]
+        return float(val) if val is not None else None
+
+    def _opt_int(key: str, default: int | None) -> int | None:
+        if key not in raw:
+            return default
+        val = raw[key]
+        return int(val) if val is not None else None
+
+    return RegressionPolicy(
+        max_tracks_drop_pct=_opt_float(
+            "max_tracks_drop_pct", defaults.max_tracks_drop_pct
+        ),
+        max_events_drop_pct=_opt_float(
+            "max_events_drop_pct", defaults.max_events_drop_pct
+        ),
+        max_dwell_drop_pct=_opt_float(
+            "max_dwell_drop_pct", defaults.max_dwell_drop_pct
+        ),
+        max_high_critical_insights_increase=_opt_int(
+            "max_high_critical_insights_increase",
+            defaults.max_high_critical_insights_increase,
+        ),
+        max_spatial_shift_mean_abs=_opt_float(
+            "max_spatial_shift_mean_abs", defaults.max_spatial_shift_mean_abs
+        ),
+        min_detections_ratio=_opt_float(
+            "min_detections_ratio", defaults.min_detections_ratio
+        ),
+        allow_config_drift=bool(
+            raw.get("allow_config_drift", defaults.allow_config_drift)
+        ),
+    )
+
+
+def save_regression_policy(policy: RegressionPolicy, path: Path | str) -> Path:
+    """Serialize a RegressionPolicy to YAML."""
+    out_path = Path(path)
+    out_path.parent.mkdir(parents=True, exist_ok=True)
+    out_path.write_text(
+        yaml.safe_dump(policy.to_dict(), sort_keys=False),
+        encoding="utf-8",
+    )
+    return out_path
+
+
+def evaluate_regression_gate(
+    report: RunComparisonReport,
+    policy: RegressionPolicy | None = None,
+) -> RegressionGateResult:
+    """Evaluate a RunComparisonReport against configurable CV regression gate rules."""
+    pol = policy if policy is not None else RegressionPolicy()
+    base = report.baseline
+    cand = report.candidate
+    violations: list[RegressionViolation] = []
+    checks = 0
+
+    if pol.max_tracks_drop_pct is not None:
+        checks += 1
+        if base.tracks_count > 0:
+            drop_pct = (
+                (base.tracks_count - cand.tracks_count) / base.tracks_count
+            ) * 100.0
+            if drop_pct > pol.max_tracks_drop_pct:
+                violations.append(
+                    RegressionViolation(
+                        rule_name="max_tracks_drop_pct",
+                        severity="error",
+                        metric_name="tracks_count",
+                        baseline_value=float(base.tracks_count),
+                        candidate_value=float(cand.tracks_count),
+                        threshold=pol.max_tracks_drop_pct,
+                        message=(
+                            f"Track count dropped by {drop_pct:.1f}% "
+                            f"({base.tracks_count} -> {cand.tracks_count}, "
+                            f"max allowed {pol.max_tracks_drop_pct:.1f}%)"
+                        ),
+                    )
+                )
+
+    if pol.max_events_drop_pct is not None:
+        checks += 1
+        if base.events_count > 0:
+            drop_pct = (
+                (base.events_count - cand.events_count) / base.events_count
+            ) * 100.0
+            if drop_pct > pol.max_events_drop_pct:
+                violations.append(
+                    RegressionViolation(
+                        rule_name="max_events_drop_pct",
+                        severity="error",
+                        metric_name="events_count",
+                        baseline_value=float(base.events_count),
+                        candidate_value=float(cand.events_count),
+                        threshold=pol.max_events_drop_pct,
+                        message=(
+                            f"Event count dropped by {drop_pct:.1f}% "
+                            f"({base.events_count} -> {cand.events_count}, "
+                            f"max allowed {pol.max_events_drop_pct:.1f}%)"
+                        ),
+                    )
+                )
+
+    if pol.max_dwell_drop_pct is not None:
+        checks += 1
+        if base.total_dwell_seconds > 0.0:
+            drop_pct = (
+                (base.total_dwell_seconds - cand.total_dwell_seconds)
+                / base.total_dwell_seconds
+            ) * 100.0
+            if drop_pct > pol.max_dwell_drop_pct:
+                violations.append(
+                    RegressionViolation(
+                        rule_name="max_dwell_drop_pct",
+                        severity="error",
+                        metric_name="total_dwell_seconds",
+                        baseline_value=base.total_dwell_seconds,
+                        candidate_value=cand.total_dwell_seconds,
+                        threshold=pol.max_dwell_drop_pct,
+                        message=(
+                            f"Total dwell time dropped by {drop_pct:.1f}% "
+                            f"({base.total_dwell_seconds:.2f}s -> {cand.total_dwell_seconds:.2f}s, "
+                            f"max allowed {pol.max_dwell_drop_pct:.1f}%)"
+                        ),
+                    )
+                )
+
+    if pol.max_high_critical_insights_increase is not None:
+        checks += 1
+        inc = cand.high_critical_insights_count - base.high_critical_insights_count
+        if inc > pol.max_high_critical_insights_increase:
+            violations.append(
+                RegressionViolation(
+                    rule_name="max_high_critical_insights_increase",
+                    severity="error",
+                    metric_name="high_critical_insights_count",
+                    baseline_value=float(base.high_critical_insights_count),
+                    candidate_value=float(cand.high_critical_insights_count),
+                    threshold=float(pol.max_high_critical_insights_increase),
+                    message=(
+                        f"High/critical insights increased by +{inc} "
+                        f"({base.high_critical_insights_count} -> {cand.high_critical_insights_count}, "
+                        f"max allowed +{pol.max_high_critical_insights_increase})"
+                    ),
+                )
+            )
+
+    if pol.max_spatial_shift_mean_abs is not None and report.spatial_shift is not None:
+        checks += 1
+        shift_val = report.spatial_shift.mean_abs_delta
+        if shift_val > pol.max_spatial_shift_mean_abs:
+            violations.append(
+                RegressionViolation(
+                    rule_name="max_spatial_shift_mean_abs",
+                    severity="error",
+                    metric_name="spatial_shift.mean_abs_delta",
+                    baseline_value=0.0,
+                    candidate_value=shift_val,
+                    threshold=pol.max_spatial_shift_mean_abs,
+                    message=(
+                        f"Spatial density mean_abs_delta {shift_val:.4f} exceeded "
+                        f"threshold {pol.max_spatial_shift_mean_abs:.4f}"
+                    ),
+                )
+            )
+
+    if pol.min_detections_ratio is not None:
+        checks += 1
+        if base.detections_count > 0:
+            ratio = cand.detections_count / base.detections_count
+            if ratio < pol.min_detections_ratio:
+                violations.append(
+                    RegressionViolation(
+                        rule_name="min_detections_ratio",
+                        severity="error",
+                        metric_name="detections_count",
+                        baseline_value=float(base.detections_count),
+                        candidate_value=float(cand.detections_count),
+                        threshold=pol.min_detections_ratio,
+                        message=(
+                            f"Detections ratio {ratio:.3f} "
+                            f"({cand.detections_count}/{base.detections_count}) fell below "
+                            f"minimum {pol.min_detections_ratio:.3f}"
+                        ),
+                    )
+                )
+
+    if not pol.allow_config_drift:
+        checks += 1
+        if report.config_diffs:
+            changed_keys = ", ".join(cd.key for cd in report.config_diffs[:5])
+            violations.append(
+                RegressionViolation(
+                    rule_name="allow_config_drift",
+                    severity="error",
+                    metric_name="config_diffs",
+                    baseline_value=0.0,
+                    candidate_value=float(len(report.config_diffs)),
+                    threshold=0.0,
+                    message=(
+                        f"Config drift disallowed but {len(report.config_diffs)} "
+                        f"parameter(s) changed: {changed_keys}"
+                    ),
+                )
+            )
+
+    passed = not any(v.severity == "error" for v in violations)
+    return RegressionGateResult(
+        passed=passed,
+        policy=pol,
+        checks_evaluated=checks,
+        violations=violations,
+    )

@@ -962,6 +962,43 @@ class TestEndToEndPipelineAndCli(unittest.TestCase):
             )
             self.assertIn("## Zone Occupancy & Crowding Profile", report_text)
 
+    def test_run_pipeline_persists_true_camera_metadata_in_sqlite(self) -> None:
+        import sqlite3
+        from contextlib import closing
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            root = Path(tmpdir)
+            vid_path = make_video(root, name="cam_meta.avi", count=6)
+            tracks_csv = root / "tracks.csv"
+            write_tracks_csv(
+                tracks_csv,
+                [FrameTracks(0, [TrackDetection(0, 1, 10.0, 10.0, 20.0, 30.0, 0.9)])],
+            )
+            cfg = PipelineConfig(
+                precomputed_tracks_csv=str(tracks_csv),
+                save_annotated_video=False,
+            )
+            res = run_pipeline(
+                vid_path,
+                cfg,
+                output_root=root / "runs",
+                run_id="meta_run",
+                project_root=root,
+            )
+            with closing(sqlite3.connect(res.db_path)) as conn:
+                row = conn.execute(
+                    "SELECT camera_id, source_name, fps, width, height, total_frames, created_at "
+                    "FROM cameras"
+                ).fetchone()
+            self.assertIsNotNone(row)
+            assert row is not None
+            self.assertEqual(row[0], "cam_meta")
+            self.assertEqual(row[1], "cam_meta.avi")
+            self.assertGreater(float(row[2]), 0.0)
+            self.assertEqual((int(row[3]), int(row[4])), (64, 48))
+            self.assertEqual(int(row[5]), 6)
+            self.assertTrue(str(row[6]).strip())
+
     def test_src_package_has_no_sys_path_mutations_or_cv_projects_imports(self) -> None:
         src_pkg = Path(__file__).resolve().parents[1] / "src" / "event_intelligence"
         py_files = sorted(src_pkg.rglob("*.py"))

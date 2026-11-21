@@ -1010,7 +1010,21 @@ def run_pipeline(
         write_subproject_docs=False,
     )
     db_path = (run_dir / "intelligence.db").resolve()
-    db_summary = ingest_intelligence_db(db_path, search_cfg, project_root=root)
+    cam_meta = CameraMetadata(
+        camera_id=src_path.stem or "default",
+        source_name=src_path.name,
+        fps=fps,
+        width=width,
+        height=height,
+        total_frames=total_frames,
+        created_at=datetime.now(UTC).isoformat(),
+    )
+    db_summary = ingest_intelligence_db(
+        db_path,
+        search_cfg,
+        project_root=root,
+        camera_metadata=cam_meta,
+    )
 
     elapsed = time.perf_counter() - t0
     return PipelineRunResult(
@@ -1186,6 +1200,7 @@ def run_multi_camera_pipeline(
                 width=w,
                 height=h,
                 total_frames=frames,
+                created_at=datetime.now(UTC).isoformat(),
             )
         )
         search_configs.append(

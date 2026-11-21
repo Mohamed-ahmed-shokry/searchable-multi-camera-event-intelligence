@@ -11,8 +11,10 @@ from event_intelligence.compare.engine import (
     analyze_multi_run_trends,
     compare_runs,
     discover_runs,
+    load_regression_policy,
 )
 from event_intelligence.compare.report import write_trends_artifacts
+from event_intelligence.compare.types import RegressionPolicy
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -81,6 +83,17 @@ def build_parser() -> argparse.ArgumentParser:
         help="Skip rendering diverging spatial heatmap_diff.png during pairwise comparison.",
     )
     parser.add_argument(
+        "--policy",
+        type=Path,
+        default=None,
+        help="Optional YAML RegressionPolicy file to evaluate automated CV regression gates.",
+    )
+    parser.add_argument(
+        "--fail-on-regression",
+        action="store_true",
+        help="Evaluate regression gate (using --policy or defaults) and exit with code 2 on violation.",
+    )
+    parser.add_argument(
         "--json",
         action="store_true",
         help="Print structured report as JSON.",
@@ -106,6 +119,12 @@ def main(argv: Sequence[str] | None = None) -> int:
 
     if has_pairwise:
         assert args.baseline is not None and args.candidate is not None
+        active_policy: RegressionPolicy | None = None
+        if args.policy is not None:
+            active_policy = load_regression_policy(args.policy)
+        elif args.fail_on_regression:
+            active_policy = RegressionPolicy()
+
         report = compare_runs(
             args.baseline,
             args.candidate,
@@ -113,6 +132,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             bucket_seconds=args.bucket_seconds,
             output_dir=args.output_dir,
             render_heatmap_diff=not args.no_heatmap_diff,
+            policy=active_policy,
         )
         if args.json:
             print(json.dumps(report.to_dict(), indent=2))
@@ -132,6 +152,22 @@ def main(argv: Sequence[str] | None = None) -> int:
                 f"  Config Diffs: {len(report.config_diffs)} | Zone Deltas: {len(report.zone_deltas)} | "
                 f"Line Deltas: {len(report.line_deltas)}"
             )
+            if report.regression_gate is not None:
+                gate = report.regression_gate
+                status_str = "PASS" if gate.passed else "FAIL"
+                print(
+                    f"  Regression Gate: {status_str} "
+                    f"({gate.checks_evaluated} checks, {gate.error_count} errors)"
+                )
+                for v in gate.violations:
+                    print(f"    - [{v.severity.upper()}] {v.rule_name}: {v.message}")
+
+        if (
+            args.fail_on_regression
+            and report.regression_gate is not None
+            and not report.regression_gate.passed
+        ):
+            return 2
         return 0
 
     run_paths: list[Path] = []
