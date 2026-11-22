@@ -2,6 +2,10 @@
 
 from __future__ import annotations
 
+import csv
+import json
+from pathlib import Path
+
 from event_intelligence.multicam.types import MultiCameraCorrelationReport
 
 
@@ -110,3 +114,104 @@ def generate_correlation_markdown(report: MultiCameraCorrelationReport) -> str:
             )
     lines.append("")
     return "\n".join(lines)
+
+
+def write_correlation_artifacts(
+    report: MultiCameraCorrelationReport,
+    output_dir: Path | str,
+) -> dict[str, Path]:
+    """Write JSON, Markdown, and CSV artifacts for a MultiCameraCorrelationReport."""
+    out_dir = Path(output_dir)
+    out_dir.mkdir(parents=True, exist_ok=True)
+
+    json_path = out_dir / "multicam_correlation_report.json"
+    json_path.write_text(
+        json.dumps(report.to_dict(), indent=2),
+        encoding="utf-8",
+    )
+
+    md_path = out_dir / "multicam_correlation_report.md"
+    md_path.write_text(
+        generate_correlation_markdown(report),
+        encoding="utf-8",
+    )
+
+    transitions_csv = out_dir / "cross_camera_transitions.csv"
+    with transitions_csv.open("w", encoding="utf-8", newline="") as f:
+        writer = csv.DictWriter(
+            f,
+            fieldnames=[
+                "transition_id",
+                "from_camera",
+                "from_track_id",
+                "to_camera",
+                "to_track_id",
+                "exit_time",
+                "entry_time",
+                "transit_seconds",
+                "confidence",
+                "rule_label",
+                "from_zone",
+                "to_zone",
+                "evidence_reason",
+            ],
+        )
+        writer.writeheader()
+        for tr in report.transitions:
+            writer.writerow(tr.to_dict())
+
+    flows_csv = out_dir / "camera_pair_flows.csv"
+    with flows_csv.open("w", encoding="utf-8", newline="") as f:
+        writer = csv.DictWriter(
+            f,
+            fieldnames=[
+                "from_camera",
+                "to_camera",
+                "transition_count",
+                "avg_transit_seconds",
+                "min_transit_seconds",
+                "max_transit_seconds",
+                "avg_confidence",
+            ],
+        )
+        writer.writeheader()
+        for flow in report.pair_flows:
+            writer.writerow(flow.to_dict())
+
+    windows_csv = out_dir / "co_activity_windows.csv"
+    with windows_csv.open("w", encoding="utf-8", newline="") as f:
+        writer = csv.DictWriter(
+            f,
+            fieldnames=[
+                "bucket_index",
+                "start_time",
+                "end_time",
+                "active_camera_count",
+                "active_cameras",
+                "total_active_tracks",
+                "total_events",
+                "is_simultaneous_surge",
+            ],
+        )
+        writer.writeheader()
+        for win in report.co_activity_windows:
+            writer.writerow(
+                {
+                    "bucket_index": win.bucket_index,
+                    "start_time": round(win.start_time, 3),
+                    "end_time": round(win.end_time, 3),
+                    "active_camera_count": len(win.active_cameras),
+                    "active_cameras": ";".join(win.active_cameras),
+                    "total_active_tracks": win.total_active_tracks,
+                    "total_events": win.total_events,
+                    "is_simultaneous_surge": win.is_simultaneous_surge,
+                }
+            )
+
+    return {
+        "json": json_path,
+        "markdown": md_path,
+        "transitions_csv": transitions_csv,
+        "pair_flows_csv": flows_csv,
+        "co_activity_windows_csv": windows_csv,
+    }
