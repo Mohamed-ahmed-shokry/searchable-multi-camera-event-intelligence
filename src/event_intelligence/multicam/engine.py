@@ -18,6 +18,7 @@ from event_intelligence.multicam.types import (
     CoActivityWindow,
     CrossCameraJourney,
     CrossCameraTransition,
+    MultiCameraCorrelationReport,
     TrackEndpoint,
 )
 
@@ -587,3 +588,82 @@ def compute_co_activity_windows(
             )
         )
     return windows
+
+
+def _discover_db_cameras(db_path: Path) -> tuple[str, ...]:
+    """Return sorted unique camera_ids present across cameras, tracks, and trajectories."""
+    cams: set[str] = set()
+    with closing(sqlite3.connect(str(db_path))) as conn:
+        for table in ("cameras", "tracks", "trajectories", "events"):
+            try:
+                for (cam_id,) in conn.execute(
+                    f"SELECT DISTINCT camera_id FROM {table}"
+                ):
+                    if cam_id:
+                        cams.add(str(cam_id))
+            except sqlite3.OperationalError:
+                continue
+    return tuple(sorted(cams))
+
+
+def analyze_multi_camera_correlation(
+    db_path: Path | str,
+    *,
+    topology: CameraTopology | None = None,
+    bucket_seconds: float = 5.0,
+    min_confidence: float = 0.25,
+    surge_min_cameras: int = 2,
+    surge_min_tracks: int = 2,
+) -> MultiCameraCorrelationReport:
+    """Run end-to-end spatial-temporal correlation across all cameras in intelligence.db."""
+    resolved = Path(db_path)
+    if not resolved.exists():
+        raise FileNotFoundError(f"SQLite intelligence DB not found: {resolved}")
+
+    cameras = _discover_db_cameras(resolved)
+    active_topology = topology or infer_default_topology(cameras)
+
+    endpoints = extract_track_endpoints(
+        resolved,
+        camera_time_offsets=active_topology.camera_time_offsets,
+    )
+    transitions = correlate_cross_camera_transitions(
+        endpoints,
+        active_topology,
+        min_confidence=min_confidence,
+    )
+    journeys = build_cross_camera_journeys(transitions)
+    pair_flows = summarize_camera_pair_flows(transitions)
+    windows = compute_co_activity_windows(
+        resolved,
+        camera_time_offsets=active_topology.camera_time_offsets,
+        bucket_seconds=bucket_seconds,
+        surge_min_cameras=surge_min_cameras,
+        surge_min_tracks=surge_min_tracks,
+    )
+
+    peak_cams = max((len(w.active_cameras) for w in windows), default=0)
+    peak_tracks = max((w.total_active_tracks for w in windows), default=0)
+    surge_count = sum(1 for w in windows if w.is_simultaneous_surge)
+
+    summary_text = (
+        f"Analyzed {len(cameras)} camera(s) and {len(endpoints)} track endpoint(s) "
+        f"under topology '{active_topology.name}': found {len(transitions)} "
+        f"cross-camera transition(s), {len(journeys)} stitched journey(s), "
+        f"peak {peak_cams} simultaneous camera(s) ({peak_tracks} active track(s)), "
+        f"and {surge_count} simultaneous surge window(s)."
+    )
+
+    return MultiCameraCorrelationReport(
+        db_path=str(resolved),
+        topology_name=active_topology.name,
+        cameras=cameras,
+        track_endpoints_count=len(endpoints),
+        transitions=tuple(transitions),
+        journeys=tuple(journeys),
+        pair_flows=tuple(pair_flows),
+        co_activity_windows=tuple(windows),
+        peak_simultaneous_cameras=peak_cams,
+        peak_simultaneous_tracks=peak_tracks,
+        summary_text=summary_text,
+    )
