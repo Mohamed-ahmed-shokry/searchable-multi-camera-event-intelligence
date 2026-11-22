@@ -3,13 +3,15 @@
 from __future__ import annotations
 
 import csv
+import io
 import json
 import sqlite3
 import tempfile
 import unittest
-from contextlib import closing
+from contextlib import closing, redirect_stdout
 from pathlib import Path
 
+from event_intelligence.multicam.__main__ import main as multicam_main
 from event_intelligence.multicam.engine import (
     analyze_multi_camera_correlation,
     build_cross_camera_journeys,
@@ -352,6 +354,81 @@ class TestMultiCameraCorrelationReporting(unittest.TestCase):
             ) as f:
                 win_rows = list(csv.DictReader(f))
             self.assertEqual(len(win_rows), len(report.co_activity_windows))
+
+
+class TestMultiCameraCli(unittest.TestCase):
+    """CLI integration tests for python -m event_intelligence.multicam."""
+
+    def test_cli_json_and_output_dir_from_run_directory(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_path = Path(tmp)
+            run_dir = tmp_path / "run_demo"
+            run_dir.mkdir()
+            _build_multicam_db(run_dir / "intelligence.db")
+            out_dir = tmp_path / "artifacts"
+
+            buf = io.StringIO()
+            with redirect_stdout(buf):
+                rc = multicam_main(
+                    [
+                        "--db",
+                        str(run_dir),
+                        "--output-dir",
+                        str(out_dir),
+                        "--json",
+                    ]
+                )
+
+            self.assertEqual(rc, 0)
+            payload = json.loads(buf.getvalue())
+            self.assertEqual(payload["camera_count"], 3)
+            self.assertIn("artifacts", payload)
+            self.assertTrue((out_dir / "cross_camera_transitions.csv").exists())
+            self.assertTrue((out_dir / "multicam_correlation_report.md").exists())
+
+    def test_cli_with_explicit_topology_and_text_output(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_path = Path(tmp)
+            db_path = _build_multicam_db(tmp_path / "intelligence.db")
+            topo_path = save_camera_topology(
+                CameraTopology(
+                    name="explicit_test",
+                    transitions=(
+                        CameraTransitionRule(
+                            from_camera="lobby",
+                            to_camera="corridor",
+                            min_transit_seconds=0.5,
+                            max_transit_seconds=5.0,
+                            expected_transit_seconds=2.0,
+                        ),
+                    ),
+                ),
+                tmp_path / "topo.yaml",
+            )
+
+            buf = io.StringIO()
+            with redirect_stdout(buf):
+                rc = multicam_main(
+                    [
+                        "--db",
+                        str(db_path),
+                        "--topology",
+                        str(topo_path),
+                    ]
+                )
+
+            self.assertEqual(rc, 0)
+            text = buf.getvalue()
+            self.assertIn("# Multi-Camera Spatial-Temporal Correlation Report", text)
+            self.assertIn("`explicit_test`", text)
+            self.assertIn("`lobby#1`", text)
+
+    def test_cli_missing_db_exits_with_error(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            missing = Path(tmp) / "does_not_exist.db"
+            with self.assertRaises(SystemExit) as ctx:
+                multicam_main(["--db", str(missing)])
+            self.assertEqual(ctx.exception.code, 2)
 
 
 if __name__ == "__main__":
