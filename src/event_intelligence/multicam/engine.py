@@ -11,6 +11,7 @@ from pathlib import Path
 import yaml
 
 from event_intelligence.multicam.types import (
+    CameraPairFlow,
     CameraTopology,
     CameraTransitionRule,
     CrossCameraJourney,
@@ -480,3 +481,32 @@ def build_cross_camera_journeys(
             )
         )
     return journeys
+
+
+def summarize_camera_pair_flows(
+    transitions: Sequence[CrossCameraTransition],
+) -> list[CameraPairFlow]:
+    """Aggregate directed camera-pair flow statistics from correlated transitions."""
+    grouped: dict[tuple[str, str], list[CrossCameraTransition]] = defaultdict(list)
+    for tr in transitions:
+        grouped[(tr.from_camera, tr.to_camera)].append(tr)
+
+    flows: list[CameraPairFlow] = []
+    for (src_cam, dst_cam), items in grouped.items():
+        transits = [item.transit_seconds for item in items]
+        confs = [item.confidence for item in items]
+        flows.append(
+            CameraPairFlow(
+                from_camera=src_cam,
+                to_camera=dst_cam,
+                transition_count=len(items),
+                avg_transit_seconds=sum(transits) / len(transits),
+                min_transit_seconds=min(transits),
+                max_transit_seconds=max(transits),
+                avg_confidence=sum(confs) / len(confs),
+            )
+        )
+    flows.sort(
+        key=lambda item: (-item.transition_count, item.from_camera, item.to_camera)
+    )
+    return flows
