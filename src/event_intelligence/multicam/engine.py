@@ -252,10 +252,17 @@ def correlate_cross_camera_transitions(
         target = (
             rule.expected_transit_seconds
             if rule.expected_transit_seconds is not None
-            else 0.5 * (rule.min_transit_seconds + rule.max_transit_seconds)
+            else rule.min_transit_seconds
         )
-        half_span = max(
-            0.5 * (rule.max_transit_seconds - rule.min_transit_seconds), 1e-6
+        span = max(rule.max_transit_seconds - rule.min_transit_seconds, 1e-6)
+        half_span = (
+            max(
+                abs(rule.expected_transit_seconds - rule.min_transit_seconds),
+                abs(rule.max_transit_seconds - rule.expected_transit_seconds),
+                1e-6,
+            )
+            if rule.expected_transit_seconds is not None
+            else span
         )
 
         for src_ep in src_list:
