@@ -13,6 +13,7 @@ import yaml
 from event_intelligence.multicam.types import (
     CameraTopology,
     CameraTransitionRule,
+    CrossCameraTransition,
     TrackEndpoint,
 )
 
@@ -220,3 +221,182 @@ def _extract_ordered_zones(
         if zone_id and zone_id not in seen:
             seen.append(zone_id)
     return tuple(seen)
+
+
+def correlate_cross_camera_transitions(
+    endpoints: Sequence[TrackEndpoint],
+    topology: CameraTopology,
+    *,
+    min_confidence: float = 0.25,
+) -> list[CrossCameraTransition]:
+    """Match candidate cross-camera track handoffs under a CameraTopology."""
+    by_camera: dict[str, list[TrackEndpoint]] = defaultdict(list)
+    for ep in endpoints:
+        by_camera[ep.camera_id].append(ep)
+
+    candidates: list[
+        tuple[float, float, TrackEndpoint, TrackEndpoint, CameraTransitionRule, float]
+    ] = []
+
+    for rule in topology.transitions:
+        src_list = by_camera.get(rule.from_camera, [])
+        dst_list = by_camera.get(rule.to_camera, [])
+        if not src_list or not dst_list:
+            continue
+
+        target = (
+            rule.expected_transit_seconds
+            if rule.expected_transit_seconds is not None
+            else 0.5 * (rule.min_transit_seconds + rule.max_transit_seconds)
+        )
+        half_span = max(
+            0.5 * (rule.max_transit_seconds - rule.min_transit_seconds), 1e-6
+        )
+
+        for src_ep in src_list:
+            if rule.from_zone and rule.from_zone not in src_ep.exit_zones:
+                continue
+            for dst_ep in dst_list:
+                if rule.to_zone and rule.to_zone not in dst_ep.entry_zones:
+                    continue
+                transit = dst_ep.start_time - src_ep.end_time
+                if (
+                    transit < rule.min_transit_seconds
+                    or transit > rule.max_transit_seconds
+                ):
+                    continue
+
+                confidence = _score_transition_candidate(
+                    transit=transit,
+                    target=target,
+                    half_span=half_span,
+                    rule=rule,
+                    src_ep=src_ep,
+                    dst_ep=dst_ep,
+                )
+                if confidence < min_confidence:
+                    continue
+                candidates.append(
+                    (
+                        confidence,
+                        abs(transit - target),
+                        src_ep,
+                        dst_ep,
+                        rule,
+                        transit,
+                    )
+                )
+
+    candidates.sort(
+        key=lambda item: (
+            -item[0],
+            item[1],
+            item[2].end_time,
+            item[2].camera_id,
+            item[2].track_id,
+            item[3].camera_id,
+            item[3].track_id,
+        )
+    )
+
+    max_matches = max(1, int(topology.max_matches_per_track))
+    out_counts: dict[tuple[str, int], int] = defaultdict(int)
+    in_counts: dict[tuple[str, int], int] = defaultdict(int)
+    seen_pairs: set[tuple[str, int, str, int]] = set()
+    selected: list[
+        tuple[float, TrackEndpoint, TrackEndpoint, CameraTransitionRule, float]
+    ] = []
+
+    for confidence, _delta, src_ep, dst_ep, rule, transit in candidates:
+        src_key = (src_ep.camera_id, src_ep.track_id)
+        dst_key = (dst_ep.camera_id, dst_ep.track_id)
+        pair_key = (
+            src_ep.camera_id,
+            src_ep.track_id,
+            dst_ep.camera_id,
+            dst_ep.track_id,
+        )
+        if pair_key in seen_pairs:
+            continue
+        if out_counts[src_key] >= max_matches or in_counts[dst_key] >= max_matches:
+            continue
+        seen_pairs.add(pair_key)
+        out_counts[src_key] += 1
+        in_counts[dst_key] += 1
+        selected.append((confidence, src_ep, dst_ep, rule, transit))
+
+    selected.sort(
+        key=lambda item: (
+            item[1].end_time,
+            item[2].start_time,
+            item[1].camera_id,
+            item[1].track_id,
+            item[2].camera_id,
+            item[2].track_id,
+        )
+    )
+
+    transitions: list[CrossCameraTransition] = []
+    for idx, (confidence, src_ep, dst_ep, rule, transit) in enumerate(
+        selected, start=1
+    ):
+        from_zone = rule.from_zone or (
+            src_ep.exit_zones[0] if src_ep.exit_zones else None
+        )
+        to_zone = rule.to_zone or (
+            dst_ep.entry_zones[0] if dst_ep.entry_zones else None
+        )
+        reason_parts = [
+            (
+                f"dt={transit:.2f}s in [{rule.min_transit_seconds:.1f}s, "
+                f"{rule.max_transit_seconds:.1f}s]"
+            )
+        ]
+        if rule.from_zone:
+            reason_parts.append(f"exit_zone={rule.from_zone}")
+        if rule.to_zone:
+            reason_parts.append(f"entry_zone={rule.to_zone}")
+        transitions.append(
+            CrossCameraTransition(
+                transition_id=f"tr_{idx:04d}",
+                from_camera=src_ep.camera_id,
+                from_track_id=src_ep.track_id,
+                to_camera=dst_ep.camera_id,
+                to_track_id=dst_ep.track_id,
+                exit_time=src_ep.end_time,
+                entry_time=dst_ep.start_time,
+                transit_seconds=transit,
+                confidence=confidence,
+                rule_label=rule.label or f"{rule.from_camera} -> {rule.to_camera}",
+                from_zone=from_zone,
+                to_zone=to_zone,
+                evidence_reason="; ".join(reason_parts),
+            )
+        )
+    return transitions
+
+
+def _score_transition_candidate(
+    *,
+    transit: float,
+    target: float,
+    half_span: float,
+    rule: CameraTransitionRule,
+    src_ep: TrackEndpoint,
+    dst_ep: TrackEndpoint,
+) -> float:
+    """Compute a deterministic spatial-temporal handoff confidence in [0.0, 1.0]."""
+    temporal_score = max(0.0, 1.0 - (abs(transit - target) / half_span))
+    score = 0.35 + 0.50 * temporal_score
+    if rule.from_zone:
+        score += 0.075
+    if rule.to_zone:
+        score += 0.075
+    if (
+        not rule.from_zone
+        and not rule.to_zone
+        and src_ep.exit_zones
+        and dst_ep.entry_zones
+    ):
+        score += 0.05
+    return min(1.0, max(0.0, score))
