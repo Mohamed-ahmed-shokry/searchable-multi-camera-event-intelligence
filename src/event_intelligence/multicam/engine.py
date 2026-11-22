@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import math
 import sqlite3
 from collections import defaultdict
 from collections.abc import Mapping, Sequence
@@ -14,6 +15,7 @@ from event_intelligence.multicam.types import (
     CameraPairFlow,
     CameraTopology,
     CameraTransitionRule,
+    CoActivityWindow,
     CrossCameraJourney,
     CrossCameraTransition,
     TrackEndpoint,
@@ -510,3 +512,78 @@ def summarize_camera_pair_flows(
         key=lambda item: (-item.transition_count, item.from_camera, item.to_camera)
     )
     return flows
+
+
+def compute_co_activity_windows(
+    db_path: Path | str,
+    *,
+    camera_time_offsets: Mapping[str, float] | None = None,
+    bucket_seconds: float = 5.0,
+    surge_min_cameras: int = 2,
+    surge_min_tracks: int = 2,
+) -> list[CoActivityWindow]:
+    """Compute synchronized multi-camera activity windows and flag simultaneous surges."""
+    if bucket_seconds <= 0:
+        raise ValueError(f"bucket_seconds must be positive, got {bucket_seconds}")
+    resolved = Path(db_path)
+    if not resolved.exists():
+        raise FileNotFoundError(f"SQLite intelligence DB not found: {resolved}")
+
+    offsets = dict(camera_time_offsets or {})
+    tracks_by_bucket: dict[int, dict[str, set[int]]] = defaultdict(
+        lambda: defaultdict(set)
+    )
+    events_by_bucket: dict[int, dict[str, int]] = defaultdict(lambda: defaultdict(int))
+
+    with closing(sqlite3.connect(str(resolved))) as conn:
+        conn.row_factory = sqlite3.Row
+        for row in conn.execute(
+            "SELECT camera_id, track_id, timestamp FROM trajectories"
+        ):
+            cam_id = str(row["camera_id"])
+            ts = float(row["timestamp"]) + float(offsets.get(cam_id, 0.0))
+            b_idx = math.floor(ts / bucket_seconds)
+            tracks_by_bucket[b_idx][cam_id].add(int(row["track_id"]))
+
+        for row in conn.execute("SELECT camera_id, start_time FROM events"):
+            cam_id = str(row["camera_id"])
+            ts = float(row["start_time"]) + float(offsets.get(cam_id, 0.0))
+            b_idx = math.floor(ts / bucket_seconds)
+            events_by_bucket[b_idx][cam_id] += 1
+
+    all_indices = sorted(set(tracks_by_bucket.keys()) | set(events_by_bucket.keys()))
+    if not all_indices:
+        return []
+
+    windows: list[CoActivityWindow] = []
+    for b_idx in range(all_indices[0], all_indices[-1] + 1):
+        cam_tracks = {
+            cam: len(trks)
+            for cam, trks in sorted(tracks_by_bucket.get(b_idx, {}).items())
+            if trks
+        }
+        cam_events = {
+            cam: cnt
+            for cam, cnt in sorted(events_by_bucket.get(b_idx, {}).items())
+            if cnt > 0
+        }
+        active_cams = tuple(sorted(set(cam_tracks.keys()) | set(cam_events.keys())))
+        total_tracks = sum(cam_tracks.values())
+        total_events = sum(cam_events.values())
+        is_surge = (
+            len(active_cams) >= surge_min_cameras and total_tracks >= surge_min_tracks
+        )
+        windows.append(
+            CoActivityWindow(
+                bucket_index=b_idx,
+                start_time=b_idx * bucket_seconds,
+                end_time=(b_idx + 1) * bucket_seconds,
+                active_cameras=active_cams,
+                per_camera_active_tracks=cam_tracks,
+                total_active_tracks=total_tracks,
+                per_camera_events=cam_events,
+                total_events=total_events,
+                is_simultaneous_surge=is_surge,
+            )
+        )
+    return windows
