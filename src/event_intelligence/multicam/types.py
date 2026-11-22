@@ -190,3 +190,96 @@ class CrossCameraJourney:
             "avg_confidence": round(self.avg_confidence, 4),
             "hops": [hop.to_dict() for hop in self.hops],
         }
+
+
+@dataclass(frozen=True)
+class CameraPairFlow:
+    """Aggregated transition statistics between a directed pair of cameras."""
+
+    from_camera: str
+    to_camera: str
+    transition_count: int
+    avg_transit_seconds: float
+    min_transit_seconds: float
+    max_transit_seconds: float
+    avg_confidence: float
+
+    def to_dict(self) -> dict[str, Any]:
+        """Serialize pair flow summary to a JSON-compatible dict."""
+        return {
+            "from_camera": self.from_camera,
+            "to_camera": self.to_camera,
+            "transition_count": self.transition_count,
+            "avg_transit_seconds": round(self.avg_transit_seconds, 3),
+            "min_transit_seconds": round(self.min_transit_seconds, 3),
+            "max_transit_seconds": round(self.max_transit_seconds, 3),
+            "avg_confidence": round(self.avg_confidence, 4),
+        }
+
+
+@dataclass(frozen=True)
+class CoActivityWindow:
+    """Synchronized temporal activity bucket across all registered cameras."""
+
+    bucket_index: int
+    start_time: float
+    end_time: float
+    active_cameras: tuple[str, ...]
+    per_camera_active_tracks: dict[str, int]
+    total_active_tracks: int
+    per_camera_events: dict[str, int]
+    total_events: int
+    is_simultaneous_surge: bool = False
+
+    def to_dict(self) -> dict[str, Any]:
+        """Serialize co-activity window to a JSON-compatible dict."""
+        return {
+            "bucket_index": self.bucket_index,
+            "start_time": round(self.start_time, 3),
+            "end_time": round(self.end_time, 3),
+            "active_camera_count": len(self.active_cameras),
+            "active_cameras": list(self.active_cameras),
+            "per_camera_active_tracks": dict(self.per_camera_active_tracks),
+            "total_active_tracks": self.total_active_tracks,
+            "per_camera_events": dict(self.per_camera_events),
+            "total_events": self.total_events,
+            "is_simultaneous_surge": self.is_simultaneous_surge,
+        }
+
+
+@dataclass(frozen=True)
+class MultiCameraCorrelationReport:
+    """Full structured multi-camera spatial-temporal correlation report."""
+
+    db_path: str
+    topology_name: str
+    cameras: tuple[str, ...]
+    track_endpoints_count: int
+    transitions: tuple[CrossCameraTransition, ...]
+    journeys: tuple[CrossCameraJourney, ...]
+    pair_flows: tuple[CameraPairFlow, ...]
+    co_activity_windows: tuple[CoActivityWindow, ...]
+    peak_simultaneous_cameras: int
+    peak_simultaneous_tracks: int
+    summary_text: str = ""
+
+    def to_dict(self) -> dict[str, Any]:
+        """Serialize full multi-camera correlation report to a JSON-compatible dict."""
+        return {
+            "db_path": self.db_path,
+            "topology_name": self.topology_name,
+            "cameras": list(self.cameras),
+            "camera_count": len(self.cameras),
+            "track_endpoints_count": self.track_endpoints_count,
+            "transition_count": len(self.transitions),
+            "journey_count": len(self.journeys),
+            "peak_simultaneous_cameras": self.peak_simultaneous_cameras,
+            "peak_simultaneous_tracks": self.peak_simultaneous_tracks,
+            "summary_text": self.summary_text,
+            "pair_flows": [flow.to_dict() for flow in self.pair_flows],
+            "transitions": [item.to_dict() for item in self.transitions],
+            "journeys": [journey.to_dict() for journey in self.journeys],
+            "co_activity_windows": [
+                window.to_dict() for window in self.co_activity_windows
+            ],
+        }
