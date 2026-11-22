@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import csv
+import json
 import sqlite3
 import tempfile
 import unittest
@@ -18,6 +20,10 @@ from event_intelligence.multicam.engine import (
     load_camera_topology,
     save_camera_topology,
     summarize_camera_pair_flows,
+)
+from event_intelligence.multicam.report import (
+    generate_correlation_markdown,
+    write_correlation_artifacts,
 )
 from event_intelligence.multicam.types import (
     CameraTopology,
@@ -302,6 +308,50 @@ class TestMultiCameraCorrelationEngine(unittest.TestCase):
         self.assertGreaterEqual(len(report.transitions), 2)
         self.assertEqual(report.peak_simultaneous_cameras, 3)
         self.assertIn("Analyzed 3 camera(s)", report.summary_text)
+
+
+class TestMultiCameraCorrelationReporting(unittest.TestCase):
+    """Tests for Markdown rendering and JSON/CSV artifact exports."""
+
+    def test_generate_markdown_and_write_artifacts(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_path = Path(tmp)
+            db_path = _build_multicam_db(tmp_path / "intelligence.db")
+            report = analyze_multi_camera_correlation(db_path, bucket_seconds=5.0)
+            md = generate_correlation_markdown(report)
+            artifacts = write_correlation_artifacts(report, tmp_path / "out")
+
+            self.assertIn("# Multi-Camera Spatial-Temporal Correlation Report", md)
+            self.assertIn("## Camera-to-Camera Transition Flow Matrix", md)
+            self.assertIn("## Stitched Multi-Hop Journeys", md)
+            self.assertIn("## Synchronized Co-Activity Windows", md)
+
+            for key in (
+                "json",
+                "markdown",
+                "transitions_csv",
+                "pair_flows_csv",
+                "co_activity_windows_csv",
+            ):
+                self.assertTrue(artifacts[key].exists(), f"Missing artifact: {key}")
+
+            payload = json.loads(artifacts["json"].read_text(encoding="utf-8"))
+            self.assertEqual(payload["camera_count"], 3)
+            self.assertEqual(payload["transition_count"], len(report.transitions))
+
+            with artifacts["transitions_csv"].open(encoding="utf-8", newline="") as f:
+                tr_rows = list(csv.DictReader(f))
+            self.assertEqual(len(tr_rows), len(report.transitions))
+
+            with artifacts["pair_flows_csv"].open(encoding="utf-8", newline="") as f:
+                flow_rows = list(csv.DictReader(f))
+            self.assertEqual(len(flow_rows), len(report.pair_flows))
+
+            with artifacts["co_activity_windows_csv"].open(
+                encoding="utf-8", newline=""
+            ) as f:
+                win_rows = list(csv.DictReader(f))
+            self.assertEqual(len(win_rows), len(report.co_activity_windows))
 
 
 if __name__ == "__main__":
