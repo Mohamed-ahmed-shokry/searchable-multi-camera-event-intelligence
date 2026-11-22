@@ -14,6 +14,7 @@ runnable package:
 - insights: automated behavioral anomaly detection and executive intelligence reports
 - storage: SQLite intelligence.db ingestion, polygon search, and incident case bundling
 - compare: multi-run comparison, spatial density diffing, and cross-run baseline analytics
+- multicam: multi-camera spatial-temporal correlation, journey stitching, and co-activity surges
 - pipeline: single-command end-to-end CV pipeline runner
 - search: structured SQLite query and forensics CLI
 """
