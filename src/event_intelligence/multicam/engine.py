@@ -13,6 +13,7 @@ import yaml
 from event_intelligence.multicam.types import (
     CameraTopology,
     CameraTransitionRule,
+    CrossCameraJourney,
     CrossCameraTransition,
     TrackEndpoint,
 )
@@ -400,3 +401,82 @@ def _score_transition_candidate(
     ):
         score += 0.05
     return min(1.0, max(0.0, score))
+
+
+def build_cross_camera_journeys(
+    transitions: Sequence[CrossCameraTransition],
+) -> list[CrossCameraJourney]:
+    """Stitch sequential cross-camera transitions into cycle-safe multi-hop journeys."""
+    if not transitions:
+        return []
+
+    outgoing: dict[tuple[str, int], list[CrossCameraTransition]] = defaultdict(list)
+    incoming_nodes: set[tuple[str, int]] = set()
+    for tr in transitions:
+        outgoing[(tr.from_camera, tr.from_track_id)].append(tr)
+        incoming_nodes.add((tr.to_camera, tr.to_track_id))
+
+    for tr_list in outgoing.values():
+        tr_list.sort(
+            key=lambda item: (-item.confidence, item.exit_time, item.transition_id)
+        )
+
+    used_ids: set[str] = set()
+    chains: list[list[CrossCameraTransition]] = []
+
+    ordered_starts = sorted(
+        transitions,
+        key=lambda item: (
+            (item.from_camera, item.from_track_id) in incoming_nodes,
+            item.exit_time,
+            item.transition_id,
+        ),
+    )
+
+    for start_tr in ordered_starts:
+        if start_tr.transition_id in used_ids:
+            continue
+        chain: list[CrossCameraTransition] = [start_tr]
+        used_ids.add(start_tr.transition_id)
+        visited_nodes: set[tuple[str, int]] = {
+            (start_tr.from_camera, start_tr.from_track_id),
+            (start_tr.to_camera, start_tr.to_track_id),
+        }
+        curr_node = (start_tr.to_camera, start_tr.to_track_id)
+        while True:
+            next_tr = None
+            for cand in outgoing.get(curr_node, []):
+                dst_node = (cand.to_camera, cand.to_track_id)
+                if cand.transition_id not in used_ids and dst_node not in visited_nodes:
+                    next_tr = cand
+                    break
+            if next_tr is None:
+                break
+            chain.append(next_tr)
+            used_ids.add(next_tr.transition_id)
+            curr_node = (next_tr.to_camera, next_tr.to_track_id)
+            visited_nodes.add(curr_node)
+        chains.append(chain)
+
+    chains.sort(key=lambda ch: (ch[0].exit_time, -len(ch), ch[0].transition_id))
+
+    journeys: list[CrossCameraJourney] = []
+    for idx, chain in enumerate(chains, start=1):
+        cameras: list[str] = [chain[0].from_camera]
+        for hop in chain:
+            cameras.append(hop.to_camera)
+        start_t = chain[0].exit_time
+        end_t = chain[-1].entry_time
+        avg_conf = sum(hop.confidence for hop in chain) / len(chain)
+        journeys.append(
+            CrossCameraJourney(
+                journey_id=f"jr_{idx:04d}",
+                hops=tuple(chain),
+                cameras_visited=tuple(cameras),
+                start_time=start_t,
+                end_time=end_t,
+                total_span_seconds=max(0.0, end_t - start_t),
+                avg_confidence=avg_conf,
+            )
+        )
+    return journeys
