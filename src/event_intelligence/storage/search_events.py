@@ -1691,6 +1691,92 @@ def insert_insights(
     return len(rows)
 
 
+def insert_cross_camera_correlation(
+    db_path: Path | str,
+    report: Any,
+    *,
+    clear_existing: bool = True,
+) -> tuple[int, int]:
+    """Persist cross-camera transitions and journeys into intelligence.db.
+
+    Runs CORRELATION_SCHEMA_DDL non-destructively so legacy databases without
+    correlation tables are migrated automatically.
+    """
+    path = Path(db_path)
+    if not path.is_file():
+        init_intelligence_db(path)
+
+    topology_name = str(getattr(report, "topology_name", ""))
+    transitions = list(getattr(report, "transitions", ()) or ())
+    journeys = list(getattr(report, "journeys", ()) or ())
+
+    transition_rows = [
+        (
+            str(tr.transition_id),
+            topology_name,
+            str(tr.from_camera),
+            int(tr.from_track_id),
+            str(tr.to_camera),
+            int(tr.to_track_id),
+            float(tr.exit_time),
+            float(tr.entry_time),
+            float(tr.transit_seconds),
+            float(tr.confidence),
+            str(getattr(tr, "rule_label", "") or ""),
+            str(tr.from_zone) if getattr(tr, "from_zone", None) else None,
+            str(tr.to_zone) if getattr(tr, "to_zone", None) else None,
+            str(getattr(tr, "evidence_reason", "") or ""),
+        )
+        for tr in transitions
+    ]
+
+    journey_rows = [
+        (
+            str(jr.journey_id),
+            topology_name,
+            len(jr.hops),
+            json.dumps(list(jr.cameras_visited)),
+            float(jr.start_time),
+            float(jr.end_time),
+            float(jr.total_span_seconds),
+            float(jr.avg_confidence),
+            json.dumps([hop.to_dict() for hop in jr.hops]),
+        )
+        for jr in journeys
+    ]
+
+    with closing(sqlite3.connect(path)) as conn:
+        conn.executescript(CORRELATION_SCHEMA_DDL)
+        if clear_existing:
+            conn.execute("DELETE FROM cross_camera_transitions")
+            conn.execute("DELETE FROM cross_camera_journeys")
+        if transition_rows:
+            conn.executemany(
+                """
+                INSERT OR REPLACE INTO cross_camera_transitions (
+                    transition_id, topology_name, from_camera, from_track_id,
+                    to_camera, to_track_id, exit_time, entry_time,
+                    transit_seconds, confidence, rule_label,
+                    from_zone, to_zone, evidence_reason
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                transition_rows,
+            )
+        if journey_rows:
+            conn.executemany(
+                """
+                INSERT OR REPLACE INTO cross_camera_journeys (
+                    journey_id, topology_name, hop_count, cameras_visited_json,
+                    start_time, end_time, total_span_seconds, avg_confidence,
+                    hops_json
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                journey_rows,
+            )
+        conn.commit()
+    return len(transition_rows), len(journey_rows)
+
+
 def query_insights(
     db_path: Path | str,
     *,
