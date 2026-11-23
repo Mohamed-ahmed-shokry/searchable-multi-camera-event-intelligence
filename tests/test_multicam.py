@@ -436,6 +436,29 @@ class TestMultiCameraCli(unittest.TestCase):
                 multicam_main(["--db", str(missing)])
             self.assertEqual(ctx.exception.code, 2)
 
+    def test_cli_persist_writes_transitions_and_journeys_to_db(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            db_path = _build_multicam_db(Path(tmp) / "intelligence.db")
+            buf = io.StringIO()
+            with redirect_stdout(buf):
+                rc = multicam_main(["--db", str(db_path), "--persist", "--json"])
+
+            self.assertEqual(rc, 0)
+            payload = json.loads(buf.getvalue())
+            self.assertIn("persisted", payload)
+            self.assertEqual(
+                payload["persisted"]["transitions"],
+                payload["transition_count"],
+            )
+            self.assertEqual(
+                len(query_cross_camera_transitions(db_path)),
+                payload["transition_count"],
+            )
+            self.assertEqual(
+                len(query_cross_camera_journeys(db_path)),
+                payload["journey_count"],
+            )
+
 
 class TestCrossCameraCorrelationPersistence(unittest.TestCase):
     """Tests for SQLite persistence, legacy migration, and correlation queries."""
