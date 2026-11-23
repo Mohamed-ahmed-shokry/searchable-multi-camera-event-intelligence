@@ -1777,6 +1777,85 @@ def insert_cross_camera_correlation(
     return len(transition_rows), len(journey_rows)
 
 
+def query_cross_camera_transitions(
+    db_path: Path | str,
+    *,
+    from_camera: str | None = None,
+    to_camera: str | None = None,
+    camera_id: str | None = None,
+    track_id: int | None = None,
+    min_confidence: float | None = None,
+    min_time: float | None = None,
+    max_time: float | None = None,
+    limit: int = 50,
+) -> list[CrossCameraTransitionRecord]:
+    """Query persisted cross-camera transitions from intelligence.db."""
+    path = Path(db_path)
+    if not path.is_file():
+        raise FileNotFoundError(f"SQLite intelligence database not found: {path}")
+
+    clauses: list[str] = []
+    params: list[Any] = []
+    if from_camera is not None:
+        clauses.append("from_camera = ?")
+        params.append(from_camera)
+    if to_camera is not None:
+        clauses.append("to_camera = ?")
+        params.append(to_camera)
+    if camera_id is not None:
+        clauses.append("(from_camera = ? OR to_camera = ?)")
+        params.extend([camera_id, camera_id])
+    if track_id is not None:
+        clauses.append("(from_track_id = ? OR to_track_id = ?)")
+        params.extend([int(track_id), int(track_id)])
+    if min_confidence is not None:
+        clauses.append("confidence >= ?")
+        params.append(float(min_confidence))
+    if min_time is not None:
+        clauses.append("exit_time >= ?")
+        params.append(float(min_time))
+    if max_time is not None:
+        clauses.append("entry_time <= ?")
+        params.append(float(max_time))
+
+    where_sql = f"WHERE {' AND '.join(clauses)}" if clauses else ""
+    sql = (
+        "SELECT transition_id, topology_name, from_camera, from_track_id, "
+        "to_camera, to_track_id, exit_time, entry_time, transit_seconds, "
+        "confidence, rule_label, from_zone, to_zone, evidence_reason "
+        f"FROM cross_camera_transitions {where_sql} "
+        "ORDER BY exit_time ASC, confidence DESC, transition_id ASC LIMIT ?"
+    )
+    params.append(int(limit))
+
+    with closing(sqlite3.connect(path)) as conn:
+        conn.row_factory = sqlite3.Row
+        try:
+            rows = conn.execute(sql, params).fetchall()
+        except sqlite3.OperationalError:
+            return []
+
+    return [
+        CrossCameraTransitionRecord(
+            transition_id=str(row["transition_id"]),
+            topology_name=str(row["topology_name"]),
+            from_camera=str(row["from_camera"]),
+            from_track_id=int(row["from_track_id"]),
+            to_camera=str(row["to_camera"]),
+            to_track_id=int(row["to_track_id"]),
+            exit_time=float(row["exit_time"]),
+            entry_time=float(row["entry_time"]),
+            transit_seconds=float(row["transit_seconds"]),
+            confidence=float(row["confidence"]),
+            rule_label=str(row["rule_label"] or ""),
+            from_zone=str(row["from_zone"]) if row["from_zone"] else None,
+            to_zone=str(row["to_zone"]) if row["to_zone"] else None,
+            evidence_reason=str(row["evidence_reason"] or ""),
+        )
+        for row in rows
+    ]
+
+
 def query_insights(
     db_path: Path | str,
     *,
