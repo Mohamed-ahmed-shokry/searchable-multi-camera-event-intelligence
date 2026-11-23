@@ -11,6 +11,8 @@ import unittest
 from contextlib import closing, redirect_stdout
 from pathlib import Path
 
+from helpers import make_video
+
 from event_intelligence.multicam.__main__ import main as multicam_main
 from event_intelligence.multicam.engine import (
     analyze_multi_camera_correlation,
@@ -31,13 +33,19 @@ from event_intelligence.multicam.types import (
     CameraTopology,
     CameraTransitionRule,
 )
+from event_intelligence.pipeline import (
+    PipelineConfig,
+    run_multi_camera_pipeline,
+)
 from event_intelligence.search import main as search_main
+from event_intelligence.spatial import SceneConfig, ZoneSpec, save_scene_config
 from event_intelligence.storage.search_events import (
     SCHEMA_DDL,
     insert_cross_camera_correlation,
     query_cross_camera_journeys,
     query_cross_camera_transitions,
 )
+from event_intelligence.tracking import FrameTracks, TrackDetection, write_tracks_csv
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 
@@ -630,6 +638,104 @@ class TestCrossCameraCorrelationPersistence(unittest.TestCase):
                 rc_jr_text = search_main(["--db", str(db_path), "--journeys"])
             self.assertEqual(rc_jr_text, 0)
             self.assertIn("lobby -> corridor -> exit_hall", buf_jr_text.getvalue())
+
+    def test_run_multi_camera_pipeline_persists_correlation_and_writes_artifacts(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            cam1_vid = make_video(root, name="cam1.avi", count=6)
+            cam2_vid = make_video(root, name="cam2.avi", count=6)
+
+            scene_yaml = root / "scene.yaml"
+            save_scene_config(
+                scene_yaml,
+                SceneConfig(
+                    zones=[ZoneSpec("plaza", [(0, 0), (64, 0), (64, 48), (0, 48)])],
+                    lines=[],
+                ),
+            )
+            c1_tracks = root / "c1_tracks.csv"
+            write_tracks_csv(
+                c1_tracks,
+                [
+                    FrameTracks(
+                        f,
+                        [TrackDetection(f, 1, 10.0, 10.0, 30.0, 30.0, 0.9)],
+                    )
+                    for f in range(6)
+                ],
+            )
+            c2_tracks = root / "c2_tracks.csv"
+            write_tracks_csv(
+                c2_tracks,
+                [
+                    FrameTracks(
+                        f,
+                        [TrackDetection(f, 7, 15.0, 15.0, 35.0, 35.0, 0.9)],
+                    )
+                    for f in range(6)
+                ],
+            )
+            cfg = PipelineConfig(
+                precomputed_tracks_csv=str(c1_tracks),
+                scene_config_path=str(scene_yaml),
+                save_annotated_video=False,
+                min_dwell_seconds=0.1,
+                smoothing_window=1,
+            )
+            topo_path = save_camera_topology(
+                CameraTopology(
+                    name="offset_handoff",
+                    camera_time_offsets={"cam_entrance": 0.0, "cam_aisle": 2.0},
+                    transitions=(
+                        CameraTransitionRule(
+                            from_camera="cam_entrance",
+                            to_camera="cam_aisle",
+                            min_transit_seconds=0.0,
+                            max_transit_seconds=10.0,
+                            expected_transit_seconds=1.5,
+                            label="entrance_to_aisle",
+                        ),
+                    ),
+                ),
+                root / "topology.yaml",
+            )
+            res = run_multi_camera_pipeline(
+                [cam1_vid, cam2_vid],
+                cfg,
+                camera_ids=["cam_entrance", "cam_aisle"],
+                output_root=root / "runs",
+                run_id="test_11k_pipe",
+                project_root=root,
+                precomputed_tracks_by_camera={
+                    "cam_entrance": c1_tracks,
+                    "cam_aisle": c2_tracks,
+                },
+                topology_path=topo_path,
+            )
+
+            self.assertEqual(res.cross_camera_transitions_count, 1)
+            self.assertEqual(res.cross_camera_journeys_count, 1)
+            multicam_dir = Path(res.run_dir) / "multicam"
+            self.assertTrue(
+                (multicam_dir / "multicam_correlation_report.json").exists()
+            )
+            self.assertTrue((multicam_dir / "cross_camera_transitions.csv").exists())
+
+            persisted_tr = query_cross_camera_transitions(res.db_path)
+            self.assertEqual(len(persisted_tr), 1)
+            self.assertEqual(persisted_tr[0].from_camera, "cam_entrance")
+            self.assertEqual(persisted_tr[0].to_camera, "cam_aisle")
+            self.assertEqual(persisted_tr[0].from_track_id, 1)
+            self.assertEqual(persisted_tr[0].to_track_id, 7)
+
+            persisted_jr = query_cross_camera_journeys(res.db_path)
+            self.assertEqual(len(persisted_jr), 1)
+            self.assertEqual(
+                persisted_jr[0].cameras_visited,
+                ("cam_entrance", "cam_aisle"),
+            )
 
 
 if __name__ == "__main__":
