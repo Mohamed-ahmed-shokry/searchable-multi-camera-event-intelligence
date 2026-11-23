@@ -31,6 +31,7 @@ from event_intelligence.multicam.types import (
     CameraTopology,
     CameraTransitionRule,
 )
+from event_intelligence.search import main as search_main
 from event_intelligence.storage.search_events import (
     SCHEMA_DDL,
     insert_cross_camera_correlation,
@@ -532,6 +533,80 @@ class TestCrossCameraCorrelationPersistence(unittest.TestCase):
             with closing(sqlite3.connect(str(db_path))) as conn:
                 cams = conn.execute("SELECT camera_id FROM cameras").fetchall()
             self.assertEqual(cams, [("cam_a",)])
+
+    def test_search_cli_transitions_and_journeys_text_and_json(self) -> None:
+        topology = CameraTopology(
+            name="linear_3cam",
+            transitions=(
+                CameraTransitionRule(
+                    from_camera="lobby",
+                    to_camera="corridor",
+                    min_transit_seconds=0.5,
+                    max_transit_seconds=5.0,
+                    expected_transit_seconds=2.0,
+                ),
+                CameraTransitionRule(
+                    from_camera="corridor",
+                    to_camera="exit_hall",
+                    min_transit_seconds=0.5,
+                    max_transit_seconds=5.0,
+                    expected_transit_seconds=2.0,
+                ),
+            ),
+        )
+        with tempfile.TemporaryDirectory() as tmp:
+            db_path = _build_multicam_db(Path(tmp) / "intelligence.db")
+            report = analyze_multi_camera_correlation(db_path, topology=topology)
+            insert_cross_camera_correlation(db_path, report)
+
+            buf = io.StringIO()
+            with redirect_stdout(buf):
+                rc = search_main(
+                    [
+                        "--db",
+                        str(db_path),
+                        "--transitions",
+                        "--from-camera",
+                        "lobby",
+                        "--json",
+                    ]
+                )
+            self.assertEqual(rc, 0)
+            tr_data = json.loads(buf.getvalue())
+            self.assertEqual(len(tr_data), 1)
+            self.assertEqual(tr_data[0]["to_camera"], "corridor")
+
+            buf_text = io.StringIO()
+            with redirect_stdout(buf_text):
+                rc_text = search_main(["--db", str(db_path), "--transitions"])
+            self.assertEqual(rc_text, 0)
+            self.assertIn("lobby#1 -> corridor#10", buf_text.getvalue())
+
+            buf_jr = io.StringIO()
+            with redirect_stdout(buf_jr):
+                rc_jr = search_main(
+                    [
+                        "--db",
+                        str(db_path),
+                        "--journeys",
+                        "--min-hops",
+                        "2",
+                        "--json",
+                    ]
+                )
+            self.assertEqual(rc_jr, 0)
+            jr_data = json.loads(buf_jr.getvalue())
+            self.assertEqual(len(jr_data), 1)
+            self.assertEqual(
+                jr_data[0]["cameras_visited"],
+                ["lobby", "corridor", "exit_hall"],
+            )
+
+            buf_jr_text = io.StringIO()
+            with redirect_stdout(buf_jr_text):
+                rc_jr_text = search_main(["--db", str(db_path), "--journeys"])
+            self.assertEqual(rc_jr_text, 0)
+            self.assertIn("lobby -> corridor -> exit_hall", buf_jr_text.getvalue())
 
 
 if __name__ == "__main__":
