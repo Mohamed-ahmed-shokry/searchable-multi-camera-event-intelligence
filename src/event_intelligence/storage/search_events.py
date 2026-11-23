@@ -3365,6 +3365,53 @@ def main(argv: list[str] | None = None) -> int:
                 )
         return 0
 
+    if args.transitions:
+        transitions = query_cross_camera_transitions(
+            db_path,
+            from_camera=args.from_camera,
+            to_camera=args.to_camera,
+            camera_id=args.camera_id,
+            track_id=args.track_id,
+            min_confidence=args.min_confidence,
+            min_time=args.min_time,
+            max_time=args.max_time,
+            limit=args.limit,
+        )
+        if args.json:
+            print(json.dumps([t.to_dict() for t in transitions], indent=2))
+        else:
+            print(f"Matched {len(transitions)} cross-camera transition(s):")
+            for t in transitions:
+                print(
+                    f"  [{t.transition_id}] {t.from_camera}#{t.from_track_id} -> "
+                    f"{t.to_camera}#{t.to_track_id} "
+                    f"exit={t.exit_time:.2f}s entry={t.entry_time:.2f}s "
+                    f"dt={t.transit_seconds:.2f}s conf={t.confidence:.2f}"
+                )
+        return 0
+
+    if args.journeys:
+        journeys = query_cross_camera_journeys(
+            db_path,
+            camera_id=args.camera_id,
+            min_hops=args.min_hops,
+            min_confidence=args.min_confidence,
+            min_time=args.min_time,
+            max_time=args.max_time,
+            limit=args.limit,
+        )
+        if args.json:
+            print(json.dumps([j.to_dict() for j in journeys], indent=2))
+        else:
+            print(f"Matched {len(journeys)} cross-camera journey(s):")
+            for j in journeys:
+                path_str = " -> ".join(j.cameras_visited)
+                print(
+                    f"  [{j.journey_id}] {path_str} hops={j.hop_count} "
+                    f"span={j.total_span_seconds:.2f}s avg_conf={j.avg_confidence:.2f}"
+                )
+        return 0
+
     if args.camera_summary:
         summaries = query_camera_summary(db_path)
         if args.json:
