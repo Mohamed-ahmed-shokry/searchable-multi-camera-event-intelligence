@@ -2387,6 +2387,110 @@ uv run --locked python -m event_intelligence.compare --baseline outputs/runs/pha
 | `uv run --locked python -m event_intelligence.compare --baseline outputs/runs/phase11g_verify --candidate outputs/runs/phase11i_verify --policy configs/regression_policy.yaml --fail-on-regression --output-dir outputs/comparisons/verify_11i` | ✅ exit 0 (`PASS`) | 6 checks evaluated, 0 errors; wrote JSON, Markdown, `heatmap_diff.png`, and 3 delta CSVs |
 | `uv run --locked python -m event_intelligence.compare --baseline outputs/runs/phase11g_verify --candidate outputs/runs/phase11f_verify --policy configs/regression_policy.yaml --fail-on-regression --no-heatmap-diff` | ✅ exit 2 (`FAIL`) | verified automated regression gate catches 3 errors (`max_events_drop_pct`, `max_dwell_drop_pct`, `min_detections_ratio`) |
 
+---
+
+## Completed Phase: 11j — Multi-Camera Spatial-Temporal Correlation & Cross-Camera Transition Analytics (2026-11-22)
+
+### Objective
+
+The repository supports multi-camera SQLite ingestion (`intelligence.db`) and per-camera querying, but had **no cross-camera spatial-temporal correlation engine** to link tracks exiting one camera with tracks entering an adjacent camera, stitch multi-hop cross-camera journeys, compute camera-to-camera flow matrices, or detect synchronized multi-camera activity surges.
+
+Demonstrable end-to-end outcome: running `python -m event_intelligence.multicam --db <intelligence.db> [--topology configs/camera_topology.yaml] [--output-dir <dir>]` analyzes any multi-camera SQLite database, correlates candidate cross-camera handoffs with deterministic confidence scoring and clock-offset compensation, stitches multi-hop journeys, detects simultaneous multi-camera co-activity surges, and writes structured JSON, Markdown, and CSV reports.
+
+### Scope
+
+1. **Multi-camera correlation data models (`src/event_intelligence/multicam/types.py`):**
+   - `CameraTransitionRule`, `CameraTopology`, `TrackEndpoint`, `CrossCameraTransition`, `CrossCameraJourney`, `CameraPairFlow`, `CoActivityWindow`, `MultiCameraCorrelationReport`.
+2. **YAML topology config (`configs/camera_topology.yaml`) & loader/saver:**
+   - Explicit directed camera transition rules (optional `from_zone`/`to_zone`, `min_transit_seconds`, `max_transit_seconds`, `expected_transit_seconds`) and per-camera `camera_time_offsets` for clock-skew compensation, plus `infer_default_topology()` fallback when no topology file is passed.
+3. **Spatial-temporal correlation engine (`src/event_intelligence/multicam/engine.py`):**
+   - `extract_track_endpoints()` from SQLite `tracks`, `trajectories`, and `events`.
+   - `correlate_cross_camera_transitions()` with deterministic confidence scoring and greedy 1-to-1 (or `max_matches_per_track`) assignment.
+   - `build_cross_camera_journeys()` cycle-safe multi-hop chain stitching.
+   - `summarize_camera_pair_flows()` camera-to-camera transition matrix aggregation.
+   - `compute_co_activity_windows()` synchronized temporal activity buckets with simultaneous surge detection.
+   - `analyze_multi_camera_correlation()` top-level orchestrator.
+4. **Reporting & CSV exports (`src/event_intelligence/multicam/report.py`):**
+   - `generate_correlation_markdown()` executive Markdown report.
+   - `write_correlation_artifacts()` writing `multicam_correlation_report.json`, `multicam_correlation_report.md`, `cross_camera_transitions.csv`, `camera_pair_flows.csv`, and `co_activity_windows.csv`.
+5. **CLI & package integration (`src/event_intelligence/multicam/__main__.py`, `__init__.py`, `src/event_intelligence/__init__.py`).**
+6. **Comprehensive unit & CLI integration tests (`tests/test_multicam.py`)** + real multi-camera E2E execution on `data/fallback_clips/`.
+7. **Documentation:** `README.md` and `docs/ROADMAP.md` updates.
+
+### Acceptance Criteria
+
+| # | Criterion | Status | Evidence |
+|---|-----------|--------|----------|
+| 1 | `CameraTopology` YAML loader/saver + `configs/camera_topology.yaml` + `infer_default_topology()` work cleanly | ✅ | `071238d`, `95db128`, `f3a34ac` (`TestCameraTopology`: 4 tests passed) |
+| 2 | `extract_track_endpoints()` extracts per-camera track time bounds, coordinates, and entry/exit zones with optional clock-offset adjustment | ✅ | `7a4f97d`, `3d4115a` (`test_extract_track_endpoints_with_clock_offsets` passed) |
+| 3 | `correlate_cross_camera_transitions()` matches candidate cross-camera handoffs with deterministic confidence scores and greedy 1-to-1 assignment | ✅ | `1177119`, `524037d`, `3d4115a` (`test_correlate_transitions_and_stitch_three_camera_journey` passed) |
+| 4 | `build_cross_camera_journeys()`, `summarize_camera_pair_flows()`, and `compute_co_activity_windows()` produce accurate journeys, pair flow matrices, and synchronized surge windows | ✅ | `88a926b`, `d1193be`, `a1581ac`, `8c2172f`, `3d4115a` |
+| 5 | `write_correlation_artifacts()` exports JSON, Markdown, and 3 CSV files (`cross_camera_transitions.csv`, `camera_pair_flows.csv`, `co_activity_windows.csv`) | ✅ | `1ec016f`, `076f326`, `a0dc1a3` (`TestMultiCameraCorrelationReporting` + E2E verified all 5 files) |
+| 6 | `python -m event_intelligence.multicam` CLI runs end-to-end on a real multi-camera `intelligence.db` (text, `--json`, `--topology`, `--output-dir`) | ✅ | `0ef259a`, `423beda` + E2E on `outputs/runs/phase11j_verify/intelligence.db` (`cam_entrance`, `cam_aisle`) |
+| 7 | All local CI-parity checks (`uv sync --locked`, `ruff check`, `ruff format --check`, `pytest`) and remote GitHub Actions CI pass 100% | ✅ | `263 passed, 56 subtests passed`, `ruff check` & `format` clean, remote CI green on `HEAD` |
+
+### Validation & CI Plan
+
+```bash
+uv sync --locked
+uv run --locked ruff check .
+uv run --locked ruff format --check .
+uv run --locked pytest -q
+```
+
+### Exclusions (deferred)
+
+- **Appearance-based Re-ID neural embeddings (OSNet/CLIP):** Requires heavy GPU/model downloads and is out of scope for the zero-dependency spatial-temporal correlation foundation; spatial-temporal correlation cleanly complements future Re-ID embeddings.
+- **Phase 12 Productization (Web UI, REST API, Auth):** Deferred per `AGENTS.md`.
+
+### Micro-Task Breakdown
+
+- [x] 1. `docs(roadmap): define Phase 11j multi-camera spatial-temporal correlation scope` (`6ba83f1`)
+- [x] 2. `types(multicam): add CameraTransitionRule and CameraTopology dataclasses` (`4e9571f`)
+- [x] 3. `types(multicam): add TrackEndpoint, CrossCameraTransition, and CrossCameraJourney dataclasses` (`a21b8dc`)
+- [x] 4. `types(multicam): add CameraPairFlow, CoActivityWindow, and MultiCameraCorrelationReport dataclasses` (`295be5f`)
+- [x] 5. `feat(multicam): implement load_camera_topology, save_camera_topology, and infer_default_topology` (`071238d`)
+- [x] 6. `feat(config): add default configs/camera_topology.yaml for multi-camera transition rules` (`95db128`)
+- [x] 7. `test(multicam): add unit tests for CameraTopology YAML I/O and default topology inference` (`f3a34ac`)
+- [x] 8. `feat(multicam): implement extract_track_endpoints with clock-offset compensation` (`7a4f97d`)
+- [x] 9. `feat(multicam): implement correlate_cross_camera_transitions with deterministic confidence scoring` (`1177119`)
+- [x] 10. `feat(multicam): implement build_cross_camera_journeys cycle-safe multi-hop stitching` (`88a926b`)
+- [x] 11. `feat(multicam): implement summarize_camera_pair_flows transition matrix aggregator` (`d1193be`)
+- [x] 12. `feat(multicam): implement compute_co_activity_windows synchronized surge detector` (`a1581ac`)
+- [x] 13. `feat(multicam): implement analyze_multi_camera_correlation orchestrator` (`8c2172f`)
+- [x] 14. `fix(multicam): prefer shorter transit gaps when expected_transit_seconds is unspecified` (`524037d`)
+- [x] 15. `test(multicam): add unit tests for endpoints, transitions, journeys, pair flows, and co-activity windows` (`3d4115a`)
+- [x] 16. `feat(multicam): implement generate_correlation_markdown executive report renderer` (`1ec016f`)
+- [x] 17. `feat(multicam): implement write_correlation_artifacts JSON, Markdown, and CSV exporter` (`076f326`)
+- [x] 18. `test(multicam): add unit tests for correlation Markdown rendering and CSV artifact exports` (`a0dc1a3`)
+- [x] 19. `feat(multicam): export public API in multicam/__init__.py and update package docstring` (`9dfd898`)
+- [x] 20. `feat(multicam): add CLI entrypoint in multicam/__main__.py` (`0ef259a`)
+- [x] 21. `test(multicam): add CLI integration tests for python -m event_intelligence.multicam` (`423beda`)
+- [x] 22. `docs(readme): document multi-camera correlation CLI, topology YAML, and CSV exports` (`30c58d9`)
+- [x] 23. `docs(roadmap): complete Phase 11j criteria, decision log, and CI log`
+
+### Decision Log (Phase 11j)
+
+| Decision | Options Considered | Chosen & Rationale |
+|----------|-------------------|--------------------|
+| Transit scoring when `expected_transit_seconds` is omitted | (a) Score peak at midpoint `(min + max) / 2`; (b) Prefer shorter transit gaps decaying monotonically from `min_transit_seconds` to `max_transit_seconds` | **(b) Monotonic decay from `min_transit_seconds`** — midpoint scoring caused an all-pairs topology `[0s, 30s]` to prefer a 9s multi-hop skip (`lobby -> exit_hall`) over direct 2s handoffs (`lobby -> corridor -> exit_hall`). Fixed in `524037d`. |
+| Topology requirement on CLI | (a) Require `--topology` YAML; (b) Make `--topology` optional and auto-infer an all-pairs topology across discovered DB cameras | **(b) Optional `--topology` with `infer_default_topology()`** — lets analysts run `python -m event_intelligence.multicam --db <run_dir>` zero-config on any multi-camera DB while still supporting explicit site topology + clock offsets via YAML. |
+| Clock-skew handling | (a) Assume all cameras are NTP-synced; (b) Support per-camera `camera_time_offsets` (in seconds) in `CameraTopology` | **(b) `camera_time_offsets` map** — real multi-camera clips often start at slightly different wall-clock offsets; adjusting timestamps at query time is non-destructive and reversible. |
+| Base branch for Phase 11j | (a) `origin/main` (does not yet have PR #17/#18 merged); (b) `origin/phase/11g-temporal-analytics-and-incident-bundling` (`f152b9c`, where PR #17 and PR #18 were merged by the owner) | **(b) Branch from `f152b9c`** — preserves Phases 11h and 11i cleanly and isolates Phase 11j's 23 commits in its Draft PR. |
+
+### CI & Validation Log (Phase 11j)
+
+| Command | Result | Notes |
+|---------|--------|-------|
+| `uv sync --locked` | ✅ exit 0 | clean locked environment (`152 packages`) |
+| `uv run --locked ruff check .` | ✅ `All checks passed!` | repo-wide lint gate (`124` Python files clean) |
+| `uv run --locked ruff format --check .` | ✅ `124 files already formatted` | repo-wide format gate |
+| `uv run --locked pytest -q` | ✅ `263 passed, 56 subtests passed` | full test suite (`11` new tests in `tests/test_multicam.py`) |
+| `uv run --locked python -m event_intelligence.pipeline --videos data/fallback_clips/people-detection.mp4 data/fallback_clips/people-detection.mp4 --cameras cam_entrance cam_aisle --config configs/pipeline.yaml --run-id phase11j_verify --max-frames 60 --no-video --json` | ✅ exit 0 | produced real 2-camera `outputs/runs/phase11j_verify/intelligence.db` (84 dets, 2 tracks, 16 events, 6 insights) |
+| `uv run --locked python -m event_intelligence.multicam --db outputs/runs/phase11j_verify/intelligence.db --topology configs/camera_topology.yaml --output-dir outputs/multicam/verify_11j` | ✅ exit 0 | generated Markdown, JSON, and 3 CSV artifacts; detected simultaneous surge window `[0.0-5.0s]` |
+| `uv run --locked python -m event_intelligence.multicam --db outputs/runs/phase11j_verify --json` | ✅ exit 0 | verified run-directory auto-resolution and `inferred_all_pairs` JSON output |
+
+
 
 
 

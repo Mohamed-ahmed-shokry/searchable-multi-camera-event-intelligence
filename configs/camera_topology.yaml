@@ -1,0 +1,32 @@
+# Phase 11j: Multi-Camera Spatial-Temporal Topology Configuration
+name: default_site_topology
+description: >
+  Example multi-camera transition graph defining directed handoff windows,
+  optional zone constraints, and per-camera clock offsets (in seconds).
+default_min_transit_seconds: 0.0
+default_max_transit_seconds: 30.0
+max_matches_per_track: 1
+
+# Optional clock-skew compensation (seconds added to each camera's timestamps)
+camera_time_offsets:
+  cam_entrance: 0.0
+  cam_aisle: 0.0
+
+transitions:
+  - from_camera: cam_entrance
+    to_camera: cam_aisle
+    min_transit_seconds: 0.0
+    max_transit_seconds: 25.0
+    expected_transit_seconds: 4.0
+    from_zone: null
+    to_zone: null
+    label: entrance_to_aisle
+
+  - from_camera: cam_aisle
+    to_camera: cam_entrance
+    min_transit_seconds: 0.0
+    max_transit_seconds: 25.0
+    expected_transit_seconds: 4.0
+    from_zone: null
+    to_zone: null
+    label: aisle_to_entrance
