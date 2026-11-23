@@ -15,6 +15,7 @@ from event_intelligence.multicam.report import (
     generate_correlation_markdown,
     write_correlation_artifacts,
 )
+from event_intelligence.storage.search_events import insert_cross_camera_correlation
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -72,6 +73,14 @@ def build_parser() -> argparse.ArgumentParser:
         help="Optional directory to write JSON, Markdown, and CSV correlation artifacts.",
     )
     parser.add_argument(
+        "--persist",
+        action="store_true",
+        help=(
+            "Persist correlated transitions and journeys back into intelligence.db "
+            "(for querying via python -m event_intelligence.search --transitions/--journeys)."
+        ),
+    )
+    parser.add_argument(
         "--json",
         dest="as_json",
         action="store_true",
@@ -105,6 +114,11 @@ def main(argv: Sequence[str] | None = None) -> int:
         surge_min_tracks=args.surge_min_tracks,
     )
 
+    persisted: dict[str, int] | None = None
+    if args.persist:
+        tr_saved, jr_saved = insert_cross_camera_correlation(db_path, report)
+        persisted = {"transitions": tr_saved, "journeys": jr_saved}
+
     written: dict[str, str] = {}
     if args.output_dir is not None:
         artifacts = write_correlation_artifacts(report, args.output_dir)
@@ -112,11 +126,18 @@ def main(argv: Sequence[str] | None = None) -> int:
 
     if args.as_json:
         payload = report.to_dict()
+        if persisted is not None:
+            payload["persisted"] = persisted
         if written:
             payload["artifacts"] = written
         print(json.dumps(payload, indent=2))
     else:
         print(generate_correlation_markdown(report))
+        if persisted is not None:
+            print(
+                f"Persisted to {db_path}: {persisted['transitions']} transition(s), "
+                f"{persisted['journeys']} journey(s)."
+            )
         if written:
             print("Artifacts written:")
             for key, path_str in written.items():
