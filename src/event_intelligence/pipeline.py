@@ -61,6 +61,11 @@ from event_intelligence.insights import (
     write_insights_json,
     write_intelligence_report,
 )
+from event_intelligence.multicam import (
+    analyze_multi_camera_correlation,
+    load_camera_topology,
+    write_correlation_artifacts,
+)
 from event_intelligence.spatial import (
     SceneConfig,
     evaluate_scene_signals,
@@ -72,6 +77,7 @@ from event_intelligence.storage import (
     SearchConfig,
     ingest_intelligence_db,
     ingest_multi_camera_intelligence_db,
+    insert_cross_camera_correlation,
     insert_insights,
     query_camera_summary,
     query_events,
@@ -1063,6 +1069,7 @@ def run_multi_camera_pipeline(
     scene_configs_by_camera: Mapping[str, Path | str] | None = None,
     precomputed_tracks_by_camera: Mapping[str, Path | str] | None = None,
     precomputed_detections_by_camera: Mapping[str, Path | str] | None = None,
+    topology_path: Path | str | None = None,
 ) -> MultiCameraPipelineRunResult:
     """Execute the CV pipeline across multiple camera streams into a unified intelligence.db."""
     if not video_sources:
@@ -1252,6 +1259,20 @@ def run_multi_camera_pipeline(
         if cross_cam_insights:
             insert_insights(master_db, cross_cam_insights)
 
+    cc_transitions_count = 0
+    cc_journeys_count = 0
+    if len(cam_names) > 1:
+        topo = None
+        if topology_path is not None:
+            raw_topo = Path(topology_path)
+            resolved_topo = raw_topo if raw_topo.is_absolute() else (root / raw_topo)
+            topo = load_camera_topology(resolved_topo)
+        corr_report = analyze_multi_camera_correlation(master_db, topology=topo)
+        cc_transitions_count, cc_journeys_count = insert_cross_camera_correlation(
+            master_db, corr_report
+        )
+        write_correlation_artifacts(corr_report, master_run_dir / "multicam")
+
     all_master_insights = query_insights(master_db, limit=1000)
     master_report_md = generate_intelligence_report_markdown(
         [
@@ -1325,6 +1346,8 @@ def run_multi_camera_pipeline(
         "total_tracks": total_trks,
         "total_events": total_evs,
         "total_insights": len(all_master_insights),
+        "cross_camera_transitions_count": cc_transitions_count,
+        "cross_camera_journeys_count": cc_journeys_count,
         "db_path": str(master_db),
         "elapsed_seconds": round(elapsed, 4),
     }
@@ -1343,6 +1366,8 @@ def run_multi_camera_pipeline(
         total_tracks=total_trks,
         total_events=total_evs,
         total_insights=len(all_master_insights),
+        cross_camera_transitions_count=cc_transitions_count,
+        cross_camera_journeys_count=cc_journeys_count,
         elapsed_seconds=elapsed,
     )
 
@@ -1374,6 +1399,15 @@ def build_parser() -> argparse.ArgumentParser:
         nargs="+",
         default=None,
         help="Optional camera identifiers matching --videos (e.g. entrance concourse).",
+    )
+    parser.add_argument(
+        "--topology",
+        type=Path,
+        default=None,
+        help=(
+            "Optional camera_topology.yaml for multi-camera spatial-temporal "
+            "correlation and clock-offset compensation."
+        ),
     )
     parser.add_argument(
         "--config",
@@ -1493,6 +1527,7 @@ def main(argv: list[str] | None = None) -> int:
             camera_ids=args.cameras,
             output_root=args.output_root,
             run_id=args.run_id,
+            topology_path=args.topology,
         )
         if args.json:
             print(json.dumps(res_multi.to_dict(), indent=2))
