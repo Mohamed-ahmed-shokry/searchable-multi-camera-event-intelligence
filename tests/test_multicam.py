@@ -31,7 +31,12 @@ from event_intelligence.multicam.types import (
     CameraTopology,
     CameraTransitionRule,
 )
-from event_intelligence.storage.search_events import SCHEMA_DDL
+from event_intelligence.storage.search_events import (
+    SCHEMA_DDL,
+    insert_cross_camera_correlation,
+    query_cross_camera_journeys,
+    query_cross_camera_transitions,
+)
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 
@@ -429,6 +434,104 @@ class TestMultiCameraCli(unittest.TestCase):
             with self.assertRaises(SystemExit) as ctx:
                 multicam_main(["--db", str(missing)])
             self.assertEqual(ctx.exception.code, 2)
+
+
+class TestCrossCameraCorrelationPersistence(unittest.TestCase):
+    """Tests for SQLite persistence, legacy migration, and correlation queries."""
+
+    def test_insert_and_query_transitions_and_journeys_with_filters(self) -> None:
+        topology = CameraTopology(
+            name="linear_3cam",
+            transitions=(
+                CameraTransitionRule(
+                    from_camera="lobby",
+                    to_camera="corridor",
+                    min_transit_seconds=0.5,
+                    max_transit_seconds=5.0,
+                    from_zone="lobby_exit",
+                    to_zone="corridor_entry",
+                    expected_transit_seconds=2.0,
+                    label="lobby_to_corridor",
+                ),
+                CameraTransitionRule(
+                    from_camera="corridor",
+                    to_camera="exit_hall",
+                    min_transit_seconds=0.5,
+                    max_transit_seconds=5.0,
+                    expected_transit_seconds=2.0,
+                    label="corridor_to_exit",
+                ),
+            ),
+        )
+        with tempfile.TemporaryDirectory() as tmp:
+            db_path = _build_multicam_db(Path(tmp) / "intelligence.db")
+            report = analyze_multi_camera_correlation(db_path, topology=topology)
+            tr_count, jr_count = insert_cross_camera_correlation(db_path, report)
+
+            self.assertEqual(tr_count, 2)
+            self.assertEqual(jr_count, 1)
+
+            all_tr = query_cross_camera_transitions(db_path)
+            self.assertEqual(len(all_tr), 2)
+            self.assertEqual(all_tr[0].topology_name, "linear_3cam")
+
+            lobby_tr = query_cross_camera_transitions(
+                db_path,
+                from_camera="lobby",
+                to_camera="corridor",
+                min_confidence=0.9,
+            )
+            self.assertEqual(len(lobby_tr), 1)
+            self.assertEqual(lobby_tr[0].from_track_id, 1)
+            self.assertEqual(lobby_tr[0].to_track_id, 10)
+
+            track_tr = query_cross_camera_transitions(db_path, track_id=20)
+            self.assertEqual(len(track_tr), 1)
+            self.assertEqual(track_tr[0].to_camera, "exit_hall")
+
+            journeys = query_cross_camera_journeys(
+                db_path,
+                camera_id="corridor",
+                min_hops=2,
+                min_confidence=0.5,
+            )
+            self.assertEqual(len(journeys), 1)
+            self.assertEqual(
+                journeys[0].cameras_visited,
+                ("lobby", "corridor", "exit_hall"),
+            )
+            self.assertEqual(len(journeys[0].hops), 2)
+
+            none_jr = query_cross_camera_journeys(db_path, min_hops=3)
+            self.assertEqual(none_jr, [])
+
+    def test_legacy_db_graceful_query_and_nondestructive_migration(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            db_path = Path(tmp) / "legacy.db"
+            with closing(sqlite3.connect(str(db_path))) as conn:
+                conn.execute(
+                    "CREATE TABLE cameras (camera_id TEXT PRIMARY KEY, source_name TEXT)"
+                )
+                conn.execute("INSERT INTO cameras VALUES ('cam_a', 'a.mp4')")
+                conn.commit()
+
+            # Legacy DB lacks correlation tables -> queries return empty cleanly
+            self.assertEqual(query_cross_camera_transitions(db_path), [])
+            self.assertEqual(query_cross_camera_journeys(db_path), [])
+
+            # Non-destructive migration preserves existing cameras table
+            tr_count, jr_count = insert_cross_camera_correlation(
+                db_path,
+                type(
+                    "_EmptyReport",
+                    (),
+                    {"topology_name": "empty", "transitions": (), "journeys": ()},
+                )(),
+            )
+            self.assertEqual((tr_count, jr_count), (0, 0))
+            with closing(sqlite3.connect(str(db_path))) as conn:
+                cams = conn.execute("SELECT camera_id FROM cameras").fetchall()
+            self.assertEqual(cams, [("cam_a",)])
 
 
 if __name__ == "__main__":
