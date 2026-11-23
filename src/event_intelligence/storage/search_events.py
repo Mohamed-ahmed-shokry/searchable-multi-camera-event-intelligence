@@ -157,6 +157,44 @@ CREATE INDEX IF NOT EXISTS idx_insights_camera_track_id ON insights (camera_id, 
 CREATE INDEX IF NOT EXISTS idx_insights_time_range ON insights (start_time, end_time);
 """
 
+CORRELATION_SCHEMA_DDL = """
+CREATE TABLE IF NOT EXISTS cross_camera_transitions (
+    transition_id TEXT PRIMARY KEY,
+    topology_name TEXT NOT NULL DEFAULT '',
+    from_camera TEXT NOT NULL,
+    from_track_id INTEGER NOT NULL,
+    to_camera TEXT NOT NULL,
+    to_track_id INTEGER NOT NULL,
+    exit_time REAL NOT NULL,
+    entry_time REAL NOT NULL,
+    transit_seconds REAL NOT NULL,
+    confidence REAL NOT NULL,
+    rule_label TEXT NOT NULL DEFAULT '',
+    from_zone TEXT,
+    to_zone TEXT,
+    evidence_reason TEXT NOT NULL DEFAULT ''
+);
+CREATE INDEX IF NOT EXISTS idx_cc_trans_from_cam ON cross_camera_transitions (from_camera, exit_time);
+CREATE INDEX IF NOT EXISTS idx_cc_trans_to_cam ON cross_camera_transitions (to_camera, entry_time);
+CREATE INDEX IF NOT EXISTS idx_cc_trans_confidence ON cross_camera_transitions (confidence DESC);
+
+CREATE TABLE IF NOT EXISTS cross_camera_journeys (
+    journey_id TEXT PRIMARY KEY,
+    topology_name TEXT NOT NULL DEFAULT '',
+    hop_count INTEGER NOT NULL,
+    cameras_visited_json TEXT NOT NULL DEFAULT '[]',
+    start_time REAL NOT NULL,
+    end_time REAL NOT NULL,
+    total_span_seconds REAL NOT NULL,
+    avg_confidence REAL NOT NULL,
+    hops_json TEXT NOT NULL DEFAULT '[]'
+);
+CREATE INDEX IF NOT EXISTS idx_cc_journeys_hops ON cross_camera_journeys (hop_count DESC, avg_confidence DESC);
+CREATE INDEX IF NOT EXISTS idx_cc_journeys_time ON cross_camera_journeys (start_time, end_time);
+"""
+
+SCHEMA_DDL = SCHEMA_DDL + CORRELATION_SCHEMA_DDL
+
 
 @dataclass(frozen=True, slots=True)
 class SearchConfig:
