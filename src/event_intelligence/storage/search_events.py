@@ -297,6 +297,72 @@ class CameraActivitySummary:
 
 
 @dataclass(frozen=True, slots=True)
+class CrossCameraTransitionRecord:
+    """Persisted cross-camera transition row returned by query_cross_camera_transitions."""
+
+    transition_id: str
+    topology_name: str
+    from_camera: str
+    from_track_id: int
+    to_camera: str
+    to_track_id: int
+    exit_time: float
+    entry_time: float
+    transit_seconds: float
+    confidence: float
+    rule_label: str = ""
+    from_zone: str | None = None
+    to_zone: str | None = None
+    evidence_reason: str = ""
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "transition_id": self.transition_id,
+            "topology_name": self.topology_name,
+            "from_camera": self.from_camera,
+            "from_track_id": self.from_track_id,
+            "to_camera": self.to_camera,
+            "to_track_id": self.to_track_id,
+            "exit_time": round(self.exit_time, 3),
+            "entry_time": round(self.entry_time, 3),
+            "transit_seconds": round(self.transit_seconds, 3),
+            "confidence": round(self.confidence, 4),
+            "rule_label": self.rule_label,
+            "from_zone": self.from_zone,
+            "to_zone": self.to_zone,
+            "evidence_reason": self.evidence_reason,
+        }
+
+
+@dataclass(frozen=True, slots=True)
+class CrossCameraJourneyRecord:
+    """Persisted stitched multi-hop journey row returned by query_cross_camera_journeys."""
+
+    journey_id: str
+    topology_name: str
+    hop_count: int
+    cameras_visited: tuple[str, ...]
+    start_time: float
+    end_time: float
+    total_span_seconds: float
+    avg_confidence: float
+    hops: tuple[dict[str, Any], ...] = ()
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "journey_id": self.journey_id,
+            "topology_name": self.topology_name,
+            "hop_count": self.hop_count,
+            "cameras_visited": list(self.cameras_visited),
+            "start_time": round(self.start_time, 3),
+            "end_time": round(self.end_time, 3),
+            "total_span_seconds": round(self.total_span_seconds, 3),
+            "avg_confidence": round(self.avg_confidence, 4),
+            "hops": list(self.hops),
+        }
+
+
+@dataclass(frozen=True, slots=True)
 class EventSearchResult:
     """Structured event row returned by query_events."""
 
