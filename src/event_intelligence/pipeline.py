@@ -282,6 +282,8 @@ class MultiCameraPipelineRunResult:
     total_events: int
     elapsed_seconds: float
     total_insights: int = 0
+    cross_camera_transitions_count: int = 0
+    cross_camera_journeys_count: int = 0
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -293,6 +295,8 @@ class MultiCameraPipelineRunResult:
             "total_tracks": self.total_tracks,
             "total_events": self.total_events,
             "total_insights": self.total_insights,
+            "cross_camera_transitions_count": self.cross_camera_transitions_count,
+            "cross_camera_journeys_count": self.cross_camera_journeys_count,
             "camera_results": [r.to_dict() for r in self.camera_results],
             "db_path": self.db_path,
             "elapsed_seconds": round(self.elapsed_seconds, 4),
