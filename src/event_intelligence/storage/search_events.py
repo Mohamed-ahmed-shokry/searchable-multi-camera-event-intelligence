@@ -3178,6 +3178,40 @@ def build_parser() -> argparse.ArgumentParser:
         help="List registered camera metadata (resolution, fps, total frames, timestamp).",
     )
     parser.add_argument(
+        "--transitions",
+        action="store_true",
+        help="Query persisted cross-camera transitions from intelligence.db.",
+    )
+    parser.add_argument(
+        "--journeys",
+        action="store_true",
+        help="Query persisted stitched multi-hop cross-camera journeys from intelligence.db.",
+    )
+    parser.add_argument(
+        "--from-camera",
+        type=str,
+        default=None,
+        help="Filter --transitions by source camera_id.",
+    )
+    parser.add_argument(
+        "--to-camera",
+        type=str,
+        default=None,
+        help="Filter --transitions by target camera_id.",
+    )
+    parser.add_argument(
+        "--min-confidence",
+        type=float,
+        default=None,
+        help="Minimum confidence threshold for --transitions or --journeys.",
+    )
+    parser.add_argument(
+        "--min-hops",
+        type=int,
+        default=None,
+        help="Minimum hop count filter for --journeys.",
+    )
+    parser.add_argument(
         "--evidence-event-id",
         type=str,
         default=None,
