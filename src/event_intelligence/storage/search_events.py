@@ -1856,6 +1856,75 @@ def query_cross_camera_transitions(
     ]
 
 
+def query_cross_camera_journeys(
+    db_path: Path | str,
+    *,
+    camera_id: str | None = None,
+    min_hops: int | None = None,
+    min_confidence: float | None = None,
+    min_time: float | None = None,
+    max_time: float | None = None,
+    limit: int = 50,
+) -> list[CrossCameraJourneyRecord]:
+    """Query persisted stitched multi-hop journeys from intelligence.db."""
+    path = Path(db_path)
+    if not path.is_file():
+        raise FileNotFoundError(f"SQLite intelligence database not found: {path}")
+
+    clauses: list[str] = []
+    params: list[Any] = []
+    if min_hops is not None:
+        clauses.append("hop_count >= ?")
+        params.append(int(min_hops))
+    if min_confidence is not None:
+        clauses.append("avg_confidence >= ?")
+        params.append(float(min_confidence))
+    if min_time is not None:
+        clauses.append("start_time >= ?")
+        params.append(float(min_time))
+    if max_time is not None:
+        clauses.append("end_time <= ?")
+        params.append(float(max_time))
+
+    where_sql = f"WHERE {' AND '.join(clauses)}" if clauses else ""
+    sql = (
+        "SELECT journey_id, topology_name, hop_count, cameras_visited_json, "
+        "start_time, end_time, total_span_seconds, avg_confidence, hops_json "
+        f"FROM cross_camera_journeys {where_sql} "
+        "ORDER BY start_time ASC, hop_count DESC, avg_confidence DESC, journey_id ASC"
+    )
+
+    with closing(sqlite3.connect(path)) as conn:
+        conn.row_factory = sqlite3.Row
+        try:
+            rows = conn.execute(sql, params).fetchall()
+        except sqlite3.OperationalError:
+            return []
+
+    results: list[CrossCameraJourneyRecord] = []
+    for row in rows:
+        cams = tuple(str(c) for c in json.loads(row["cameras_visited_json"] or "[]"))
+        if camera_id is not None and camera_id not in cams:
+            continue
+        hops_raw = json.loads(row["hops_json"] or "[]")
+        results.append(
+            CrossCameraJourneyRecord(
+                journey_id=str(row["journey_id"]),
+                topology_name=str(row["topology_name"]),
+                hop_count=int(row["hop_count"]),
+                cameras_visited=cams,
+                start_time=float(row["start_time"]),
+                end_time=float(row["end_time"]),
+                total_span_seconds=float(row["total_span_seconds"]),
+                avg_confidence=float(row["avg_confidence"]),
+                hops=tuple(hops_raw),
+            )
+        )
+        if len(results) >= int(limit):
+            break
+    return results
+
+
 def query_insights(
     db_path: Path | str,
     *,
