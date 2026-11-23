@@ -2490,6 +2490,81 @@ uv run --locked pytest -q
 | `uv run --locked python -m event_intelligence.multicam --db outputs/runs/phase11j_verify/intelligence.db --topology configs/camera_topology.yaml --output-dir outputs/multicam/verify_11j` | ✅ exit 0 | generated Markdown, JSON, and 3 CSV artifacts; detected simultaneous surge window `[0.0-5.0s]` |
 | `uv run --locked python -m event_intelligence.multicam --db outputs/runs/phase11j_verify --json` | ✅ exit 0 | verified run-directory auto-resolution and `inferred_all_pairs` JSON output |
 
+---
+
+## Active Phase: 11k — Cross-Camera Correlation Persistence & Unified Search Integration (2026-11-24)
+
+### Objective
+
+Phase 11j introduced the `event_intelligence.multicam` spatial-temporal correlation engine as a standalone CLI/library, but correlated cross-camera transitions and stitched multi-hop journeys are **not yet persisted in `intelligence.db`**, cannot be queried via `python -m event_intelligence.search`, and are not automatically computed during `run_multi_camera_pipeline()`.
+
+Demonstrable end-to-end outcome: running `python -m event_intelligence.pipeline --videos ... --cameras ... [--topology configs/camera_topology.yaml]` automatically runs multi-camera correlation, writes `<run_dir>/multicam/` artifacts, and persists `cross_camera_transitions` and `cross_camera_journeys` into `intelligence.db` (non-destructive schema migration); analysts can also persist via `python -m event_intelligence.multicam --db ... --persist` and query them immediately via `python -m event_intelligence.search --db ... --transitions` and `--journeys`.
+
+### Scope
+
+1. **SQLite schema & non-destructive migration (`src/event_intelligence/storage/search_events.py`):**
+   - Add `cross_camera_transitions` and `cross_camera_journeys` tables and indexes to `SCHEMA_DDL`.
+   - Add `CrossCameraTransitionRecord` and `CrossCameraJourneyRecord` dataclasses.
+   - Implement `insert_cross_camera_correlation()` with automatic `CREATE TABLE IF NOT EXISTS` migration on legacy DBs.
+   - Implement `query_cross_camera_transitions()` and `query_cross_camera_journeys()` with rich filtering (`from_camera`, `to_camera`, `camera_id`, `track_id`, `min_confidence`, `min_hops`, `min_time`, `max_time`, `limit`) and graceful empty return on legacy DBs.
+2. **Public exports (`storage/__init__.py`, `search.py`).**
+3. **Search CLI integration (`src/event_intelligence/storage/search_events.py`):**
+   - Add `--transitions`, `--journeys`, `--from-camera`, `--to-camera`, `--min-confidence`, and `--min-hops` flags to `python -m event_intelligence.search` (text and `--json`).
+4. **Multicam CLI persistence (`src/event_intelligence/multicam/__main__.py`):**
+   - Add `--persist` flag to write correlated transitions and journeys directly into `intelligence.db`.
+5. **Multi-camera pipeline integration (`src/event_intelligence/pipeline.py`):**
+   - Wire optional `topology_path` / `--topology` into `run_multi_camera_pipeline()`, persist correlation results into `master_db`, write `<master_run_dir>/multicam/` artifacts, and report `cross_camera_transitions_count` and `cross_camera_journeys_count` on `MultiCameraPipelineResult`.
+6. **Comprehensive unit & CLI integration tests** + real multi-camera E2E execution.
+7. **Documentation:** `README.md` and `docs/ROADMAP.md` updates.
+
+### Acceptance Criteria
+
+| # | Criterion | Status | Evidence |
+|---|-----------|--------|----------|
+| 1 | `SCHEMA_DDL` and `insert_cross_camera_correlation()` persist transitions and journeys non-destructively (including legacy DBs) | ⬜ | pending |
+| 2 | `query_cross_camera_transitions()` and `query_cross_camera_journeys()` support filtering and graceful empty fallback on legacy DBs | ⬜ | pending |
+| 3 | `python -m event_intelligence.search --transitions` and `--journeys` work in text and `--json` modes | ⬜ | pending |
+| 4 | `python -m event_intelligence.multicam --persist` persists correlation results into `intelligence.db` | ⬜ | pending |
+| 5 | `run_multi_camera_pipeline()` + `--topology` auto-correlates, persists to `master_db`, and writes `<run_dir>/multicam/` artifacts | ⬜ | pending |
+| 6 | Real multi-camera E2E pipeline -> `--persist` -> `search --transitions` / `--journeys` verified end-to-end | ⬜ | pending |
+| 7 | All local CI-parity checks (`uv sync --locked`, `ruff check`, `ruff format --check`, `pytest`) and remote GitHub Actions CI pass 100% | ⬜ | pending |
+
+### Validation & CI Plan
+
+```bash
+uv sync --locked
+uv run --locked ruff check .
+uv run --locked ruff format --check .
+uv run --locked pytest -q
+```
+
+### Exclusions (deferred)
+
+- **Appearance-based Re-ID neural embeddings (OSNet/CLIP):** Still deferred per Phase 11j.
+- **Phase 12 Productization (Web UI, REST API, Auth):** Deferred per `AGENTS.md`.
+
+### Micro-Task Breakdown
+
+- [ ] 1. `docs(roadmap): define Phase 11k cross-camera correlation persistence and search scope`
+- [ ] 2. `feat(storage): add cross_camera_transitions and cross_camera_journeys tables to SCHEMA_DDL`
+- [ ] 3. `types(storage): add CrossCameraTransitionRecord and CrossCameraJourneyRecord dataclasses`
+- [ ] 4. `feat(storage): implement insert_cross_camera_correlation with non-destructive migration`
+- [ ] 5. `feat(storage): implement query_cross_camera_transitions with camera, track, time, and confidence filters`
+- [ ] 6. `feat(storage): implement query_cross_camera_journeys with camera, min_hops, and confidence filters`
+- [ ] 7. `feat(storage): export correlation persistence and query symbols in storage and search modules`
+- [ ] 8. `test(storage): add unit tests for correlation persistence, legacy DB migration, and query filters`
+- [ ] 9. `feat(search): register --transitions, --journeys, and correlation filter flags in build_parser`
+- [ ] 10. `feat(search): handle --transitions and --journeys CLI queries in main`
+- [ ] 11. `test(search): add CLI integration tests for --transitions and --journeys flags`
+- [ ] 12. `feat(multicam): add --persist flag to multicam CLI to save correlation into intelligence.db`
+- [ ] 13. `test(multicam): add CLI integration test for --persist writing to SQLite`
+- [ ] 14. `types(pipeline): add cross_camera_transitions_count and cross_camera_journeys_count to MultiCameraPipelineResult`
+- [ ] 15. `feat(pipeline): wire multi-camera correlation, persistence, and --topology into run_multi_camera_pipeline`
+- [ ] 16. `test(pipeline): verify run_multi_camera_pipeline persists correlation tables and writes multicam artifacts`
+- [ ] 17. `docs(readme): document --transitions, --journeys, --persist, and pipeline --topology`
+- [ ] 18. `docs(roadmap): complete Phase 11k criteria, decision log, and CI log`
+
+
 
 
 
