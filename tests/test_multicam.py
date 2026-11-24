@@ -11,6 +11,8 @@ import unittest
 from contextlib import closing, redirect_stdout
 from pathlib import Path
 
+from helpers import make_video
+
 from event_intelligence.multicam.__main__ import main as multicam_main
 from event_intelligence.multicam.engine import (
     analyze_multi_camera_correlation,
@@ -31,7 +33,19 @@ from event_intelligence.multicam.types import (
     CameraTopology,
     CameraTransitionRule,
 )
-from event_intelligence.storage.search_events import SCHEMA_DDL
+from event_intelligence.pipeline import (
+    PipelineConfig,
+    run_multi_camera_pipeline,
+)
+from event_intelligence.search import main as search_main
+from event_intelligence.spatial import SceneConfig, ZoneSpec, save_scene_config
+from event_intelligence.storage.search_events import (
+    SCHEMA_DDL,
+    insert_cross_camera_correlation,
+    query_cross_camera_journeys,
+    query_cross_camera_transitions,
+)
+from event_intelligence.tracking import FrameTracks, TrackDetection, write_tracks_csv
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 
@@ -429,6 +443,299 @@ class TestMultiCameraCli(unittest.TestCase):
             with self.assertRaises(SystemExit) as ctx:
                 multicam_main(["--db", str(missing)])
             self.assertEqual(ctx.exception.code, 2)
+
+    def test_cli_persist_writes_transitions_and_journeys_to_db(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            db_path = _build_multicam_db(Path(tmp) / "intelligence.db")
+            buf = io.StringIO()
+            with redirect_stdout(buf):
+                rc = multicam_main(["--db", str(db_path), "--persist", "--json"])
+
+            self.assertEqual(rc, 0)
+            payload = json.loads(buf.getvalue())
+            self.assertIn("persisted", payload)
+            self.assertEqual(
+                payload["persisted"]["transitions"],
+                payload["transition_count"],
+            )
+            self.assertEqual(
+                len(query_cross_camera_transitions(db_path)),
+                payload["transition_count"],
+            )
+            self.assertEqual(
+                len(query_cross_camera_journeys(db_path)),
+                payload["journey_count"],
+            )
+
+
+class TestCrossCameraCorrelationPersistence(unittest.TestCase):
+    """Tests for SQLite persistence, legacy migration, and correlation queries."""
+
+    def test_insert_and_query_transitions_and_journeys_with_filters(self) -> None:
+        topology = CameraTopology(
+            name="linear_3cam",
+            transitions=(
+                CameraTransitionRule(
+                    from_camera="lobby",
+                    to_camera="corridor",
+                    min_transit_seconds=0.5,
+                    max_transit_seconds=5.0,
+                    from_zone="lobby_exit",
+                    to_zone="corridor_entry",
+                    expected_transit_seconds=2.0,
+                    label="lobby_to_corridor",
+                ),
+                CameraTransitionRule(
+                    from_camera="corridor",
+                    to_camera="exit_hall",
+                    min_transit_seconds=0.5,
+                    max_transit_seconds=5.0,
+                    expected_transit_seconds=2.0,
+                    label="corridor_to_exit",
+                ),
+            ),
+        )
+        with tempfile.TemporaryDirectory() as tmp:
+            db_path = _build_multicam_db(Path(tmp) / "intelligence.db")
+            report = analyze_multi_camera_correlation(db_path, topology=topology)
+            tr_count, jr_count = insert_cross_camera_correlation(db_path, report)
+
+            self.assertEqual(tr_count, 2)
+            self.assertEqual(jr_count, 1)
+
+            all_tr = query_cross_camera_transitions(db_path)
+            self.assertEqual(len(all_tr), 2)
+            self.assertEqual(all_tr[0].topology_name, "linear_3cam")
+
+            lobby_tr = query_cross_camera_transitions(
+                db_path,
+                from_camera="lobby",
+                to_camera="corridor",
+                min_confidence=0.9,
+            )
+            self.assertEqual(len(lobby_tr), 1)
+            self.assertEqual(lobby_tr[0].from_track_id, 1)
+            self.assertEqual(lobby_tr[0].to_track_id, 10)
+
+            track_tr = query_cross_camera_transitions(db_path, track_id=20)
+            self.assertEqual(len(track_tr), 1)
+            self.assertEqual(track_tr[0].to_camera, "exit_hall")
+
+            journeys = query_cross_camera_journeys(
+                db_path,
+                camera_id="corridor",
+                min_hops=2,
+                min_confidence=0.5,
+            )
+            self.assertEqual(len(journeys), 1)
+            self.assertEqual(
+                journeys[0].cameras_visited,
+                ("lobby", "corridor", "exit_hall"),
+            )
+            self.assertEqual(len(journeys[0].hops), 2)
+
+            none_jr = query_cross_camera_journeys(db_path, min_hops=3)
+            self.assertEqual(none_jr, [])
+
+    def test_legacy_db_graceful_query_and_nondestructive_migration(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            db_path = Path(tmp) / "legacy.db"
+            with closing(sqlite3.connect(str(db_path))) as conn:
+                conn.execute(
+                    "CREATE TABLE cameras (camera_id TEXT PRIMARY KEY, source_name TEXT)"
+                )
+                conn.execute("INSERT INTO cameras VALUES ('cam_a', 'a.mp4')")
+                conn.commit()
+
+            # Legacy DB lacks correlation tables -> queries return empty cleanly
+            self.assertEqual(query_cross_camera_transitions(db_path), [])
+            self.assertEqual(query_cross_camera_journeys(db_path), [])
+
+            # Non-destructive migration preserves existing cameras table
+            tr_count, jr_count = insert_cross_camera_correlation(
+                db_path,
+                type(
+                    "_EmptyReport",
+                    (),
+                    {"topology_name": "empty", "transitions": (), "journeys": ()},
+                )(),
+            )
+            self.assertEqual((tr_count, jr_count), (0, 0))
+            with closing(sqlite3.connect(str(db_path))) as conn:
+                cams = conn.execute("SELECT camera_id FROM cameras").fetchall()
+            self.assertEqual(cams, [("cam_a",)])
+
+    def test_search_cli_transitions_and_journeys_text_and_json(self) -> None:
+        topology = CameraTopology(
+            name="linear_3cam",
+            transitions=(
+                CameraTransitionRule(
+                    from_camera="lobby",
+                    to_camera="corridor",
+                    min_transit_seconds=0.5,
+                    max_transit_seconds=5.0,
+                    expected_transit_seconds=2.0,
+                ),
+                CameraTransitionRule(
+                    from_camera="corridor",
+                    to_camera="exit_hall",
+                    min_transit_seconds=0.5,
+                    max_transit_seconds=5.0,
+                    expected_transit_seconds=2.0,
+                ),
+            ),
+        )
+        with tempfile.TemporaryDirectory() as tmp:
+            db_path = _build_multicam_db(Path(tmp) / "intelligence.db")
+            report = analyze_multi_camera_correlation(db_path, topology=topology)
+            insert_cross_camera_correlation(db_path, report)
+
+            buf = io.StringIO()
+            with redirect_stdout(buf):
+                rc = search_main(
+                    [
+                        "--db",
+                        str(db_path),
+                        "--transitions",
+                        "--from-camera",
+                        "lobby",
+                        "--json",
+                    ]
+                )
+            self.assertEqual(rc, 0)
+            tr_data = json.loads(buf.getvalue())
+            self.assertEqual(len(tr_data), 1)
+            self.assertEqual(tr_data[0]["to_camera"], "corridor")
+
+            buf_text = io.StringIO()
+            with redirect_stdout(buf_text):
+                rc_text = search_main(["--db", str(db_path), "--transitions"])
+            self.assertEqual(rc_text, 0)
+            self.assertIn("lobby#1 -> corridor#10", buf_text.getvalue())
+
+            buf_jr = io.StringIO()
+            with redirect_stdout(buf_jr):
+                rc_jr = search_main(
+                    [
+                        "--db",
+                        str(db_path),
+                        "--journeys",
+                        "--min-hops",
+                        "2",
+                        "--json",
+                    ]
+                )
+            self.assertEqual(rc_jr, 0)
+            jr_data = json.loads(buf_jr.getvalue())
+            self.assertEqual(len(jr_data), 1)
+            self.assertEqual(
+                jr_data[0]["cameras_visited"],
+                ["lobby", "corridor", "exit_hall"],
+            )
+
+            buf_jr_text = io.StringIO()
+            with redirect_stdout(buf_jr_text):
+                rc_jr_text = search_main(["--db", str(db_path), "--journeys"])
+            self.assertEqual(rc_jr_text, 0)
+            self.assertIn("lobby -> corridor -> exit_hall", buf_jr_text.getvalue())
+
+    def test_run_multi_camera_pipeline_persists_correlation_and_writes_artifacts(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            cam1_vid = make_video(root, name="cam1.avi", count=6)
+            cam2_vid = make_video(root, name="cam2.avi", count=6)
+
+            scene_yaml = root / "scene.yaml"
+            save_scene_config(
+                scene_yaml,
+                SceneConfig(
+                    zones=[ZoneSpec("plaza", [(0, 0), (64, 0), (64, 48), (0, 48)])],
+                    lines=[],
+                ),
+            )
+            c1_tracks = root / "c1_tracks.csv"
+            write_tracks_csv(
+                c1_tracks,
+                [
+                    FrameTracks(
+                        f,
+                        [TrackDetection(f, 1, 10.0, 10.0, 30.0, 30.0, 0.9)],
+                    )
+                    for f in range(6)
+                ],
+            )
+            c2_tracks = root / "c2_tracks.csv"
+            write_tracks_csv(
+                c2_tracks,
+                [
+                    FrameTracks(
+                        f,
+                        [TrackDetection(f, 7, 15.0, 15.0, 35.0, 35.0, 0.9)],
+                    )
+                    for f in range(6)
+                ],
+            )
+            cfg = PipelineConfig(
+                precomputed_tracks_csv=str(c1_tracks),
+                scene_config_path=str(scene_yaml),
+                save_annotated_video=False,
+                min_dwell_seconds=0.1,
+                smoothing_window=1,
+            )
+            topo_path = save_camera_topology(
+                CameraTopology(
+                    name="offset_handoff",
+                    camera_time_offsets={"cam_entrance": 0.0, "cam_aisle": 2.0},
+                    transitions=(
+                        CameraTransitionRule(
+                            from_camera="cam_entrance",
+                            to_camera="cam_aisle",
+                            min_transit_seconds=0.0,
+                            max_transit_seconds=10.0,
+                            expected_transit_seconds=1.5,
+                            label="entrance_to_aisle",
+                        ),
+                    ),
+                ),
+                root / "topology.yaml",
+            )
+            res = run_multi_camera_pipeline(
+                [cam1_vid, cam2_vid],
+                cfg,
+                camera_ids=["cam_entrance", "cam_aisle"],
+                output_root=root / "runs",
+                run_id="test_11k_pipe",
+                project_root=root,
+                precomputed_tracks_by_camera={
+                    "cam_entrance": c1_tracks,
+                    "cam_aisle": c2_tracks,
+                },
+                topology_path=topo_path,
+            )
+
+            self.assertEqual(res.cross_camera_transitions_count, 1)
+            self.assertEqual(res.cross_camera_journeys_count, 1)
+            multicam_dir = Path(res.run_dir) / "multicam"
+            self.assertTrue(
+                (multicam_dir / "multicam_correlation_report.json").exists()
+            )
+            self.assertTrue((multicam_dir / "cross_camera_transitions.csv").exists())
+
+            persisted_tr = query_cross_camera_transitions(res.db_path)
+            self.assertEqual(len(persisted_tr), 1)
+            self.assertEqual(persisted_tr[0].from_camera, "cam_entrance")
+            self.assertEqual(persisted_tr[0].to_camera, "cam_aisle")
+            self.assertEqual(persisted_tr[0].from_track_id, 1)
+            self.assertEqual(persisted_tr[0].to_track_id, 7)
+
+            persisted_jr = query_cross_camera_journeys(res.db_path)
+            self.assertEqual(len(persisted_jr), 1)
+            self.assertEqual(
+                persisted_jr[0].cameras_visited,
+                ("cam_entrance", "cam_aisle"),
+            )
 
 
 if __name__ == "__main__":

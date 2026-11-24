@@ -157,6 +157,44 @@ CREATE INDEX IF NOT EXISTS idx_insights_camera_track_id ON insights (camera_id, 
 CREATE INDEX IF NOT EXISTS idx_insights_time_range ON insights (start_time, end_time);
 """
 
+CORRELATION_SCHEMA_DDL = """
+CREATE TABLE IF NOT EXISTS cross_camera_transitions (
+    transition_id TEXT PRIMARY KEY,
+    topology_name TEXT NOT NULL DEFAULT '',
+    from_camera TEXT NOT NULL,
+    from_track_id INTEGER NOT NULL,
+    to_camera TEXT NOT NULL,
+    to_track_id INTEGER NOT NULL,
+    exit_time REAL NOT NULL,
+    entry_time REAL NOT NULL,
+    transit_seconds REAL NOT NULL,
+    confidence REAL NOT NULL,
+    rule_label TEXT NOT NULL DEFAULT '',
+    from_zone TEXT,
+    to_zone TEXT,
+    evidence_reason TEXT NOT NULL DEFAULT ''
+);
+CREATE INDEX IF NOT EXISTS idx_cc_trans_from_cam ON cross_camera_transitions (from_camera, exit_time);
+CREATE INDEX IF NOT EXISTS idx_cc_trans_to_cam ON cross_camera_transitions (to_camera, entry_time);
+CREATE INDEX IF NOT EXISTS idx_cc_trans_confidence ON cross_camera_transitions (confidence DESC);
+
+CREATE TABLE IF NOT EXISTS cross_camera_journeys (
+    journey_id TEXT PRIMARY KEY,
+    topology_name TEXT NOT NULL DEFAULT '',
+    hop_count INTEGER NOT NULL,
+    cameras_visited_json TEXT NOT NULL DEFAULT '[]',
+    start_time REAL NOT NULL,
+    end_time REAL NOT NULL,
+    total_span_seconds REAL NOT NULL,
+    avg_confidence REAL NOT NULL,
+    hops_json TEXT NOT NULL DEFAULT '[]'
+);
+CREATE INDEX IF NOT EXISTS idx_cc_journeys_hops ON cross_camera_journeys (hop_count DESC, avg_confidence DESC);
+CREATE INDEX IF NOT EXISTS idx_cc_journeys_time ON cross_camera_journeys (start_time, end_time);
+"""
+
+SCHEMA_DDL = SCHEMA_DDL + CORRELATION_SCHEMA_DDL
+
 
 @dataclass(frozen=True, slots=True)
 class SearchConfig:
@@ -255,6 +293,72 @@ class CameraActivitySummary:
             "total_dwell_seconds": round(self.total_dwell_seconds, 4),
             "zones_active": self.zones_active,
             "lines_active": self.lines_active,
+        }
+
+
+@dataclass(frozen=True, slots=True)
+class CrossCameraTransitionRecord:
+    """Persisted cross-camera transition row returned by query_cross_camera_transitions."""
+
+    transition_id: str
+    topology_name: str
+    from_camera: str
+    from_track_id: int
+    to_camera: str
+    to_track_id: int
+    exit_time: float
+    entry_time: float
+    transit_seconds: float
+    confidence: float
+    rule_label: str = ""
+    from_zone: str | None = None
+    to_zone: str | None = None
+    evidence_reason: str = ""
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "transition_id": self.transition_id,
+            "topology_name": self.topology_name,
+            "from_camera": self.from_camera,
+            "from_track_id": self.from_track_id,
+            "to_camera": self.to_camera,
+            "to_track_id": self.to_track_id,
+            "exit_time": round(self.exit_time, 3),
+            "entry_time": round(self.entry_time, 3),
+            "transit_seconds": round(self.transit_seconds, 3),
+            "confidence": round(self.confidence, 4),
+            "rule_label": self.rule_label,
+            "from_zone": self.from_zone,
+            "to_zone": self.to_zone,
+            "evidence_reason": self.evidence_reason,
+        }
+
+
+@dataclass(frozen=True, slots=True)
+class CrossCameraJourneyRecord:
+    """Persisted stitched multi-hop journey row returned by query_cross_camera_journeys."""
+
+    journey_id: str
+    topology_name: str
+    hop_count: int
+    cameras_visited: tuple[str, ...]
+    start_time: float
+    end_time: float
+    total_span_seconds: float
+    avg_confidence: float
+    hops: tuple[dict[str, Any], ...] = ()
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "journey_id": self.journey_id,
+            "topology_name": self.topology_name,
+            "hop_count": self.hop_count,
+            "cameras_visited": list(self.cameras_visited),
+            "start_time": round(self.start_time, 3),
+            "end_time": round(self.end_time, 3),
+            "total_span_seconds": round(self.total_span_seconds, 3),
+            "avg_confidence": round(self.avg_confidence, 4),
+            "hops": list(self.hops),
         }
 
 
@@ -1587,6 +1691,240 @@ def insert_insights(
     return len(rows)
 
 
+def insert_cross_camera_correlation(
+    db_path: Path | str,
+    report: Any,
+    *,
+    clear_existing: bool = True,
+) -> tuple[int, int]:
+    """Persist cross-camera transitions and journeys into intelligence.db.
+
+    Runs CORRELATION_SCHEMA_DDL non-destructively so legacy databases without
+    correlation tables are migrated automatically.
+    """
+    path = Path(db_path)
+    if not path.is_file():
+        init_intelligence_db(path)
+
+    topology_name = str(getattr(report, "topology_name", ""))
+    transitions = list(getattr(report, "transitions", ()) or ())
+    journeys = list(getattr(report, "journeys", ()) or ())
+
+    transition_rows = [
+        (
+            str(tr.transition_id),
+            topology_name,
+            str(tr.from_camera),
+            int(tr.from_track_id),
+            str(tr.to_camera),
+            int(tr.to_track_id),
+            float(tr.exit_time),
+            float(tr.entry_time),
+            float(tr.transit_seconds),
+            float(tr.confidence),
+            str(getattr(tr, "rule_label", "") or ""),
+            str(tr.from_zone) if getattr(tr, "from_zone", None) else None,
+            str(tr.to_zone) if getattr(tr, "to_zone", None) else None,
+            str(getattr(tr, "evidence_reason", "") or ""),
+        )
+        for tr in transitions
+    ]
+
+    journey_rows = [
+        (
+            str(jr.journey_id),
+            topology_name,
+            len(jr.hops),
+            json.dumps(list(jr.cameras_visited)),
+            float(jr.start_time),
+            float(jr.end_time),
+            float(jr.total_span_seconds),
+            float(jr.avg_confidence),
+            json.dumps([hop.to_dict() for hop in jr.hops]),
+        )
+        for jr in journeys
+    ]
+
+    with closing(sqlite3.connect(path)) as conn:
+        conn.executescript(CORRELATION_SCHEMA_DDL)
+        if clear_existing:
+            conn.execute("DELETE FROM cross_camera_transitions")
+            conn.execute("DELETE FROM cross_camera_journeys")
+        if transition_rows:
+            conn.executemany(
+                """
+                INSERT OR REPLACE INTO cross_camera_transitions (
+                    transition_id, topology_name, from_camera, from_track_id,
+                    to_camera, to_track_id, exit_time, entry_time,
+                    transit_seconds, confidence, rule_label,
+                    from_zone, to_zone, evidence_reason
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                transition_rows,
+            )
+        if journey_rows:
+            conn.executemany(
+                """
+                INSERT OR REPLACE INTO cross_camera_journeys (
+                    journey_id, topology_name, hop_count, cameras_visited_json,
+                    start_time, end_time, total_span_seconds, avg_confidence,
+                    hops_json
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                journey_rows,
+            )
+        conn.commit()
+    return len(transition_rows), len(journey_rows)
+
+
+def query_cross_camera_transitions(
+    db_path: Path | str,
+    *,
+    from_camera: str | None = None,
+    to_camera: str | None = None,
+    camera_id: str | None = None,
+    track_id: int | None = None,
+    min_confidence: float | None = None,
+    min_time: float | None = None,
+    max_time: float | None = None,
+    limit: int = 50,
+) -> list[CrossCameraTransitionRecord]:
+    """Query persisted cross-camera transitions from intelligence.db."""
+    path = Path(db_path)
+    if not path.is_file():
+        raise FileNotFoundError(f"SQLite intelligence database not found: {path}")
+
+    clauses: list[str] = []
+    params: list[Any] = []
+    if from_camera is not None:
+        clauses.append("from_camera = ?")
+        params.append(from_camera)
+    if to_camera is not None:
+        clauses.append("to_camera = ?")
+        params.append(to_camera)
+    if camera_id is not None:
+        clauses.append("(from_camera = ? OR to_camera = ?)")
+        params.extend([camera_id, camera_id])
+    if track_id is not None:
+        clauses.append("(from_track_id = ? OR to_track_id = ?)")
+        params.extend([int(track_id), int(track_id)])
+    if min_confidence is not None:
+        clauses.append("confidence >= ?")
+        params.append(float(min_confidence))
+    if min_time is not None:
+        clauses.append("exit_time >= ?")
+        params.append(float(min_time))
+    if max_time is not None:
+        clauses.append("entry_time <= ?")
+        params.append(float(max_time))
+
+    where_sql = f"WHERE {' AND '.join(clauses)}" if clauses else ""
+    sql = (
+        "SELECT transition_id, topology_name, from_camera, from_track_id, "
+        "to_camera, to_track_id, exit_time, entry_time, transit_seconds, "
+        "confidence, rule_label, from_zone, to_zone, evidence_reason "
+        f"FROM cross_camera_transitions {where_sql} "
+        "ORDER BY exit_time ASC, confidence DESC, transition_id ASC LIMIT ?"
+    )
+    params.append(int(limit))
+
+    with closing(sqlite3.connect(path)) as conn:
+        conn.row_factory = sqlite3.Row
+        try:
+            rows = conn.execute(sql, params).fetchall()
+        except sqlite3.OperationalError:
+            return []
+
+    return [
+        CrossCameraTransitionRecord(
+            transition_id=str(row["transition_id"]),
+            topology_name=str(row["topology_name"]),
+            from_camera=str(row["from_camera"]),
+            from_track_id=int(row["from_track_id"]),
+            to_camera=str(row["to_camera"]),
+            to_track_id=int(row["to_track_id"]),
+            exit_time=float(row["exit_time"]),
+            entry_time=float(row["entry_time"]),
+            transit_seconds=float(row["transit_seconds"]),
+            confidence=float(row["confidence"]),
+            rule_label=str(row["rule_label"] or ""),
+            from_zone=str(row["from_zone"]) if row["from_zone"] else None,
+            to_zone=str(row["to_zone"]) if row["to_zone"] else None,
+            evidence_reason=str(row["evidence_reason"] or ""),
+        )
+        for row in rows
+    ]
+
+
+def query_cross_camera_journeys(
+    db_path: Path | str,
+    *,
+    camera_id: str | None = None,
+    min_hops: int | None = None,
+    min_confidence: float | None = None,
+    min_time: float | None = None,
+    max_time: float | None = None,
+    limit: int = 50,
+) -> list[CrossCameraJourneyRecord]:
+    """Query persisted stitched multi-hop journeys from intelligence.db."""
+    path = Path(db_path)
+    if not path.is_file():
+        raise FileNotFoundError(f"SQLite intelligence database not found: {path}")
+
+    clauses: list[str] = []
+    params: list[Any] = []
+    if min_hops is not None:
+        clauses.append("hop_count >= ?")
+        params.append(int(min_hops))
+    if min_confidence is not None:
+        clauses.append("avg_confidence >= ?")
+        params.append(float(min_confidence))
+    if min_time is not None:
+        clauses.append("start_time >= ?")
+        params.append(float(min_time))
+    if max_time is not None:
+        clauses.append("end_time <= ?")
+        params.append(float(max_time))
+
+    where_sql = f"WHERE {' AND '.join(clauses)}" if clauses else ""
+    sql = (
+        "SELECT journey_id, topology_name, hop_count, cameras_visited_json, "
+        "start_time, end_time, total_span_seconds, avg_confidence, hops_json "
+        f"FROM cross_camera_journeys {where_sql} "
+        "ORDER BY start_time ASC, hop_count DESC, avg_confidence DESC, journey_id ASC"
+    )
+
+    with closing(sqlite3.connect(path)) as conn:
+        conn.row_factory = sqlite3.Row
+        try:
+            rows = conn.execute(sql, params).fetchall()
+        except sqlite3.OperationalError:
+            return []
+
+    results: list[CrossCameraJourneyRecord] = []
+    for row in rows:
+        cams = tuple(str(c) for c in json.loads(row["cameras_visited_json"] or "[]"))
+        if camera_id is not None and camera_id not in cams:
+            continue
+        hops_raw = json.loads(row["hops_json"] or "[]")
+        results.append(
+            CrossCameraJourneyRecord(
+                journey_id=str(row["journey_id"]),
+                topology_name=str(row["topology_name"]),
+                hop_count=int(row["hop_count"]),
+                cameras_visited=cams,
+                start_time=float(row["start_time"]),
+                end_time=float(row["end_time"]),
+                total_span_seconds=float(row["total_span_seconds"]),
+                avg_confidence=float(row["avg_confidence"]),
+                hops=tuple(hops_raw),
+            )
+        )
+        if len(results) >= int(limit):
+            break
+    return results
+
+
 def query_insights(
     db_path: Path | str,
     *,
@@ -2840,6 +3178,40 @@ def build_parser() -> argparse.ArgumentParser:
         help="List registered camera metadata (resolution, fps, total frames, timestamp).",
     )
     parser.add_argument(
+        "--transitions",
+        action="store_true",
+        help="Query persisted cross-camera transitions from intelligence.db.",
+    )
+    parser.add_argument(
+        "--journeys",
+        action="store_true",
+        help="Query persisted stitched multi-hop cross-camera journeys from intelligence.db.",
+    )
+    parser.add_argument(
+        "--from-camera",
+        type=str,
+        default=None,
+        help="Filter --transitions by source camera_id.",
+    )
+    parser.add_argument(
+        "--to-camera",
+        type=str,
+        default=None,
+        help="Filter --transitions by target camera_id.",
+    )
+    parser.add_argument(
+        "--min-confidence",
+        type=float,
+        default=None,
+        help="Minimum confidence threshold for --transitions or --journeys.",
+    )
+    parser.add_argument(
+        "--min-hops",
+        type=int,
+        default=None,
+        help="Minimum hop count filter for --journeys.",
+    )
+    parser.add_argument(
         "--evidence-event-id",
         type=str,
         default=None,
@@ -2990,6 +3362,53 @@ def main(argv: list[str] | None = None) -> int:
                     f"  [{c.camera_id}] source={c.source_name} "
                     f"{c.width}x{c.height} @ {c.fps:.2f} fps "
                     f"({c.total_frames} frames){ts_label}"
+                )
+        return 0
+
+    if args.transitions:
+        transitions = query_cross_camera_transitions(
+            db_path,
+            from_camera=args.from_camera,
+            to_camera=args.to_camera,
+            camera_id=args.camera_id,
+            track_id=args.track_id,
+            min_confidence=args.min_confidence,
+            min_time=args.min_time,
+            max_time=args.max_time,
+            limit=args.limit,
+        )
+        if args.json:
+            print(json.dumps([t.to_dict() for t in transitions], indent=2))
+        else:
+            print(f"Matched {len(transitions)} cross-camera transition(s):")
+            for t in transitions:
+                print(
+                    f"  [{t.transition_id}] {t.from_camera}#{t.from_track_id} -> "
+                    f"{t.to_camera}#{t.to_track_id} "
+                    f"exit={t.exit_time:.2f}s entry={t.entry_time:.2f}s "
+                    f"dt={t.transit_seconds:.2f}s conf={t.confidence:.2f}"
+                )
+        return 0
+
+    if args.journeys:
+        journeys = query_cross_camera_journeys(
+            db_path,
+            camera_id=args.camera_id,
+            min_hops=args.min_hops,
+            min_confidence=args.min_confidence,
+            min_time=args.min_time,
+            max_time=args.max_time,
+            limit=args.limit,
+        )
+        if args.json:
+            print(json.dumps([j.to_dict() for j in journeys], indent=2))
+        else:
+            print(f"Matched {len(journeys)} cross-camera journey(s):")
+            for j in journeys:
+                path_str = " -> ".join(j.cameras_visited)
+                print(
+                    f"  [{j.journey_id}] {path_str} hops={j.hop_count} "
+                    f"span={j.total_span_seconds:.2f}s avg_conf={j.avg_confidence:.2f}"
                 )
         return 0
 
