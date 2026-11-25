@@ -3936,6 +3936,61 @@ def main(argv: list[str] | None = None) -> int:
                 )
         return 0
 
+    if args.journey_dossier is not None:
+        dossier = query_journey_dossier(db_path, args.journey_dossier)
+        if args.json:
+            print(json.dumps(dossier.to_dict(), indent=2))
+        else:
+            path_str = " -> ".join(dossier.cameras_visited)
+            print(
+                f"=== Cross-Camera Journey Dossier: {dossier.journey_id} ===\n"
+                f"  Path: {path_str} ({dossier.hop_count} hop(s), "
+                f"span={dossier.total_span_seconds:.2f}s, avg_conf={dossier.avg_confidence:.2f})\n"
+                f"  Totals: {dossier.total_events} event(s), {dossier.total_insights} insight(s)"
+            )
+            for hop in dossier.hops:
+                handoff = (
+                    f" <- {hop.incoming_transition_id} (dt={hop.incoming_transit_seconds:.2f}s, "
+                    f"conf={hop.incoming_confidence:.2f})"
+                    if hop.incoming_transition_id
+                    and hop.incoming_transit_seconds is not None
+                    and hop.incoming_confidence is not None
+                    else " (origin)"
+                )
+                print(
+                    f"  [{hop.hop_index}] {hop.camera_id}#{hop.track_id} "
+                    f"t={hop.start_time:.2f}..{hop.end_time:.2f}s "
+                    f"dur={hop.duration_seconds:.2f}s path={hop.path_length_px:.1f}px "
+                    f"events={len(hop.events)} insights={len(hop.insights)}{handoff}"
+                )
+        return 0
+
+    if args.export_journey is not None:
+        target_bundle = (
+            args.bundle_dir
+            if args.bundle_dir is not None
+            else (db_path.resolve().parent / "journey_bundles" / args.export_journey)
+        )
+        manifest = export_journey_bundle(
+            db_path,
+            args.export_journey,
+            target_bundle,
+            evidence_root=args.evidence_root,
+        )
+        if args.json:
+            print(json.dumps(manifest.to_dict(), indent=2))
+        else:
+            path_str = " -> ".join(manifest.cameras_visited)
+            print(
+                f"Exported cross-camera journey bundle '{manifest.journey_id}' "
+                f"({path_str}) -> {manifest.bundle_dir} "
+                f"(hops={manifest.hop_count}, events={manifest.total_events}, "
+                f"insights={manifest.total_insights}, "
+                f"media={len(manifest.copied_media)} copied, "
+                f"{len(manifest.missing_media)} missing)"
+            )
+        return 0
+
     if args.camera_summary:
         summaries = query_camera_summary(db_path)
         if args.json:
