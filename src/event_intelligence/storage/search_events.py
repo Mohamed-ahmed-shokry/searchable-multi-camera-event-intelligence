@@ -10,7 +10,7 @@ import json
 import math
 import shutil
 import sqlite3
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 from contextlib import closing
 from dataclasses import dataclass, field
 from itertools import pairwise
@@ -2171,6 +2171,108 @@ def query_journey_dossier(
         total_events=sum(len(h.events) for h in hop_dossiers),
         total_insights=sum(len(h.insights) for h in hop_dossiers),
     )
+
+
+def _render_journey_dossier_markdown(
+    dossier: CrossCameraJourneyDossier,
+    copied_media: Mapping[str, str],
+    missing_media: Sequence[str],
+) -> str:
+    """Render a self-contained forensic Markdown report for a cross-camera journey."""
+    path_str = " -> ".join(dossier.cameras_visited) if dossier.cameras_visited else "—"
+    lines: list[str] = [
+        f"# Cross-Camera Journey Forensic Dossier — `{dossier.journey_id}`",
+        "",
+        "## Overview",
+        "",
+        f"- **Journey ID:** `{dossier.journey_id}`",
+        f"- **Topology:** `{dossier.topology_name}`",
+        f"- **Camera Path:** `{path_str}`",
+        f"- **Hops:** `{dossier.hop_count}` ({len(dossier.hops)} camera segment(s))",
+        f"- **Time Span:** `{dossier.start_time:.2f}s` – `{dossier.end_time:.2f}s` (`{dossier.total_span_seconds:.2f}s`)",
+        f"- **Average Handoff Confidence:** `{dossier.avg_confidence:.2f}`",
+        f"- **Total Events / Insights:** `{dossier.total_events}` events, `{dossier.total_insights}` insights",
+        "",
+        "## Chronological Camera Segments",
+        "",
+        "| Segment | Camera | Track | Frames | Time (s) | Duration (s) | Path (px) | Incoming Handoff | Events | Insights |",
+        "|---:|---|---:|---|---|---:|---:|---|---:|---:|",
+    ]
+    for hop in dossier.hops:
+        frames_str = (
+            f"{hop.start_frame}..{hop.end_frame}"
+            if hop.start_frame is not None and hop.end_frame is not None
+            else "—"
+        )
+        handoff_str = (
+            f"`{hop.incoming_transition_id}` (dt={hop.incoming_transit_seconds:.2f}s, conf={hop.incoming_confidence:.2f})"
+            if hop.incoming_transition_id
+            and hop.incoming_transit_seconds is not None
+            and hop.incoming_confidence is not None
+            else "origin"
+        )
+        lines.append(
+            f"| {hop.hop_index} | `{hop.camera_id}` | `{hop.track_id}` | {frames_str} | "
+            f"{hop.start_time:.2f}–{hop.end_time:.2f} | {hop.duration_seconds:.2f} | "
+            f"{hop.path_length_px:.1f} | {handoff_str} | {len(hop.events)} | {len(hop.insights)} |"
+        )
+    lines.append("")
+
+    if dossier.transitions:
+        lines.extend(
+            [
+                "## Cross-Camera Transitions",
+                "",
+                "| Transition ID | From | To | Exit (s) | Entry (s) | Transit (s) | Confidence | Rule |",
+                "|---|---|---|---:|---:|---:|---:|---|",
+            ]
+        )
+        for tr in dossier.transitions:
+            lines.append(
+                f"| `{tr.get('transition_id', '')}` | "
+                f"`{tr.get('from_camera', '')}#{tr.get('from_track_id', '')}` | "
+                f"`{tr.get('to_camera', '')}#{tr.get('to_track_id', '')}` | "
+                f"{float(tr.get('exit_time', 0.0)):.2f} | {float(tr.get('entry_time', 0.0)):.2f} | "
+                f"{float(tr.get('transit_seconds', 0.0)):.2f} | {float(tr.get('confidence', 0.0)):.2f} | "
+                f"{tr.get('rule_label', '')} |"
+            )
+        lines.append("")
+
+    lines.extend(["## Per-Segment Events & Insights", ""])
+    for hop in dossier.hops:
+        lines.append(f"### Segment {hop.hop_index}: `{hop.camera_id}#{hop.track_id}`")
+        lines.append("")
+        if hop.events:
+            for ev in hop.events:
+                lines.append(
+                    f"- **Event `{ev.event_id}`** (`{ev.event_type}`, zone=`{ev.zone_id}`, "
+                    f"`{ev.start_time:.2f}s–{ev.end_time:.2f}s`, dur=`{ev.duration_seconds:.2f}s`)"
+                )
+        else:
+            lines.append("- _No events recorded for this segment._")
+        if hop.insights:
+            for ins in hop.insights:
+                lines.append(
+                    f"- **Insight `{ins.insight_id}`** (`{ins.insight_type}`, severity=`{ins.severity}`, "
+                    f"`{ins.start_time:.2f}s–{ins.end_time:.2f}s`): {ins.description}"
+                )
+        lines.append("")
+
+    lines.extend(["## Packaged Visual Evidence", ""])
+    if copied_media:
+        for label, rel_path in sorted(copied_media.items()):
+            lines.append(f"- `{label}`: [{rel_path}]({rel_path})")
+    else:
+        lines.append("_No evidence media files were available to package._")
+    if missing_media:
+        lines.append("")
+        lines.append(
+            f"_Missing/unresolved evidence references ({len(missing_media)}):_"
+        )
+        for m in missing_media:
+            lines.append(f"- `{m}`")
+    lines.append("")
+    return "\n".join(lines)
 
 
 def query_insights(
