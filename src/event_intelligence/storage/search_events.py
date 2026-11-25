@@ -761,6 +761,48 @@ class CrossCameraJourneyDossier:
 
 
 @dataclass(frozen=True, slots=True)
+class JourneyBundleManifest:
+    """Manifest summarizing an exported self-contained cross-camera journey bundle."""
+
+    journey_id: str
+    topology_name: str
+    bundle_dir: str
+    manifest_path: str
+    report_path: str
+    hops_csv_path: str
+    transitions_csv_path: str
+    cameras_visited: tuple[str, ...]
+    hop_count: int
+    total_span_seconds: float
+    avg_confidence: float
+    total_events: int
+    total_insights: int
+    copied_media: dict[str, str] = field(default_factory=dict)
+    missing_media: list[str] = field(default_factory=list)
+    created_at: str = ""
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "journey_id": self.journey_id,
+            "topology_name": self.topology_name,
+            "bundle_dir": self.bundle_dir,
+            "manifest_path": self.manifest_path,
+            "report_path": self.report_path,
+            "hops_csv_path": self.hops_csv_path,
+            "transitions_csv_path": self.transitions_csv_path,
+            "cameras_visited": list(self.cameras_visited),
+            "hop_count": self.hop_count,
+            "total_span_seconds": round(self.total_span_seconds, 4),
+            "avg_confidence": round(self.avg_confidence, 4),
+            "total_events": self.total_events,
+            "total_insights": self.total_insights,
+            "copied_media": dict(self.copied_media),
+            "missing_media": list(self.missing_media),
+            "created_at": self.created_at,
+        }
+
+
+@dataclass(frozen=True, slots=True)
 class DatabaseSummary:
     """Row counts across all tables in intelligence.db."""
 
