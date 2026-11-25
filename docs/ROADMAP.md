@@ -2584,6 +2584,86 @@ uv run --locked pytest -q
 | `uv run --locked python -m event_intelligence.multicam --db outputs/runs/phase11k_verify/intelligence.db --topology configs/camera_topology.yaml --persist --json` | ✅ exit 0 | verified `--persist` writes correlation tables to SQLite |
 | `uv run --locked python -m event_intelligence.search --db outputs/runs/phase11k_verify/intelligence.db --transitions --json` & `--journeys --json` | ✅ exit 0 | verified unified search CLI queries persisted correlation tables |
 
+---
+
+## Active Phase: 11l — Cross-Camera Journey Dossiers, Forensic Journey Bundles & Unified Executive Multi-Camera Reporting (2026-11-25)
+
+### Objective
+
+Phase 11k persisted `cross_camera_transitions` and `cross_camera_journeys` into `intelligence.db` and added basic list search (`--transitions`, `--journeys`), but three investigative gaps remain:
+
+1. Analysts cannot inspect a unified chronological **cross-camera journey dossier** joining all camera-track segments, transit handoffs, per-camera events, and behavioral insights for a `journey_id`.
+2. Analysts cannot export a self-contained **cross-camera journey forensic bundle** (`manifest.json`, `journey_dossier.md`, `hops.csv`, `transitions.csv`, and collision-safe cross-camera `media/`).
+3. Multi-camera pipeline runs generate `intelligence_report.md` without summarizing cross-camera transitions/stitched journeys, and `multicam_correlation_report.md` lacks a visual Mermaid camera transition flow graph.
+
+Demonstrable end-to-end outcome: running `python -m event_intelligence.pipeline --videos ... --cameras ... --topology ...` produces a master `intelligence_report.md` containing a `## Cross-Camera Transitions & Stitched Journeys` section and a `multicam_correlation_report.md` with a Mermaid `flowchart LR` flow graph; analysts can inspect any stitched journey via `python -m event_intelligence.search --db ... --journey-dossier <journey_id>` and package all cross-camera evidence via `--export-journey <journey_id> --bundle-dir <dir>`.
+
+### Scope
+
+1. **Journey dossier & bundle data models (`src/event_intelligence/storage/search_events.py`):**
+   - `JourneyHopDossier`, `CrossCameraJourneyDossier`, `JourneyBundleManifest`.
+2. **Journey dossier query (`src/event_intelligence/storage/search_events.py`):**
+   - `query_journey_dossier(db_path, journey_id)` reconstructing the ordered camera-track chain from `cross_camera_journeys.hops_json` and joining `tracks`, `trajectories`, `events`, and `insights` per hop.
+3. **Forensic journey bundle exporter (`src/event_intelligence/storage/search_events.py`):**
+   - `export_journey_bundle(db_path, journey_id, output_dir, *, evidence_root=None)` writing `manifest.json`, `journey_dossier.md`, `hops.csv`, `transitions.csv`, and collision-safe cross-camera `media/` files.
+4. **Public exports & Search CLI integration (`storage/__init__.py`, `search.py`, `storage/search_events.py`):**
+   - Export new types/functions and register `--journey-dossier` and `--export-journey` flags on `python -m event_intelligence.search` (text and `--json`).
+5. **Unified executive & multicam reporting (`src/event_intelligence/insights/report.py`, `src/event_intelligence/multicam/report.py`, `src/event_intelligence/pipeline.py`):**
+   - Render `## Cross-Camera Transitions & Stitched Journeys` in `generate_intelligence_report_markdown()` when correlation records are provided, and wire `corr_report.transitions` / `corr_report.journeys` in `run_multi_camera_pipeline()`.
+   - Render a `## Camera Transition Flow Graph` Mermaid `flowchart LR` in `generate_correlation_markdown()` when `pair_flows` exist.
+6. **Comprehensive unit, CLI, and pipeline tests (`tests/test_multicam.py`)** + real multi-camera E2E execution.
+7. **Documentation:** `README.md` and `docs/ROADMAP.md` updates.
+
+### Acceptance Criteria
+
+| # | Criterion | Status | Evidence |
+|---|-----------|--------|----------|
+| 1 | `query_journey_dossier()` reconstructs ordered multi-camera hops with per-hop track stats, events, insights, and incoming handoff metadata, raising `KeyError` on missing journey or legacy DB | ⬜ | — |
+| 2 | `export_journey_bundle()` exports `manifest.json`, `journey_dossier.md`, `hops.csv`, `transitions.csv`, and collision-safe `media/` across all cameras | ⬜ | — |
+| 3 | `python -m event_intelligence.search --journey-dossier <id>` and `--export-journey <id>` work cleanly in text and `--json` modes | ⬜ | — |
+| 4 | `generate_correlation_markdown()` renders a Mermaid `flowchart LR` camera transition graph when `pair_flows` exist | ⬜ | — |
+| 5 | `generate_intelligence_report_markdown()` and `run_multi_camera_pipeline()` render `## Cross-Camera Transitions & Stitched Journeys` in master `intelligence_report.md` | ⬜ | — |
+| 6 | Real multi-camera E2E execution verifies pipeline -> `--journeys` -> `--journey-dossier` -> `--export-journey` -> `intelligence_report.md` | ⬜ | — |
+| 7 | All local CI-parity checks (`uv sync --locked`, `ruff check .`, `ruff format --check .`, `pytest -v`) and remote GitHub Actions CI workflow runs pass 100% | ⬜ | — |
+
+### Validation & CI Plan
+
+```bash
+uv sync --locked
+uv run --locked ruff check .
+uv run --locked ruff format --check .
+uv run --locked pytest -v
+```
+
+### Exclusions (deferred)
+
+- **Appearance-based Re-ID neural embeddings (OSNet/CLIP):** Deferred per Phase 11j/11k.
+- **Phase 12 Productization (FastAPI, React dashboard, auth, RTSP, cloud):** Deferred per `AGENTS.md`.
+
+### Micro-Task Breakdown
+
+- [ ] 1. `docs(roadmap): define Phase 11l journey dossiers and multicam reporting scope`
+- [ ] 2. `types(storage): add JourneyHopDossier and CrossCameraJourneyDossier dataclasses`
+- [ ] 3. `types(storage): add JourneyBundleManifest dataclass`
+- [ ] 4. `feat(storage): implement query_journey_dossier joining per-hop tracks, events, and insights`
+- [ ] 5. `test(storage): add unit tests for query_journey_dossier happy path, missing ID, and legacy DB`
+- [ ] 6. `feat(storage): implement _render_journey_dossier_markdown helper for forensic bundle reports`
+- [ ] 7. `feat(storage): implement export_journey_bundle writing manifest, Markdown, CSVs, and media`
+- [ ] 8. `test(storage): add unit tests for export_journey_bundle artifacts and cross-camera media copying`
+- [ ] 9. `feat(storage): export journey dossier and bundle symbols in storage and search modules`
+- [ ] 10. `feat(search): register --journey-dossier and --export-journey CLI flags in build_parser`
+- [ ] 11. `feat(search): handle --journey-dossier and --export-journey CLI queries in main`
+- [ ] 12. `test(search): add CLI integration tests for --journey-dossier and --export-journey flags`
+- [ ] 13. `feat(multicam): render Mermaid camera transition flow graph in generate_correlation_markdown`
+- [ ] 14. `test(multicam): verify Mermaid camera transition flow graph in correlation Markdown`
+- [ ] 15. `feat(insights): render Cross-Camera Transitions & Stitched Journeys section in intelligence report`
+- [ ] 16. `test(insights): verify cross-camera transitions and journeys section in intelligence report`
+- [ ] 17. `feat(pipeline): pass correlated transitions and journeys into master intelligence_report.md`
+- [ ] 18. `test(pipeline): verify multi-camera pipeline renders cross-camera section in intelligence_report.md`
+- [ ] 19. `docs(readme): document --journey-dossier, --export-journey, and unified multi-camera reporting`
+- [ ] 20. `docs(roadmap): complete Phase 11l criteria, decision log, and CI log`
+
+
 
 
 
