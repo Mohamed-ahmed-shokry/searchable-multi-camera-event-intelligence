@@ -13,6 +13,7 @@ from pathlib import Path
 
 from helpers import make_video
 
+from event_intelligence.insights import generate_intelligence_report_markdown
 from event_intelligence.multicam.__main__ import main as multicam_main
 from event_intelligence.multicam.engine import (
     analyze_multi_camera_correlation,
@@ -966,6 +967,23 @@ class TestJourneyDossierAndBundles(unittest.TestCase):
             self.assertIn('lobby["lobby"]', md)
             self.assertIn('corridor["corridor"]', md)
             self.assertIn('exit_hall["exit_hall"]', md)
+
+    def test_executive_intelligence_report_includes_cross_camera_section(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            db_path = _build_multicam_db(Path(tmp) / "intelligence.db")
+            corr = analyze_multi_camera_correlation(db_path)
+            md = generate_intelligence_report_markdown(
+                [],
+                run_id="exec_multicam_test",
+                cross_camera_transitions=corr.transitions,
+                cross_camera_journeys=corr.journeys,
+                multicam_report_path="multicam/multicam_correlation_report.md",
+            )
+            self.assertIn("## Cross-Camera Transitions & Stitched Journeys", md)
+            self.assertIn("multicam/multicam_correlation_report.md", md)
+            self.assertIn("### Correlated Transitions", md)
+            self.assertIn("### Stitched Multi-Hop Journeys", md)
+            self.assertIn("lobby -> corridor -> exit_hall", md)
 
 
 if __name__ == "__main__":
