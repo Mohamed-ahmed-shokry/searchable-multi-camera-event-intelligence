@@ -681,6 +681,86 @@ class IncidentBundleManifest:
 
 
 @dataclass(frozen=True, slots=True)
+class JourneyHopDossier:
+    """Per-camera-track segment inside a stitched cross-camera journey dossier."""
+
+    hop_index: int
+    camera_id: str
+    track_id: int
+    start_frame: int | None
+    end_frame: int | None
+    start_time: float
+    end_time: float
+    duration_seconds: float
+    path_length_px: float
+    incoming_transition_id: str | None = None
+    incoming_transit_seconds: float | None = None
+    incoming_confidence: float | None = None
+    events: list[EventSearchResult] = field(default_factory=list)
+    insights: list[InsightSearchResult] = field(default_factory=list)
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "hop_index": self.hop_index,
+            "camera_id": self.camera_id,
+            "track_id": self.track_id,
+            "start_frame": self.start_frame,
+            "end_frame": self.end_frame,
+            "start_time": round(self.start_time, 4),
+            "end_time": round(self.end_time, 4),
+            "duration_seconds": round(self.duration_seconds, 4),
+            "path_length_px": round(self.path_length_px, 2),
+            "incoming_transition_id": self.incoming_transition_id,
+            "incoming_transit_seconds": (
+                round(self.incoming_transit_seconds, 4)
+                if self.incoming_transit_seconds is not None
+                else None
+            ),
+            "incoming_confidence": (
+                round(self.incoming_confidence, 4)
+                if self.incoming_confidence is not None
+                else None
+            ),
+            "events": [e.to_dict() for e in self.events],
+            "insights": [i.to_dict() for i in self.insights],
+        }
+
+
+@dataclass(frozen=True, slots=True)
+class CrossCameraJourneyDossier:
+    """Unified chronological multi-camera dossier for a stitched journey_id."""
+
+    journey_id: str
+    topology_name: str
+    cameras_visited: tuple[str, ...]
+    hop_count: int
+    start_time: float
+    end_time: float
+    total_span_seconds: float
+    avg_confidence: float
+    hops: list[JourneyHopDossier] = field(default_factory=list)
+    transitions: list[dict[str, Any]] = field(default_factory=list)
+    total_events: int = 0
+    total_insights: int = 0
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "journey_id": self.journey_id,
+            "topology_name": self.topology_name,
+            "cameras_visited": list(self.cameras_visited),
+            "hop_count": self.hop_count,
+            "start_time": round(self.start_time, 4),
+            "end_time": round(self.end_time, 4),
+            "total_span_seconds": round(self.total_span_seconds, 4),
+            "avg_confidence": round(self.avg_confidence, 4),
+            "total_events": self.total_events,
+            "total_insights": self.total_insights,
+            "hops": [h.to_dict() for h in self.hops],
+            "transitions": [dict(t) for t in self.transitions],
+        }
+
+
+@dataclass(frozen=True, slots=True)
 class DatabaseSummary:
     """Row counts across all tables in intelligence.db."""
 
