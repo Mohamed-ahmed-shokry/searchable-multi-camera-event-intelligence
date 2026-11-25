@@ -893,6 +893,68 @@ class TestJourneyDossierAndBundles(unittest.TestCase):
             self.assertEqual(manifest_json["journey_id"], jid)
             self.assertEqual(len(manifest_json["dossier"]["hops"]), 3)
 
+    def test_search_cli_journey_dossier_and_export_journey(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            db_path = _build_multicam_db(root / "intelligence.db")
+            report = analyze_multi_camera_correlation(db_path)
+            insert_cross_camera_correlation(db_path, report)
+            jid = query_cross_camera_journeys(db_path)[0].journey_id
+
+            buf_json = io.StringIO()
+            with redirect_stdout(buf_json):
+                rc = search_main(
+                    ["--db", str(db_path), "--journey-dossier", jid, "--json"]
+                )
+            self.assertEqual(rc, 0)
+            dossier_data = json.loads(buf_json.getvalue())
+            self.assertEqual(dossier_data["journey_id"], jid)
+            self.assertEqual(len(dossier_data["hops"]), 3)
+
+            buf_text = io.StringIO()
+            with redirect_stdout(buf_text):
+                rc = search_main(["--db", str(db_path), "--journey-dossier", jid])
+            self.assertEqual(rc, 0)
+            self.assertIn("Cross-Camera Journey Dossier", buf_text.getvalue())
+            self.assertIn("lobby -> corridor -> exit_hall", buf_text.getvalue())
+
+            out_bundle = root / "cli_bundle"
+            buf_exp_json = io.StringIO()
+            with redirect_stdout(buf_exp_json):
+                rc = search_main(
+                    [
+                        "--db",
+                        str(db_path),
+                        "--export-journey",
+                        jid,
+                        "--bundle-dir",
+                        str(out_bundle),
+                        "--json",
+                    ]
+                )
+            self.assertEqual(rc, 0)
+            exp_data = json.loads(buf_exp_json.getvalue())
+            self.assertEqual(exp_data["journey_id"], jid)
+            self.assertTrue((out_bundle / "manifest.json").is_file())
+            self.assertTrue((out_bundle / "journey_dossier.md").is_file())
+
+            buf_exp_text = io.StringIO()
+            with redirect_stdout(buf_exp_text):
+                rc = search_main(
+                    [
+                        "--db",
+                        str(db_path),
+                        "--export-journey",
+                        jid,
+                        "--bundle-dir",
+                        str(root / "cli_bundle_text"),
+                    ]
+                )
+            self.assertEqual(rc, 0)
+            self.assertIn(
+                "Exported cross-camera journey bundle", buf_exp_text.getvalue()
+            )
+
 
 if __name__ == "__main__":
     unittest.main()
