@@ -41,6 +41,7 @@ from event_intelligence.search import main as search_main
 from event_intelligence.spatial import SceneConfig, ZoneSpec, save_scene_config
 from event_intelligence.storage.search_events import (
     SCHEMA_DDL,
+    export_journey_bundle,
     insert_cross_camera_correlation,
     query_cross_camera_journeys,
     query_cross_camera_transitions,
@@ -813,6 +814,84 @@ class TestJourneyDossierAndBundles(unittest.TestCase):
                 conn.commit()
             with self.assertRaises(KeyError):
                 query_journey_dossier(legacy_db, jid)
+
+    def test_export_journey_bundle_artifacts_and_cross_camera_media(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            db_path = _build_multicam_db(root / "intelligence.db")
+
+            # Create colliding relative filenames under cameras/lobby and cameras/corridor
+            lobby_snap = root / "cameras" / "lobby" / "snapshots" / "shared.jpg"
+            corridor_snap = root / "cameras" / "corridor" / "snapshots" / "shared.jpg"
+            lobby_snap.parent.mkdir(parents=True, exist_ok=True)
+            corridor_snap.parent.mkdir(parents=True, exist_ok=True)
+            lobby_snap.write_bytes(b"lobby-jpeg-bytes")
+            corridor_snap.write_bytes(b"corridor-jpeg-bytes")
+
+            with closing(sqlite3.connect(str(db_path))) as conn:
+                conn.execute(
+                    "UPDATE events SET snapshot_path = ?, crop_path = ? WHERE event_id = 'ev_l1'",
+                    ("snapshots/shared.jpg", "crops/missing_crop.jpg"),
+                )
+                conn.execute(
+                    "UPDATE events SET snapshot_path = ? WHERE event_id = 'ev_c10'",
+                    ("snapshots/shared.jpg",),
+                )
+                conn.commit()
+
+            report = analyze_multi_camera_correlation(db_path)
+            insert_cross_camera_correlation(db_path, report)
+            jid = query_cross_camera_journeys(db_path)[0].journey_id
+
+            bundle_dir = root / "bundles" / jid
+            manifest = export_journey_bundle(db_path, jid, bundle_dir)
+
+            self.assertEqual(manifest.journey_id, jid)
+            self.assertEqual(
+                manifest.cameras_visited, ("lobby", "corridor", "exit_hall")
+            )
+            self.assertEqual(manifest.hop_count, 2)
+            self.assertTrue(Path(manifest.manifest_path).is_file())
+            self.assertTrue(Path(manifest.report_path).is_file())
+            self.assertTrue(Path(manifest.hops_csv_path).is_file())
+            self.assertTrue(Path(manifest.transitions_csv_path).is_file())
+
+            # Both colliding snapshots copied under distinct camera-prefixed names
+            self.assertIn("lobby_ev_l1_snapshot", manifest.copied_media)
+            self.assertIn("corridor_ev_c10_snapshot", manifest.copied_media)
+            self.assertEqual(
+                (
+                    bundle_dir / manifest.copied_media["lobby_ev_l1_snapshot"]
+                ).read_bytes(),
+                b"lobby-jpeg-bytes",
+            )
+            self.assertEqual(
+                (
+                    bundle_dir / manifest.copied_media["corridor_ev_c10_snapshot"]
+                ).read_bytes(),
+                b"corridor-jpeg-bytes",
+            )
+            self.assertEqual(len(manifest.missing_media), 1)
+            self.assertIn("missing_crop.jpg", manifest.missing_media[0])
+
+            # Verify CSV row counts and Markdown headings
+            with Path(manifest.hops_csv_path).open("r", encoding="utf-8") as f:
+                hop_rows = list(csv.DictReader(f))
+            self.assertEqual(len(hop_rows), 3)
+            with Path(manifest.transitions_csv_path).open("r", encoding="utf-8") as f:
+                tr_rows = list(csv.DictReader(f))
+            self.assertEqual(len(tr_rows), 2)
+
+            md_text = Path(manifest.report_path).read_text(encoding="utf-8")
+            self.assertIn("Cross-Camera Journey Forensic Dossier", md_text)
+            self.assertIn("Chronological Camera Segments", md_text)
+            self.assertIn("Packaged Visual Evidence", md_text)
+
+            manifest_json = json.loads(
+                Path(manifest.manifest_path).read_text(encoding="utf-8")
+            )
+            self.assertEqual(manifest_json["journey_id"], jid)
+            self.assertEqual(len(manifest_json["dossier"]["hops"]), 3)
 
 
 if __name__ == "__main__":
