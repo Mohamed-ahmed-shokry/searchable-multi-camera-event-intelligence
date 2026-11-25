@@ -3724,6 +3724,18 @@ def build_parser() -> argparse.ArgumentParser:
         help="Minimum hop count filter for --journeys.",
     )
     parser.add_argument(
+        "--journey-dossier",
+        type=str,
+        default=None,
+        help="Build a chronological multi-camera dossier for a persisted journey_id.",
+    )
+    parser.add_argument(
+        "--export-journey",
+        type=str,
+        default=None,
+        help="Export a self-contained forensic bundle for a persisted journey_id.",
+    )
+    parser.add_argument(
         "--evidence-event-id",
         type=str,
         default=None,
