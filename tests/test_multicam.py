@@ -740,6 +740,18 @@ class TestCrossCameraCorrelationPersistence(unittest.TestCase):
                 ("cam_entrance", "cam_aisle"),
             )
 
+            master_md = (Path(res.run_dir) / "intelligence_report.md").read_text(
+                encoding="utf-8"
+            )
+            self.assertIn("## Cross-Camera Transitions & Stitched Journeys", master_md)
+            self.assertIn("multicam/multicam_correlation_report.md", master_md)
+            self.assertIn("cam_entrance -> cam_aisle", master_md)
+
+            multicam_md = (multicam_dir / "multicam_correlation_report.md").read_text(
+                encoding="utf-8"
+            )
+            self.assertIn("flowchart LR", multicam_md)
+
 
 class TestJourneyDossierAndBundles(unittest.TestCase):
     """Tests for Phase 11l cross-camera journey dossiers and forensic bundle exports."""
