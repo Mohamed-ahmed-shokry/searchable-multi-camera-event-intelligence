@@ -955,6 +955,18 @@ class TestJourneyDossierAndBundles(unittest.TestCase):
                 "Exported cross-camera journey bundle", buf_exp_text.getvalue()
             )
 
+    def test_correlation_markdown_includes_mermaid_flow_graph(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            db_path = _build_multicam_db(Path(tmp) / "intelligence.db")
+            report = analyze_multi_camera_correlation(db_path)
+            md = generate_correlation_markdown(report)
+            self.assertIn("## Camera Transition Flow Graph", md)
+            self.assertIn("```mermaid", md)
+            self.assertIn("flowchart LR", md)
+            self.assertIn('lobby["lobby"]', md)
+            self.assertIn('corridor["corridor"]', md)
+            self.assertIn('exit_hall["exit_hall"]', md)
+
 
 if __name__ == "__main__":
     unittest.main()
