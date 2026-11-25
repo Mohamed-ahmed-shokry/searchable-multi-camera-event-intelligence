@@ -1261,6 +1261,7 @@ def run_multi_camera_pipeline(
 
     cc_transitions_count = 0
     cc_journeys_count = 0
+    corr_report = None
     if len(cam_names) > 1:
         topo = None
         if topology_path is not None:
@@ -1304,6 +1305,17 @@ def run_multi_camera_pipeline(
         camera_summaries=query_camera_summary(master_db),
         zone_counts=query_zone_counts(master_db, limit=500),
         line_counts=query_line_counts(master_db, limit=500),
+        cross_camera_transitions=(
+            corr_report.transitions if corr_report is not None else None
+        ),
+        cross_camera_journeys=(
+            corr_report.journeys if corr_report is not None else None
+        ),
+        multicam_report_path=(
+            "multicam/multicam_correlation_report.md"
+            if corr_report is not None
+            else None
+        ),
     )
     write_intelligence_report(
         master_report_md, master_run_dir / "intelligence_report.md"
