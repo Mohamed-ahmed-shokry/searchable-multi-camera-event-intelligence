@@ -13,6 +13,7 @@ import sqlite3
 from collections.abc import Mapping, Sequence
 from contextlib import closing
 from dataclasses import dataclass, field
+from datetime import UTC, datetime
 from itertools import pairwise
 from pathlib import Path
 from typing import Any
@@ -2273,6 +2274,167 @@ def _render_journey_dossier_markdown(
             lines.append(f"- `{m}`")
     lines.append("")
     return "\n".join(lines)
+
+
+def export_journey_bundle(
+    db_path: Path | str,
+    journey_id: str,
+    output_dir: Path | str,
+    *,
+    evidence_root: Path | str | None = None,
+) -> JourneyBundleManifest:
+    """Export a self-contained forensic bundle for a stitched cross-camera journey."""
+    dossier = query_journey_dossier(db_path, journey_id)
+    path = Path(db_path)
+    ev_root = Path(evidence_root) if evidence_root is not None else None
+
+    bundle_dir = Path(output_dir).resolve()
+    media_dir = bundle_dir / "media"
+    bundle_dir.mkdir(parents=True, exist_ok=True)
+    media_dir.mkdir(parents=True, exist_ok=True)
+
+    copied_media: dict[str, str] = {}
+    missing_media: list[str] = []
+
+    def _package_media(label: str, raw_path: str | None, cam_id: str) -> None:
+        if not raw_path or not str(raw_path).strip():
+            return
+        resolved = _resolve_evidence_file(
+            raw_path, db_path=path, camera_id=cam_id, evidence_root=ev_root
+        )
+        if resolved is not None and resolved.is_file():
+            safe_label = label.replace("/", "_").replace("\\", "_").replace(":", "_")
+            dest_name = f"{safe_label}{resolved.suffix or '.bin'}"
+            dest_path = media_dir / dest_name
+            shutil.copy2(resolved, dest_path)
+            copied_media[label] = f"media/{dest_name}"
+        else:
+            missing_media.append(f"{label}:{raw_path}")
+
+    for hop in dossier.hops:
+        for ev in hop.events:
+            prefix = f"{hop.camera_id}_{ev.event_id}"
+            _package_media(f"{prefix}_snapshot", ev.snapshot_path, hop.camera_id)
+            _package_media(f"{prefix}_crop", ev.crop_path, hop.camera_id)
+            _package_media(f"{prefix}_clip", ev.video_clip_path, hop.camera_id)
+            _package_media(f"{prefix}_storyboard", ev.storyboard_path, hop.camera_id)
+        for ins in hop.insights:
+            prefix = f"{hop.camera_id}_{ins.insight_id}"
+            _package_media(
+                f"{prefix}_snapshot", ins.evidence_snapshot_path, hop.camera_id
+            )
+            _package_media(f"{prefix}_crop", ins.evidence_crop_path, hop.camera_id)
+            _package_media(f"{prefix}_clip", ins.video_clip_path, hop.camera_id)
+            _package_media(f"{prefix}_storyboard", ins.storyboard_path, hop.camera_id)
+
+    hops_csv_path = bundle_dir / "hops.csv"
+    with hops_csv_path.open("w", encoding="utf-8", newline="") as f:
+        writer = csv.DictWriter(
+            f,
+            fieldnames=[
+                "hop_index",
+                "camera_id",
+                "track_id",
+                "start_frame",
+                "end_frame",
+                "start_time",
+                "end_time",
+                "duration_seconds",
+                "path_length_px",
+                "incoming_transition_id",
+                "incoming_transit_seconds",
+                "incoming_confidence",
+                "events_count",
+                "insights_count",
+            ],
+        )
+        writer.writeheader()
+        for hop in dossier.hops:
+            writer.writerow(
+                {
+                    "hop_index": hop.hop_index,
+                    "camera_id": hop.camera_id,
+                    "track_id": hop.track_id,
+                    "start_frame": hop.start_frame,
+                    "end_frame": hop.end_frame,
+                    "start_time": round(hop.start_time, 4),
+                    "end_time": round(hop.end_time, 4),
+                    "duration_seconds": round(hop.duration_seconds, 4),
+                    "path_length_px": round(hop.path_length_px, 2),
+                    "incoming_transition_id": hop.incoming_transition_id or "",
+                    "incoming_transit_seconds": (
+                        round(hop.incoming_transit_seconds, 4)
+                        if hop.incoming_transit_seconds is not None
+                        else ""
+                    ),
+                    "incoming_confidence": (
+                        round(hop.incoming_confidence, 4)
+                        if hop.incoming_confidence is not None
+                        else ""
+                    ),
+                    "events_count": len(hop.events),
+                    "insights_count": len(hop.insights),
+                }
+            )
+
+    transitions_csv_path = bundle_dir / "transitions.csv"
+    with transitions_csv_path.open("w", encoding="utf-8", newline="") as f:
+        writer = csv.DictWriter(
+            f,
+            fieldnames=[
+                "transition_id",
+                "from_camera",
+                "from_track_id",
+                "to_camera",
+                "to_track_id",
+                "exit_time",
+                "entry_time",
+                "transit_seconds",
+                "confidence",
+                "rule_label",
+                "from_zone",
+                "to_zone",
+                "evidence_reason",
+            ],
+            extrasaction="ignore",
+        )
+        writer.writeheader()
+        for tr in dossier.transitions:
+            writer.writerow(tr)
+
+    report_path = bundle_dir / "journey_dossier.md"
+    report_path.write_text(
+        _render_journey_dossier_markdown(dossier, copied_media, missing_media),
+        encoding="utf-8",
+    )
+
+    manifest_path = bundle_dir / "manifest.json"
+    manifest = JourneyBundleManifest(
+        journey_id=dossier.journey_id,
+        topology_name=dossier.topology_name,
+        bundle_dir=str(bundle_dir),
+        manifest_path=str(manifest_path),
+        report_path=str(report_path),
+        hops_csv_path=str(hops_csv_path),
+        transitions_csv_path=str(transitions_csv_path),
+        cameras_visited=dossier.cameras_visited,
+        hop_count=dossier.hop_count,
+        total_span_seconds=dossier.total_span_seconds,
+        avg_confidence=dossier.avg_confidence,
+        total_events=dossier.total_events,
+        total_insights=dossier.total_insights,
+        copied_media=copied_media,
+        missing_media=missing_media,
+        created_at=datetime.now(UTC).isoformat(),
+    )
+    manifest_payload = {
+        **manifest.to_dict(),
+        "dossier": dossier.to_dict(),
+    }
+    manifest_path.write_text(
+        json.dumps(manifest_payload, indent=2) + "\n", encoding="utf-8"
+    )
+    return manifest
 
 
 def query_insights(
