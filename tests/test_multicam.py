@@ -44,6 +44,7 @@ from event_intelligence.storage.search_events import (
     insert_cross_camera_correlation,
     query_cross_camera_journeys,
     query_cross_camera_transitions,
+    query_journey_dossier,
 )
 from event_intelligence.tracking import FrameTracks, TrackDetection, write_tracks_csv
 
@@ -736,6 +737,82 @@ class TestCrossCameraCorrelationPersistence(unittest.TestCase):
                 persisted_jr[0].cameras_visited,
                 ("cam_entrance", "cam_aisle"),
             )
+
+
+class TestJourneyDossierAndBundles(unittest.TestCase):
+    """Tests for Phase 11l cross-camera journey dossiers and forensic bundle exports."""
+
+    def test_query_journey_dossier_happy_path_and_errors(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            db_path = _build_multicam_db(Path(tmp) / "intelligence.db")
+            # Insert an insight on corridor track 10 to verify per-hop insight joining
+            with closing(sqlite3.connect(str(db_path))) as conn:
+                conn.execute(
+                    "INSERT INTO insights VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                    (
+                        "ins_c10",
+                        "corridor",
+                        "loitering",
+                        "high",
+                        10,
+                        "corridor_entry",
+                        6.5,
+                        10.5,
+                        4.0,
+                        "Track 10 loitering in corridor_entry",
+                        "",
+                        "",
+                        "",
+                        "",
+                        "{}",
+                    ),
+                )
+                conn.commit()
+
+            report = analyze_multi_camera_correlation(db_path)
+            insert_cross_camera_correlation(db_path, report)
+            journeys = query_cross_camera_journeys(db_path)
+            self.assertEqual(len(journeys), 1)
+            jid = journeys[0].journey_id
+
+            dossier = query_journey_dossier(db_path, jid)
+            self.assertEqual(dossier.journey_id, jid)
+            self.assertEqual(
+                dossier.cameras_visited, ("lobby", "corridor", "exit_hall")
+            )
+            self.assertEqual(dossier.hop_count, 2)
+            self.assertEqual(len(dossier.hops), 3)
+            self.assertEqual(dossier.hops[0].camera_id, "lobby")
+            self.assertEqual(dossier.hops[0].track_id, 1)
+            self.assertIsNone(dossier.hops[0].incoming_transition_id)
+            self.assertEqual(len(dossier.hops[0].events), 1)
+            self.assertEqual(dossier.hops[1].camera_id, "corridor")
+            self.assertEqual(dossier.hops[1].track_id, 10)
+            self.assertIsNotNone(dossier.hops[1].incoming_transition_id)
+            self.assertEqual(len(dossier.hops[1].insights), 1)
+            self.assertEqual(dossier.hops[2].camera_id, "exit_hall")
+            self.assertEqual(dossier.hops[2].track_id, 20)
+            self.assertEqual(dossier.total_insights, 1)
+            self.assertGreaterEqual(dossier.total_events, 2)
+            payload = dossier.to_dict()
+            self.assertEqual(payload["journey_id"], jid)
+            self.assertEqual(len(payload["hops"]), 3)
+
+            # Missing journey raises KeyError
+            with self.assertRaises(KeyError):
+                query_journey_dossier(db_path, "journey_does_not_exist")
+
+            # Empty journey_id raises ValueError
+            with self.assertRaises(ValueError):
+                query_journey_dossier(db_path, "   ")
+
+            # Legacy DB without correlation tables raises KeyError
+            legacy_db = Path(tmp) / "legacy.db"
+            with closing(sqlite3.connect(str(legacy_db))) as conn:
+                conn.execute("CREATE TABLE tracks (track_id INTEGER)")
+                conn.commit()
+            with self.assertRaises(KeyError):
+                query_journey_dossier(legacy_db, jid)
 
 
 if __name__ == "__main__":
