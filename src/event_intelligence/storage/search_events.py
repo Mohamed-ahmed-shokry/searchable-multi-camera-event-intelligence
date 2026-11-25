@@ -2047,6 +2047,132 @@ def query_cross_camera_journeys(
     return results
 
 
+def query_journey_dossier(
+    db_path: Path | str,
+    journey_id: str,
+) -> CrossCameraJourneyDossier:
+    """Build a chronological multi-camera dossier joining per-hop tracks, events, and insights."""
+    target_id = journey_id.strip()
+    if not target_id:
+        raise ValueError("journey_id must be non-empty")
+    path = Path(db_path)
+    if not path.is_file():
+        raise FileNotFoundError(f"SQLite intelligence database not found: {path}")
+
+    with closing(sqlite3.connect(path)) as conn:
+        conn.row_factory = sqlite3.Row
+        try:
+            row = conn.execute(
+                "SELECT journey_id, topology_name, hop_count, cameras_visited_json, "
+                "start_time, end_time, total_span_seconds, avg_confidence, hops_json "
+                "FROM cross_camera_journeys WHERE journey_id = ?",
+                (target_id,),
+            ).fetchone()
+        except sqlite3.OperationalError as exc:
+            raise KeyError(
+                f"Journey ID {target_id!r} not found in {path} (correlation tables absent)"
+            ) from exc
+
+        if row is None:
+            raise KeyError(f"Journey ID {target_id!r} not found in {path}")
+
+        cams = tuple(str(c) for c in json.loads(row["cameras_visited_json"] or "[]"))
+        hops_raw: list[dict[str, Any]] = list(json.loads(row["hops_json"] or "[]"))
+
+        segments: list[tuple[str, int, dict[str, Any] | None]] = []
+        if hops_raw:
+            first = hops_raw[0]
+            segments.append(
+                (str(first["from_camera"]), int(first["from_track_id"]), None)
+            )
+            for tr in hops_raw:
+                segments.append((str(tr["to_camera"]), int(tr["to_track_id"]), tr))
+
+        hop_dossiers: list[JourneyHopDossier] = []
+        for idx, (cam_id, trk_id, incoming) in enumerate(segments):
+            trk_row = conn.execute(
+                "SELECT start_frame, end_frame, duration_seconds, path_length_px "
+                "FROM tracks WHERE camera_id = ? AND track_id = ?",
+                (cam_id, trk_id),
+            ).fetchone()
+            traj_bounds = conn.execute(
+                "SELECT MIN(timestamp) AS min_t, MAX(timestamp) AS max_t "
+                "FROM trajectories WHERE camera_id = ? AND track_id = ?",
+                (cam_id, trk_id),
+            ).fetchone()
+
+            start_frame = int(trk_row["start_frame"]) if trk_row is not None else None
+            end_frame = int(trk_row["end_frame"]) if trk_row is not None else None
+            duration_sec = (
+                float(trk_row["duration_seconds"]) if trk_row is not None else 0.0
+            )
+            path_len = float(trk_row["path_length_px"]) if trk_row is not None else 0.0
+
+            if traj_bounds is not None and traj_bounds["min_t"] is not None:
+                seg_start = float(traj_bounds["min_t"])
+                seg_end = float(traj_bounds["max_t"])
+            elif incoming is not None:
+                seg_start = float(incoming.get("entry_time", row["start_time"]))
+                seg_end = seg_start + duration_sec
+            elif idx < len(hops_raw):
+                seg_end = float(hops_raw[idx].get("exit_time", row["end_time"]))
+                seg_start = max(0.0, seg_end - duration_sec)
+            else:
+                seg_start = float(row["start_time"])
+                seg_end = float(row["end_time"])
+
+            evs = query_events(path, camera_id=cam_id, track_id=trk_id, limit=1000)
+            ins = query_insights(path, camera_id=cam_id, track_id=trk_id, limit=1000)
+
+            hop_dossiers.append(
+                JourneyHopDossier(
+                    hop_index=idx,
+                    camera_id=cam_id,
+                    track_id=trk_id,
+                    start_frame=start_frame,
+                    end_frame=end_frame,
+                    start_time=seg_start,
+                    end_time=seg_end,
+                    duration_seconds=duration_sec,
+                    path_length_px=path_len,
+                    incoming_transition_id=(
+                        str(incoming["transition_id"])
+                        if incoming is not None and incoming.get("transition_id")
+                        else None
+                    ),
+                    incoming_transit_seconds=(
+                        float(incoming["transit_seconds"])
+                        if incoming is not None
+                        and incoming.get("transit_seconds") is not None
+                        else None
+                    ),
+                    incoming_confidence=(
+                        float(incoming["confidence"])
+                        if incoming is not None
+                        and incoming.get("confidence") is not None
+                        else None
+                    ),
+                    events=evs,
+                    insights=ins,
+                )
+            )
+
+    return CrossCameraJourneyDossier(
+        journey_id=str(row["journey_id"]),
+        topology_name=str(row["topology_name"]),
+        cameras_visited=cams,
+        hop_count=int(row["hop_count"]),
+        start_time=float(row["start_time"]),
+        end_time=float(row["end_time"]),
+        total_span_seconds=float(row["total_span_seconds"]),
+        avg_confidence=float(row["avg_confidence"]),
+        hops=hop_dossiers,
+        transitions=hops_raw,
+        total_events=sum(len(h.events) for h in hop_dossiers),
+        total_insights=sum(len(h.insights) for h in hop_dossiers),
+    )
+
+
 def query_insights(
     db_path: Path | str,
     *,
