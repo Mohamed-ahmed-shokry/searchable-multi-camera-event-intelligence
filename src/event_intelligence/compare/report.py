@@ -423,6 +423,10 @@ def write_trends_artifacts(
                 "total_dwell_seconds",
                 "mean_track_duration_seconds",
                 "mean_path_length_px",
+                "cross_camera_transitions_count",
+                "cross_camera_journeys_count",
+                "mean_transit_seconds",
+                "mean_transition_confidence",
             ],
             extrasaction="ignore",
         )

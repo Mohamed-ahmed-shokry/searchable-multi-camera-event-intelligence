@@ -705,6 +705,8 @@ _TREND_METRICS: tuple[str, ...] = (
     "insights_count",
     "high_critical_insights_count",
     "total_dwell_seconds",
+    "cross_camera_transitions_count",
+    "cross_camera_journeys_count",
 )
 
 
