@@ -46,9 +46,23 @@ def generate_comparison_markdown(report: RunComparisonReport) -> str:
             f"| Behavioral Insights | {base.insights_count} | {cand.insights_count} | `{_signed_int(int(kpis['insights_delta']))}` |",
             f"| High/Critical Insights | {base.high_critical_insights_count} | {cand.high_critical_insights_count} | `{_signed_int(int(kpis['high_critical_insights_delta']))}` |",
             f"| Total Dwell (s) | {base.total_dwell_seconds:.2f} | {cand.total_dwell_seconds:.2f} | `{_signed_float(float(kpis['total_dwell_seconds_delta']))}` |",
-            "",
         ]
     )
+    if (
+        base.cross_camera_transitions_count > 0
+        or cand.cross_camera_transitions_count > 0
+        or base.cross_camera_journeys_count > 0
+        or cand.cross_camera_journeys_count > 0
+    ):
+        lines.extend(
+            [
+                f"| Cross-Camera Transitions | {base.cross_camera_transitions_count} | {cand.cross_camera_transitions_count} | `{_signed_int(int(kpis['cross_camera_transitions_delta']))}` |",
+                f"| Cross-Camera Journeys | {base.cross_camera_journeys_count} | {cand.cross_camera_journeys_count} | `{_signed_int(int(kpis['cross_camera_journeys_delta']))}` |",
+                f"| Mean Transit (s) | {base.mean_transit_seconds:.2f} | {cand.mean_transit_seconds:.2f} | `{_signed_float(float(kpis['mean_transit_seconds_delta']))}` |",
+                f"| Mean Transition Confidence | {base.mean_transition_confidence:.3f} | {cand.mean_transition_confidence:.3f} | `{_signed_float(float(kpis['mean_transition_confidence_delta']), 3)}` |",
+            ]
+        )
+    lines.append("")
 
     if report.config_diffs:
         lines.extend(
@@ -128,6 +142,27 @@ def generate_comparison_markdown(report: RunComparisonReport) -> str:
             lines.append(
                 f"| `{tb.start_time:.1f}–{tb.end_time:.1f}` | `{_signed_int(tb.delta_active_tracks)}` | "
                 f"`{_signed_int(tb.delta_events)}` | `{_signed_int(tb.delta_insights)}` |"
+            )
+        lines.append("")
+
+    if report.pair_flow_deltas:
+        lines.extend(
+            [
+                "## Cross-Camera Pair Flow Deltas",
+                "",
+                "| From Camera | To Camera | Transitions (Base -> Cand / Delta) | Avg Transit s (Delta) | Avg Confidence (Delta) |",
+                "| --- | --- | --- | ---: | ---: |",
+            ]
+        )
+        for pf in report.pair_flow_deltas:
+            lines.append(
+                f"| `{pf.from_camera}` | `{pf.to_camera}` | "
+                f"{pf.baseline_transitions} -> {pf.candidate_transitions} "
+                f"(`{_signed_int(pf.delta_transitions)}`) | "
+                f"{pf.baseline_avg_transit_seconds:.2f} -> {pf.candidate_avg_transit_seconds:.2f} "
+                f"(`{_signed_float(pf.delta_avg_transit_seconds)}`) | "
+                f"{pf.baseline_avg_confidence:.3f} -> {pf.candidate_avg_confidence:.3f} "
+                f"(`{_signed_float(pf.delta_avg_confidence, 3)}`) |"
             )
         lines.append("")
 
