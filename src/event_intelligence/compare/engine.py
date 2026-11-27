@@ -915,6 +915,19 @@ def load_regression_policy(path: Path | str | None = None) -> RegressionPolicy:
         allow_config_drift=bool(
             raw.get("allow_config_drift", defaults.allow_config_drift)
         ),
+        max_transitions_drop_pct=_opt_float(
+            "max_transitions_drop_pct", defaults.max_transitions_drop_pct
+        ),
+        max_journeys_drop_pct=_opt_float(
+            "max_journeys_drop_pct", defaults.max_journeys_drop_pct
+        ),
+        max_mean_transit_increase_seconds=_opt_float(
+            "max_mean_transit_increase_seconds",
+            defaults.max_mean_transit_increase_seconds,
+        ),
+        min_mean_transition_confidence=_opt_float(
+            "min_mean_transition_confidence", defaults.min_mean_transition_confidence
+        ),
     )
 
 
