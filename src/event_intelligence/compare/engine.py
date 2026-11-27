@@ -178,6 +178,46 @@ def load_run_snapshot(
             insights_count = 0
             high_crit_count = 0
 
+        if _table_exists(conn, "cross_camera_transitions"):
+            if cam_filter:
+                cc_row = conn.execute(
+                    "SELECT count(*), coalesce(avg(transit_seconds), 0.0), "
+                    "coalesce(avg(confidence), 0.0) FROM cross_camera_transitions "
+                    "WHERE from_camera = ? OR to_camera = ?",
+                    (cam_filter, cam_filter),
+                ).fetchone()
+            else:
+                cc_row = conn.execute(
+                    "SELECT count(*), coalesce(avg(transit_seconds), 0.0), "
+                    "coalesce(avg(confidence), 0.0) FROM cross_camera_transitions"
+                ).fetchone()
+            cc_transitions_count = int(cc_row[0])
+            mean_transit_sec = max(0.0, float(cc_row[1]))
+            mean_trans_conf = min(1.0, max(0.0, float(cc_row[2])))
+        else:
+            cc_transitions_count = 0
+            mean_transit_sec = 0.0
+            mean_trans_conf = 0.0
+
+        if _table_exists(conn, "cross_camera_journeys"):
+            if cam_filter:
+                jr_rows = conn.execute(
+                    "SELECT cameras_visited_json FROM cross_camera_journeys"
+                ).fetchall()
+                cc_journeys_count = sum(
+                    1
+                    for (cj,) in jr_rows
+                    if cam_filter in (json.loads(cj) if cj else [])
+                )
+            else:
+                cc_journeys_count = int(
+                    conn.execute(
+                        "SELECT count(*) FROM cross_camera_journeys"
+                    ).fetchone()[0]
+                )
+        else:
+            cc_journeys_count = 0
+
     return RunSnapshot(
         run_id=resolved_run_id,
         run_dir=str(run_dir),
@@ -193,6 +233,10 @@ def load_run_snapshot(
         mean_track_duration_seconds=round(mean_track_dur, 4),
         mean_path_length_px=round(mean_path_len, 2),
         config_snapshot=config_snapshot,
+        cross_camera_transitions_count=cc_transitions_count,
+        cross_camera_journeys_count=cc_journeys_count,
+        mean_transit_seconds=round(mean_transit_sec, 4),
+        mean_transition_confidence=round(mean_trans_conf, 4),
     )
 
 
