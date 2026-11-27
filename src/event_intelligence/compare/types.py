@@ -306,6 +306,51 @@ class SpatialShiftSummary:
 
 
 @dataclass(frozen=True, slots=True)
+class CameraPairFlowDelta:
+    """Signed difference in directed camera-pair transition flows between two runs."""
+
+    from_camera: str
+    to_camera: str
+    baseline_transitions: int
+    candidate_transitions: int
+    baseline_avg_transit_seconds: float
+    candidate_avg_transit_seconds: float
+    baseline_avg_confidence: float
+    candidate_avg_confidence: float
+
+    @property
+    def delta_transitions(self) -> int:
+        return self.candidate_transitions - self.baseline_transitions
+
+    @property
+    def delta_avg_transit_seconds(self) -> float:
+        return round(
+            self.candidate_avg_transit_seconds - self.baseline_avg_transit_seconds, 4
+        )
+
+    @property
+    def delta_avg_confidence(self) -> float:
+        return round(self.candidate_avg_confidence - self.baseline_avg_confidence, 4)
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "from_camera": self.from_camera,
+            "to_camera": self.to_camera,
+            "baseline_transitions": self.baseline_transitions,
+            "candidate_transitions": self.candidate_transitions,
+            "delta_transitions": self.delta_transitions,
+            "baseline_avg_transit_seconds": round(self.baseline_avg_transit_seconds, 4),
+            "candidate_avg_transit_seconds": round(
+                self.candidate_avg_transit_seconds, 4
+            ),
+            "delta_avg_transit_seconds": self.delta_avg_transit_seconds,
+            "baseline_avg_confidence": round(self.baseline_avg_confidence, 4),
+            "candidate_avg_confidence": round(self.candidate_avg_confidence, 4),
+            "delta_avg_confidence": self.delta_avg_confidence,
+        }
+
+
+@dataclass(frozen=True, slots=True)
 class RunComparisonReport:
     """Complete structured diff between a baseline run and a candidate run."""
 
@@ -317,6 +362,7 @@ class RunComparisonReport:
     line_deltas: list[LineMetricDelta] = field(default_factory=list)
     insight_deltas: list[InsightTypeDelta] = field(default_factory=list)
     temporal_deltas: list[TemporalBucketDelta] = field(default_factory=list)
+    pair_flow_deltas: list[CameraPairFlowDelta] = field(default_factory=list)
     spatial_shift: SpatialShiftSummary | None = None
     regression_gate: RegressionGateResult | None = None
 
@@ -337,6 +383,20 @@ class RunComparisonReport:
                 self.candidate.total_dwell_seconds - self.baseline.total_dwell_seconds,
                 4,
             ),
+            "cross_camera_transitions_delta": self.candidate.cross_camera_transitions_count
+            - self.baseline.cross_camera_transitions_count,
+            "cross_camera_journeys_delta": self.candidate.cross_camera_journeys_count
+            - self.baseline.cross_camera_journeys_count,
+            "mean_transit_seconds_delta": round(
+                self.candidate.mean_transit_seconds
+                - self.baseline.mean_transit_seconds,
+                4,
+            ),
+            "mean_transition_confidence_delta": round(
+                self.candidate.mean_transition_confidence
+                - self.baseline.mean_transition_confidence,
+                4,
+            ),
         }
 
     def to_dict(self) -> dict[str, Any]:
@@ -350,6 +410,7 @@ class RunComparisonReport:
             "line_deltas": [ln.to_dict() for ln in self.line_deltas],
             "insight_deltas": [i.to_dict() for i in self.insight_deltas],
             "temporal_deltas": [t.to_dict() for t in self.temporal_deltas],
+            "pair_flow_deltas": [pf.to_dict() for pf in self.pair_flow_deltas],
             "spatial_shift": (
                 self.spatial_shift.to_dict() if self.spatial_shift is not None else None
             ),
