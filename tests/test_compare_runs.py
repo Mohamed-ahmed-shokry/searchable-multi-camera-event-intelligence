@@ -1109,6 +1109,102 @@ class TestMultiCameraComparisonAndGates(unittest.TestCase):
             self.assertEqual(legacy_snap.cross_camera_journeys_count, 0)
             self.assertEqual(compute_pair_flow_deltas(legacy_dir, legacy_dir), [])
 
+    def test_cross_camera_regression_gate_rules_and_single_camera_safety(self) -> None:
+        from event_intelligence.compare import (
+            RegressionPolicy,
+            evaluate_regression_gate,
+            load_regression_policy,
+        )
+
+        repo_policy = load_regression_policy(
+            Path(__file__).resolve().parents[1] / "configs" / "regression_policy.yaml"
+        )
+        self.assertEqual(repo_policy.max_transitions_drop_pct, 30.0)
+        self.assertEqual(repo_policy.max_journeys_drop_pct, 30.0)
+        self.assertEqual(repo_policy.max_mean_transit_increase_seconds, 5.0)
+        self.assertEqual(repo_policy.min_mean_transition_confidence, 0.35)
+
+        base_snap = RunSnapshot(
+            run_id="base_mc",
+            run_dir="/tmp/base_mc",
+            db_path="/tmp/base_mc/intelligence.db",
+            cameras_count=2,
+            detections_count=100,
+            tracks_count=10,
+            trajectories_count=200,
+            events_count=20,
+            insights_count=4,
+            high_critical_insights_count=1,
+            total_dwell_seconds=40.0,
+            mean_track_duration_seconds=4.0,
+            mean_path_length_px=120.0,
+            cross_camera_transitions_count=10,
+            cross_camera_journeys_count=5,
+            mean_transit_seconds=2.5,
+            mean_transition_confidence=0.85,
+        )
+        degraded_cand = RunSnapshot(
+            run_id="cand_mc",
+            run_dir="/tmp/cand_mc",
+            db_path="/tmp/cand_mc/intelligence.db",
+            cameras_count=2,
+            detections_count=100,
+            tracks_count=10,
+            trajectories_count=200,
+            events_count=20,
+            insights_count=4,
+            high_critical_insights_count=1,
+            total_dwell_seconds=40.0,
+            mean_track_duration_seconds=4.0,
+            mean_path_length_px=120.0,
+            cross_camera_transitions_count=4,
+            cross_camera_journeys_count=2,
+            mean_transit_seconds=9.0,
+            mean_transition_confidence=0.25,
+        )
+        report_fail = RunComparisonReport(baseline=base_snap, candidate=degraded_cand)
+        gate_fail = evaluate_regression_gate(report_fail, repo_policy)
+        self.assertFalse(gate_fail.passed)
+        violated_rules = {v.rule_name for v in gate_fail.violations}
+        self.assertEqual(
+            violated_rules,
+            {
+                "max_transitions_drop_pct",
+                "max_journeys_drop_pct",
+                "max_mean_transit_increase_seconds",
+                "min_mean_transition_confidence",
+            },
+        )
+
+        # Single-camera runs (0 transitions/journeys) must pass without false positives
+        single_snap = RunSnapshot(
+            run_id="single",
+            run_dir="/tmp/single",
+            db_path="/tmp/single/intelligence.db",
+            cameras_count=1,
+            detections_count=100,
+            tracks_count=10,
+            trajectories_count=200,
+            events_count=20,
+            insights_count=4,
+            high_critical_insights_count=1,
+            total_dwell_seconds=40.0,
+            mean_track_duration_seconds=4.0,
+            mean_path_length_px=120.0,
+        )
+        gate_single = evaluate_regression_gate(
+            RunComparisonReport(baseline=single_snap, candidate=single_snap),
+            repo_policy,
+        )
+        self.assertTrue(gate_single.passed)
+        self.assertEqual(gate_single.violations, [])
+
+        # Validation guards on invalid thresholds
+        with self.assertRaises(ValueError):
+            RegressionPolicy(max_transitions_drop_pct=150.0)
+        with self.assertRaises(ValueError):
+            RegressionPolicy(min_mean_transition_confidence=1.5)
+
 
 if __name__ == "__main__":
     unittest.main()
