@@ -1102,6 +1102,105 @@ def evaluate_regression_gate(
                 )
             )
 
+    if pol.max_transitions_drop_pct is not None:
+        checks += 1
+        if base.cross_camera_transitions_count > 0:
+            drop_pct = (
+                (
+                    base.cross_camera_transitions_count
+                    - cand.cross_camera_transitions_count
+                )
+                / base.cross_camera_transitions_count
+            ) * 100.0
+            if drop_pct > pol.max_transitions_drop_pct:
+                violations.append(
+                    RegressionViolation(
+                        rule_name="max_transitions_drop_pct",
+                        severity="error",
+                        metric_name="cross_camera_transitions_count",
+                        baseline_value=float(base.cross_camera_transitions_count),
+                        candidate_value=float(cand.cross_camera_transitions_count),
+                        threshold=pol.max_transitions_drop_pct,
+                        message=(
+                            f"Cross-camera transitions dropped by {drop_pct:.1f}% "
+                            f"({base.cross_camera_transitions_count} -> "
+                            f"{cand.cross_camera_transitions_count}, "
+                            f"max allowed {pol.max_transitions_drop_pct:.1f}%)"
+                        ),
+                    )
+                )
+
+    if pol.max_journeys_drop_pct is not None:
+        checks += 1
+        if base.cross_camera_journeys_count > 0:
+            drop_pct = (
+                (base.cross_camera_journeys_count - cand.cross_camera_journeys_count)
+                / base.cross_camera_journeys_count
+            ) * 100.0
+            if drop_pct > pol.max_journeys_drop_pct:
+                violations.append(
+                    RegressionViolation(
+                        rule_name="max_journeys_drop_pct",
+                        severity="error",
+                        metric_name="cross_camera_journeys_count",
+                        baseline_value=float(base.cross_camera_journeys_count),
+                        candidate_value=float(cand.cross_camera_journeys_count),
+                        threshold=pol.max_journeys_drop_pct,
+                        message=(
+                            f"Cross-camera journeys dropped by {drop_pct:.1f}% "
+                            f"({base.cross_camera_journeys_count} -> "
+                            f"{cand.cross_camera_journeys_count}, "
+                            f"max allowed {pol.max_journeys_drop_pct:.1f}%)"
+                        ),
+                    )
+                )
+
+    if pol.max_mean_transit_increase_seconds is not None:
+        checks += 1
+        if (
+            base.cross_camera_transitions_count > 0
+            and cand.cross_camera_transitions_count > 0
+        ):
+            inc_sec = cand.mean_transit_seconds - base.mean_transit_seconds
+            if inc_sec > pol.max_mean_transit_increase_seconds:
+                violations.append(
+                    RegressionViolation(
+                        rule_name="max_mean_transit_increase_seconds",
+                        severity="error",
+                        metric_name="mean_transit_seconds",
+                        baseline_value=base.mean_transit_seconds,
+                        candidate_value=cand.mean_transit_seconds,
+                        threshold=pol.max_mean_transit_increase_seconds,
+                        message=(
+                            f"Mean cross-camera transit latency increased by +{inc_sec:.2f}s "
+                            f"({base.mean_transit_seconds:.2f}s -> {cand.mean_transit_seconds:.2f}s, "
+                            f"max allowed +{pol.max_mean_transit_increase_seconds:.2f}s)"
+                        ),
+                    )
+                )
+
+    if pol.min_mean_transition_confidence is not None:
+        checks += 1
+        if (
+            cand.cross_camera_transitions_count > 0
+            and cand.mean_transition_confidence < pol.min_mean_transition_confidence
+        ):
+            violations.append(
+                RegressionViolation(
+                    rule_name="min_mean_transition_confidence",
+                    severity="error",
+                    metric_name="mean_transition_confidence",
+                    baseline_value=base.mean_transition_confidence,
+                    candidate_value=cand.mean_transition_confidence,
+                    threshold=pol.min_mean_transition_confidence,
+                    message=(
+                        f"Mean cross-camera transition confidence "
+                        f"{cand.mean_transition_confidence:.3f} fell below "
+                        f"minimum {pol.min_mean_transition_confidence:.3f}"
+                    ),
+                )
+            )
+
     passed = not any(v.severity == "error" for v in violations)
     return RegressionGateResult(
         passed=passed,
