@@ -1205,6 +1205,119 @@ class TestMultiCameraComparisonAndGates(unittest.TestCase):
         with self.assertRaises(ValueError):
             RegressionPolicy(min_mean_transition_confidence=1.5)
 
+    def test_multicam_comparison_artifacts_trends_and_cli_gate(self) -> None:
+        import csv
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            root = Path(tmpdir)
+            run_base = _create_synthetic_run(
+                root / "runs" / "run_base",
+                trajectories_rows=[(1, 0, 0.0, 50.0, 50.0)],
+            )
+            run_good = _create_synthetic_run(
+                root / "runs" / "run_good",
+                trajectories_rows=[(1, 0, 0.0, 50.0, 50.0)],
+            )
+            run_bad = _create_synthetic_run(
+                root / "runs" / "run_bad",
+                trajectories_rows=[(1, 0, 0.0, 50.0, 50.0)],
+            )
+            _seed_multicam_correlation(
+                run_base,
+                transitions=[
+                    ("tr_1", "cam_a", 1, "cam_b", 2, 1.0, 3.0, 2.0, 0.90),
+                    ("tr_2", "cam_b", 2, "cam_c", 3, 4.0, 6.0, 2.0, 0.85),
+                ],
+                journeys=[
+                    ("jr_1", 2, ["cam_a", "cam_b", "cam_c"], 1.0, 6.0, 5.0, 0.875),
+                ],
+            )
+            _seed_multicam_correlation(
+                run_good,
+                transitions=[
+                    ("tr_1", "cam_a", 1, "cam_b", 2, 1.0, 3.5, 2.5, 0.88),
+                    ("tr_2", "cam_b", 2, "cam_c", 3, 4.0, 6.5, 2.5, 0.82),
+                ],
+                journeys=[
+                    ("jr_1", 2, ["cam_a", "cam_b", "cam_c"], 1.0, 6.5, 5.5, 0.85),
+                ],
+            )
+            _seed_multicam_correlation(
+                run_bad,
+                transitions=[
+                    ("tr_1", "cam_a", 1, "cam_b", 2, 1.0, 12.0, 11.0, 0.20),
+                ],
+                journeys=[],
+            )
+
+            policy_path = (
+                Path(__file__).resolve().parents[1]
+                / "configs"
+                / "regression_policy.yaml"
+            )
+            out_dir = root / "diff_bad"
+
+            # Degraded multi-camera candidate -> exit 2 + pair_flow_deltas.csv + Markdown section
+            buf_fail = io.StringIO()
+            with redirect_stdout(buf_fail):
+                rc_fail = compare_main(
+                    [
+                        "--baseline",
+                        str(run_base),
+                        "--candidate",
+                        str(run_bad),
+                        "--policy",
+                        str(policy_path),
+                        "--fail-on-regression",
+                        "--no-heatmap-diff",
+                        "--output-dir",
+                        str(out_dir),
+                    ]
+                )
+            self.assertEqual(rc_fail, 2)
+            self.assertTrue((out_dir / "pair_flow_deltas.csv").is_file())
+            with (out_dir / "pair_flow_deltas.csv").open("r", encoding="utf-8") as f:
+                pf_rows = list(csv.DictReader(f))
+            self.assertEqual(len(pf_rows), 2)
+
+            md_text = (out_dir / "comparison_report.md").read_text(encoding="utf-8")
+            self.assertIn("Cross-Camera Transitions", md_text)
+            self.assertIn("## Cross-Camera Pair Flow Deltas", md_text)
+            self.assertIn("max_transitions_drop_pct", md_text)
+
+            # Healthy multi-camera candidate -> exit 0
+            buf_pass = io.StringIO()
+            with redirect_stdout(buf_pass):
+                rc_pass = compare_main(
+                    [
+                        "--baseline",
+                        str(run_base),
+                        "--candidate",
+                        str(run_good),
+                        "--policy",
+                        str(policy_path),
+                        "--fail-on-regression",
+                        "--no-heatmap-diff",
+                        "--json",
+                    ]
+                )
+            self.assertEqual(rc_pass, 0)
+            pass_data = json.loads(buf_pass.getvalue())
+            self.assertTrue(pass_data["regression_gate"]["passed"])
+            self.assertEqual(len(pass_data["pair_flow_deltas"]), 2)
+
+            # Multi-run trends track cross-camera counts and export them to runs_catalog.csv
+            trends = analyze_multi_run_trends([run_base, run_good, run_bad])
+            self.assertIn("cross_camera_transitions_count", trends.metric_baselines)
+            self.assertIn("cross_camera_journeys_count", trends.metric_baselines)
+            trends_dir = root / "trends_out"
+            write_trends_artifacts(trends, trends_dir)
+            with (trends_dir / "runs_catalog.csv").open("r", encoding="utf-8") as f:
+                cat_rows = list(csv.DictReader(f))
+            self.assertEqual(len(cat_rows), 3)
+            self.assertIn("cross_camera_transitions_count", cat_rows[0])
+            self.assertIn("cross_camera_journeys_count", cat_rows[0])
+
 
 if __name__ == "__main__":
     unittest.main()
