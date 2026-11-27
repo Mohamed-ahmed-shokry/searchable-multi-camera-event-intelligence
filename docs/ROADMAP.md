@@ -2684,6 +2684,102 @@ uv run --locked pytest -v
 | `uv run --locked python -m event_intelligence.search --db outputs/runs/phase11l_verify/intelligence.db --journey-dossier jr_0001` | ✅ exit 0 | printed chronological 2-segment dossier (`cam_entrance#1 -> cam_aisle#1`, 16 events) |
 | `uv run --locked python -m event_intelligence.search --db outputs/runs/phase11l_verify/intelligence.db --export-journey jr_0001 --bundle-dir outputs/runs/phase11l_verify/journey_bundles/jr_0001` | ✅ exit 0 | wrote `manifest.json`, `journey_dossier.md`, `hops.csv`, `transitions.csv`, and 32 collision-safe cross-camera media files (0 missing) |
 
+---
+
+## Completed Phase: 11m — Multi-Camera Correlation Comparison, Camera-Pair Flow Diffs & Cross-Camera Regression Gates (2026-11-27)
+
+### Objective
+
+`event_intelligence.compare` supports single-camera KPI diffs, zone/line/insight/temporal/spatial diffs, multi-run trends, and automated regression gates, but it is **blind to persisted multi-camera correlation metrics** (`cross_camera_transitions` and `cross_camera_journeys`). Comparing two multi-camera runs cannot detect dropped cross-camera handoffs, degraded transit latencies, reduced handoff confidence, or lost multi-hop journeys.
+
+Demonstrable end-to-end outcome: running `python -m event_intelligence.compare --baseline <run_a> --candidate <run_b> --policy configs/regression_policy.yaml --fail-on-regression --output-dir <dir>` diffs persisted cross-camera transitions, stitched journeys, and per-camera-pair flows (`pair_flow_deltas.csv` + Markdown section), evaluates configurable cross-camera regression gate rules (`max_transitions_drop_pct`, `max_journeys_drop_pct`, `max_mean_transit_increase_seconds`, `min_mean_transition_confidence`), and returns exit `0` on pass or exit `2` on regression.
+
+### Scope
+
+1. **Cross-camera snapshot & pair-flow delta types (`src/event_intelligence/compare/types.py`):**
+   - Extend `RunSnapshot` with `cross_camera_transitions_count`, `cross_camera_journeys_count`, `mean_transit_seconds`, and `mean_transition_confidence` (backward-compatible defaults).
+   - Add `CameraPairFlowDelta` dataclass and attach `pair_flow_deltas` + cross-camera `kpi_deltas` to `RunComparisonReport`.
+   - Extend `RegressionPolicy` with `max_transitions_drop_pct`, `max_journeys_drop_pct`, `max_mean_transit_increase_seconds`, and `min_mean_transition_confidence`.
+2. **Comparison & regression gate engine (`src/event_intelligence/compare/engine.py`):**
+   - Load cross-camera correlation metrics in `load_run_snapshot()` (graceful fallback on legacy DBs).
+   - Implement `compute_pair_flow_deltas()` grouped by `(from_camera, to_camera)` and wire into `compare_runs()`.
+   - Update `load_regression_policy()` and `evaluate_regression_gate()` with all 4 cross-camera rules (safe no-op on single-camera baselines).
+   - Include cross-camera counts in `analyze_multi_run_trends()` baselines.
+3. **Default regression policy (`configs/regression_policy.yaml`)** and public exports (`src/event_intelligence/compare/__init__.py`).
+4. **Reporting & CSV exports (`src/event_intelligence/compare/report.py`):**
+   - Render cross-camera KPIs and `## Cross-Camera Pair Flow Deltas` in `generate_comparison_markdown()`.
+   - Export `pair_flow_deltas.csv` in `write_comparison_artifacts()`.
+   - Include cross-camera counts in `runs_catalog.csv`.
+5. **Comprehensive unit & CLI integration tests (`tests/test_compare_runs.py`)** + real multi-camera E2E comparison.
+6. **Documentation:** `README.md` and `docs/ROADMAP.md` updates.
+
+### Acceptance Criteria
+
+| # | Criterion | Status | Evidence |
+|---|-----------|--------|----------|
+| 1 | `load_run_snapshot()` accurately loads cross-camera transition/journey counts, mean transit time, and mean confidence, with graceful `0`/`0.0` fallback on legacy DBs | ✅ | `cc4d612`, `1d7d38e`, `c659b46` (`test_snapshot_and_pair_flow_deltas_with_legacy_fallback` passed) |
+| 2 | `compute_pair_flow_deltas()` diffs per-camera-pair transition counts, avg transit latency, and avg confidence between two runs | ✅ | `506bbfc`, `83d1bdf`, `c659b46` (`test_snapshot_and_pair_flow_deltas_with_legacy_fallback` passed) |
+| 3 | `RegressionPolicy`, `load_regression_policy()`, `configs/regression_policy.yaml`, and `evaluate_regression_gate()` enforce all 4 cross-camera regression rules without breaking single-camera comparisons | ✅ | `fd293b8`, `44028ea`, `d9fee30`, `e3fa96a`, `a7b9fa3` (`test_cross_camera_regression_gate_rules_and_single_camera_safety` passed) |
+| 4 | `generate_comparison_markdown()` renders cross-camera KPI deltas and `## Cross-Camera Pair Flow Deltas`; `write_comparison_artifacts()` exports `pair_flow_deltas.csv` | ✅ | `8131e6d`, `a757c8c`, `4e46e49` |
+| 5 | `analyze_multi_run_trends()` and `runs_catalog.csv` track cross-camera transitions and journeys across runs | ✅ | `94293c9`, `dd77498`, `4e46e49` |
+| 6 | Real multi-camera E2E execution of `python -m event_intelligence.compare --policy ... --fail-on-regression` verifies both PASS (exit `0`) and FAIL (exit `2`) with `pair_flow_deltas.csv` and Markdown output | ✅ | Verified on `phase11l_verify` vs `phase11l_verify` (`PASS_EXIT=0`, 10 checks) and `phase11l_verify` vs `phase11m_degraded` (`FAIL_EXIT=2`, caught `max_transitions_drop_pct` & `max_journeys_drop_pct`, wrote `pair_flow_deltas.csv`) |
+| 7 | All local CI-parity checks (`uv sync --locked`, `ruff check .`, `ruff format --check .`, `pytest -v`) and remote GitHub Actions CI workflow runs pass 100% | ✅ | `276 passed, 56 subtests passed`, `ruff check` & `format` clean, remote CI green on `HEAD` |
+
+### Validation & CI Plan
+
+```bash
+uv sync --locked
+uv run --locked ruff check .
+uv run --locked ruff format --check .
+uv run --locked pytest -v
+```
+
+### Exclusions (deferred)
+
+- **Appearance-based Re-ID embeddings (OSNet/CLIP):** Deferred per Phase 11j–11l.
+- **Phase 12 Productization (FastAPI, React dashboard, auth, RTSP, cloud):** Deferred per `AGENTS.md`.
+
+### Micro-Task Breakdown
+
+- [x] 1. `docs(roadmap): define Phase 11m multi-camera comparison and regression gates scope` (`95a0a3c`)
+- [x] 2. `types(compare): add cross-camera correlation KPI fields to RunSnapshot` (`cc4d612`)
+- [x] 3. `types(compare): add CameraPairFlowDelta dataclass and wire into RunComparisonReport` (`506bbfc`)
+- [x] 4. `types(compare): add cross-camera correlation thresholds to RegressionPolicy` (`fd293b8`)
+- [x] 5. `feat(compare): load persisted cross-camera correlation metrics in load_run_snapshot` (`1d7d38e`)
+- [x] 6. `feat(compare): implement compute_pair_flow_deltas and wire into compare_runs` (`83d1bdf`)
+- [x] 7. `test(compare): add unit tests for cross-camera RunSnapshot loading and pair flow deltas` (`c659b46`)
+- [x] 8. `feat(compare): parse cross-camera regression rules in load_regression_policy` (`44028ea`)
+- [x] 9. `feat(compare): enforce cross-camera transition, journey, latency, and confidence rules in evaluate_regression_gate` (`d9fee30`)
+- [x] 10. `feat(config): add cross-camera regression gate defaults to configs/regression_policy.yaml` (`e3fa96a`)
+- [x] 11. `test(compare): add unit tests for cross-camera regression gate rules and single-camera safety` (`a7b9fa3`)
+- [x] 12. `feat(compare): render cross-camera KPIs and pair flow deltas table in generate_comparison_markdown` (`8131e6d`)
+- [x] 13. `feat(compare): export pair_flow_deltas.csv in write_comparison_artifacts` (`a757c8c`)
+- [x] 14. `feat(compare): track cross-camera transition and journey metrics in multi-run trends and runs_catalog.csv` (`94293c9`)
+- [x] 15. `feat(compare): export CameraPairFlowDelta and compute_pair_flow_deltas in compare/__init__.py` (`dd77498`)
+- [x] 16. `test(compare): add integration tests for multi-camera comparison artifacts, trends, and CLI regression exit codes` (`4e46e49`)
+- [x] 17. `docs(readme): document multi-camera correlation comparison, pair_flow_deltas.csv, and cross-camera regression gates` (`f7f0eac`)
+- [x] 18. `docs(roadmap): complete Phase 11m criteria, decision log, and CI log`
+
+### Decision Log (Phase 11m)
+
+| Decision | Options Considered | Chosen & Rationale |
+|----------|-------------------|--------------------|
+| Single-camera safety for default cross-camera regression rules | (a) Leave cross-camera rules `null` in `configs/regression_policy.yaml`; (b) Enable sensible defaults (`30%` max drop, `+5.0s` latency, `0.35` min confidence) and guard each check on `baseline.cross_camera_transitions_count > 0` / `candidate.cross_camera_transitions_count > 0` | **(b) Guarded defaults** — gives multi-camera CI runs automatic regression protection out of the box while guaranteeing zero false positives on single-camera baselines. |
+| Always emitting `pair_flow_deltas.csv` in `write_comparison_artifacts` | (a) Only write when `pair_flow_deltas` is non-empty; (b) Always write with header matching `zone_deltas.csv`, `line_deltas.csv`, and `temporal_deltas.csv` | **(b) Always write with header** — keeps the comparison artifact directory schema deterministic for downstream CSV consumers. |
+| Branch stacking for Phase 11m | (a) Branch from `origin/phase/11g-temporal-analytics-and-incident-bundling` (missing unmerged PR #21); (b) Branch from `phase/11l-journey-dossiers-and-multicam-reporting` (`1ddfb87`) and target PR #22 at `phase/11l-journey-dossiers-and-multicam-reporting` | **(b) Clean stacked branch** — preserves Phase 11l work while isolating Phase 11m's 18 commits in Draft PR #22 with zero conflicts. |
+
+### CI & Validation Log (Phase 11m)
+
+| Command | Result | Notes |
+|---------|--------|-------|
+| `uv sync --locked` | ✅ exit 0 | clean locked environment (`152 packages`) |
+| `uv run --locked ruff check .` | ✅ `All checks passed!` | repo-wide lint gate (`124` Python files clean) |
+| `uv run --locked ruff format --check .` | ✅ `124 files already formatted` | repo-wide format gate |
+| `uv run --locked pytest -q` | ✅ `276 passed, 56 subtests passed` | full test suite (`3` new test suites added in `tests/test_compare_runs.py`) |
+| `uv run --locked python -m event_intelligence.compare --baseline outputs/runs/phase11l_verify --candidate outputs/runs/phase11l_verify --policy configs/regression_policy.yaml --fail-on-regression --no-heatmap-diff --output-dir outputs/comparisons/verify_11m_pass` | ✅ exit 0 (`PASS`) | 10 checks evaluated, 0 errors |
+| `uv run --locked python -m event_intelligence.compare --baseline outputs/runs/phase11l_verify --candidate outputs/runs/phase11m_degraded --policy configs/regression_policy.yaml --fail-on-regression --no-heatmap-diff --output-dir outputs/comparisons/verify_11m_fail` | ✅ exit 2 (`FAIL`) | caught `max_transitions_drop_pct` & `max_journeys_drop_pct`, exported `pair_flow_deltas.csv` and Markdown cross-camera diff |
+
+
 
 
 
