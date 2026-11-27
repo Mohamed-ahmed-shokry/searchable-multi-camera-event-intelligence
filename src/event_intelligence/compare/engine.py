@@ -20,6 +20,7 @@ from event_intelligence.analytics import (
 )
 from event_intelligence.compare.report import write_comparison_artifacts
 from event_intelligence.compare.types import (
+    CameraPairFlowDelta,
     ConfigDiffEntry,
     InsightTypeDelta,
     LineMetricDelta,
@@ -313,6 +314,67 @@ def compute_zone_deltas(
                 candidate_dwell_seconds=cr.total_dwell_seconds if cr else 0.0,
                 baseline_peak_occupancy=br.peak_occupancy if br else 0,
                 candidate_peak_occupancy=cr.peak_occupancy if cr else 0,
+            )
+        )
+    return deltas
+
+
+def compute_pair_flow_deltas(
+    baseline_db: Path | str,
+    candidate_db: Path | str,
+    *,
+    camera_id: str | None = None,
+) -> list[CameraPairFlowDelta]:
+    """Compute signed per-(from_camera, to_camera) transition flow deltas between two DBs."""
+    _, b_db = _resolve_run_and_db_paths(baseline_db)
+    _, c_db = _resolve_run_and_db_paths(candidate_db)
+    cam_filter = camera_id.strip() if camera_id and camera_id.strip() else None
+
+    def _load_pairs(db: Path) -> dict[tuple[str, str], tuple[int, float, float]]:
+        out: dict[tuple[str, str], tuple[int, float, float]] = {}
+        with closing(sqlite3.connect(db)) as conn:
+            if not _table_exists(conn, "cross_camera_transitions"):
+                return out
+            if cam_filter:
+                rows = conn.execute(
+                    "SELECT from_camera, to_camera, count(*), "
+                    "coalesce(avg(transit_seconds), 0.0), coalesce(avg(confidence), 0.0) "
+                    "FROM cross_camera_transitions "
+                    "WHERE from_camera = ? OR to_camera = ? "
+                    "GROUP BY from_camera, to_camera",
+                    (cam_filter, cam_filter),
+                ).fetchall()
+            else:
+                rows = conn.execute(
+                    "SELECT from_camera, to_camera, count(*), "
+                    "coalesce(avg(transit_seconds), 0.0), coalesce(avg(confidence), 0.0) "
+                    "FROM cross_camera_transitions "
+                    "GROUP BY from_camera, to_camera"
+                ).fetchall()
+            for fcam, tcam, cnt, avg_dt, avg_conf in rows:
+                out[(str(fcam), str(tcam))] = (
+                    int(cnt),
+                    float(avg_dt),
+                    float(avg_conf),
+                )
+        return out
+
+    b_map = _load_pairs(b_db)
+    c_map = _load_pairs(c_db)
+    deltas: list[CameraPairFlowDelta] = []
+    for pair in sorted(set(b_map.keys()) | set(c_map.keys())):
+        b_cnt, b_dt, b_conf = b_map.get(pair, (0, 0.0, 0.0))
+        c_cnt, c_dt, c_conf = c_map.get(pair, (0, 0.0, 0.0))
+        deltas.append(
+            CameraPairFlowDelta(
+                from_camera=pair[0],
+                to_camera=pair[1],
+                baseline_transitions=b_cnt,
+                candidate_transitions=c_cnt,
+                baseline_avg_transit_seconds=b_dt,
+                candidate_avg_transit_seconds=c_dt,
+                baseline_avg_confidence=b_conf,
+                candidate_avg_confidence=c_conf,
             )
         )
     return deltas
@@ -752,6 +814,9 @@ def compare_runs(
         bucket_seconds=bucket_seconds,
         camera_id=camera_id,
     )
+    pair_flow_deltas = compute_pair_flow_deltas(
+        base_snap.db_path, cand_snap.db_path, camera_id=camera_id
+    )
 
     out_path = Path(output_dir).resolve() if output_dir is not None else None
     diff_img_path = (
@@ -777,6 +842,7 @@ def compare_runs(
         line_deltas=line_deltas,
         insight_deltas=insight_deltas,
         temporal_deltas=temporal_deltas,
+        pair_flow_deltas=pair_flow_deltas,
         spatial_shift=spatial_shift,
     )
     if policy is not None:
@@ -790,6 +856,7 @@ def compare_runs(
             line_deltas=report.line_deltas,
             insight_deltas=report.insight_deltas,
             temporal_deltas=report.temporal_deltas,
+            pair_flow_deltas=report.pair_flow_deltas,
             spatial_shift=report.spatial_shift,
             regression_gate=gate_res,
         )
