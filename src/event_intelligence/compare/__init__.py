@@ -7,6 +7,7 @@ from event_intelligence.compare.engine import (
     compare_runs,
     compute_insight_deltas,
     compute_line_deltas,
+    compute_pair_flow_deltas,
     compute_spatial_density_diff,
     compute_temporal_bucket_deltas,
     compute_zone_deltas,
@@ -24,6 +25,7 @@ from event_intelligence.compare.report import (
     write_trends_artifacts,
 )
 from event_intelligence.compare.types import (
+    CameraPairFlowDelta,
     ConfigDiffEntry,
     InsightTypeDelta,
     LineMetricDelta,
@@ -40,6 +42,7 @@ from event_intelligence.compare.types import (
 )
 
 __all__ = [
+    "CameraPairFlowDelta",
     "ConfigDiffEntry",
     "InsightTypeDelta",
     "LineMetricDelta",
@@ -57,6 +60,7 @@ __all__ = [
     "compare_runs",
     "compute_insight_deltas",
     "compute_line_deltas",
+    "compute_pair_flow_deltas",
     "compute_spatial_density_diff",
     "compute_temporal_bucket_deltas",
     "compute_zone_deltas",
