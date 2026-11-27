@@ -7,3 +7,9 @@ max_high_critical_insights_increase: 3
 max_spatial_shift_mean_abs: 0.25
 min_detections_ratio: 0.75
 allow_config_drift: true
+
+# Phase 11m: Multi-camera correlation regression thresholds (safe no-ops on single-camera runs)
+max_transitions_drop_pct: 30.0
+max_journeys_drop_pct: 30.0
+max_mean_transit_increase_seconds: 5.0
+min_mean_transition_confidence: 0.35
