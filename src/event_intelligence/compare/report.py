@@ -302,6 +302,29 @@ def write_comparison_artifacts(
         for tb in report.temporal_deltas:
             writer.writerow(tb.to_dict())
 
+    with (out / "pair_flow_deltas.csv").open(
+        "w", encoding="utf-8", newline=""
+    ) as handle:
+        writer = csv.DictWriter(
+            handle,
+            fieldnames=[
+                "from_camera",
+                "to_camera",
+                "baseline_transitions",
+                "candidate_transitions",
+                "delta_transitions",
+                "baseline_avg_transit_seconds",
+                "candidate_avg_transit_seconds",
+                "delta_avg_transit_seconds",
+                "baseline_avg_confidence",
+                "candidate_avg_confidence",
+                "delta_avg_confidence",
+            ],
+        )
+        writer.writeheader()
+        for pf in report.pair_flow_deltas:
+            writer.writerow(pf.to_dict())
+
     return json_path, md_path
 
 
