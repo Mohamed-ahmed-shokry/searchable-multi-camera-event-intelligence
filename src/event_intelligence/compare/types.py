@@ -487,12 +487,18 @@ class RegressionPolicy:
     max_spatial_shift_mean_abs: float | None = 0.25
     min_detections_ratio: float | None = 0.75
     allow_config_drift: bool = True
+    max_transitions_drop_pct: float | None = None
+    max_journeys_drop_pct: float | None = None
+    max_mean_transit_increase_seconds: float | None = None
+    min_mean_transition_confidence: float | None = None
 
     def __post_init__(self) -> None:
         for name, val in (
             ("max_tracks_drop_pct", self.max_tracks_drop_pct),
             ("max_events_drop_pct", self.max_events_drop_pct),
             ("max_dwell_drop_pct", self.max_dwell_drop_pct),
+            ("max_transitions_drop_pct", self.max_transitions_drop_pct),
+            ("max_journeys_drop_pct", self.max_journeys_drop_pct),
         ):
             if val is not None and not (0.0 <= val <= 100.0):
                 raise ValueError(f"{name} must be in [0.0, 100.0], got {val}")
@@ -508,6 +514,15 @@ class RegressionPolicy:
             raise ValueError("max_spatial_shift_mean_abs must be >= 0.0")
         if self.min_detections_ratio is not None and self.min_detections_ratio < 0.0:
             raise ValueError("min_detections_ratio must be >= 0.0")
+        if (
+            self.max_mean_transit_increase_seconds is not None
+            and self.max_mean_transit_increase_seconds < 0.0
+        ):
+            raise ValueError("max_mean_transit_increase_seconds must be >= 0.0")
+        if self.min_mean_transition_confidence is not None and not (
+            0.0 <= self.min_mean_transition_confidence <= 1.0
+        ):
+            raise ValueError("min_mean_transition_confidence must be in [0.0, 1.0]")
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -518,6 +533,10 @@ class RegressionPolicy:
             "max_spatial_shift_mean_abs": self.max_spatial_shift_mean_abs,
             "min_detections_ratio": self.min_detections_ratio,
             "allow_config_drift": self.allow_config_drift,
+            "max_transitions_drop_pct": self.max_transitions_drop_pct,
+            "max_journeys_drop_pct": self.max_journeys_drop_pct,
+            "max_mean_transit_increase_seconds": self.max_mean_transit_increase_seconds,
+            "min_mean_transition_confidence": self.min_mean_transition_confidence,
         }
 
 
