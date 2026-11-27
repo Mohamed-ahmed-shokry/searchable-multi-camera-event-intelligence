@@ -4,9 +4,10 @@ from __future__ import annotations
 
 import io
 import json
+import sqlite3
 import tempfile
 import unittest
-from contextlib import redirect_stdout
+from contextlib import closing, redirect_stdout
 from pathlib import Path
 from typing import Any
 
@@ -30,6 +31,7 @@ from event_intelligence.compare import (
     write_trends_artifacts,
 )
 from event_intelligence.compare.__main__ import main as compare_main
+from event_intelligence.compare.engine import compute_pair_flow_deltas
 from event_intelligence.compare.types import (
     ConfigDiffEntry,
     InsightTypeDelta,
@@ -995,6 +997,117 @@ class TestCompareEngine(unittest.TestCase):
                 )
             self.assertEqual(rc_fail, 2)
             self.assertIn("Regression Gate: FAIL", buf_fail.getvalue())
+
+
+def _seed_multicam_correlation(
+    run_dir: Path,
+    *,
+    transitions: list[tuple[str, str, int, str, int, float, float, float, float]],
+    journeys: list[tuple[str, int, list[str], float, float, float, float]],
+) -> None:
+    """Seed cross_camera_transitions and cross_camera_journeys rows into a run DB."""
+    db_path = run_dir / "intelligence.db"
+    with closing(sqlite3.connect(str(db_path))) as conn:
+        conn.executemany(
+            "INSERT INTO cross_camera_transitions ("
+            "transition_id, topology_name, from_camera, from_track_id, "
+            "to_camera, to_track_id, exit_time, entry_time, transit_seconds, "
+            "confidence, rule_label, from_zone, to_zone, evidence_reason"
+            ") VALUES (?, 'site_topo', ?, ?, ?, ?, ?, ?, ?, ?, 'rule', NULL, NULL, 'test')",
+            transitions,
+        )
+        conn.executemany(
+            "INSERT INTO cross_camera_journeys ("
+            "journey_id, topology_name, hop_count, cameras_visited_json, "
+            "start_time, end_time, total_span_seconds, avg_confidence, hops_json"
+            ") VALUES (?, 'site_topo', ?, ?, ?, ?, ?, ?, '[]')",
+            [
+                (jid, hops, json.dumps(cams), st, et, span, conf)
+                for jid, hops, cams, st, et, span, conf in journeys
+            ],
+        )
+        conn.commit()
+
+
+class TestMultiCameraComparisonAndGates(unittest.TestCase):
+    """Tests for Phase 11m multi-camera correlation comparison and regression gates."""
+
+    def test_snapshot_and_pair_flow_deltas_with_legacy_fallback(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            root = Path(tmpdir)
+            run_a = _create_synthetic_run(
+                root / "run_a",
+                trajectories_rows=[(1, 0, 0.0, 50.0, 50.0)],
+            )
+            run_b = _create_synthetic_run(
+                root / "run_b",
+                trajectories_rows=[(1, 0, 0.0, 50.0, 50.0)],
+            )
+            _seed_multicam_correlation(
+                run_a,
+                transitions=[
+                    ("tr_1", "cam_a", 1, "cam_b", 2, 1.0, 3.0, 2.0, 0.90),
+                    ("tr_2", "cam_a", 3, "cam_b", 4, 4.0, 8.0, 4.0, 0.80),
+                    ("tr_3", "cam_b", 2, "cam_c", 5, 5.0, 7.0, 2.0, 0.85),
+                ],
+                journeys=[
+                    ("jr_1", 2, ["cam_a", "cam_b", "cam_c"], 1.0, 7.0, 6.0, 0.875),
+                    ("jr_2", 1, ["cam_a", "cam_b"], 4.0, 8.0, 4.0, 0.80),
+                ],
+            )
+            _seed_multicam_correlation(
+                run_b,
+                transitions=[
+                    ("tr_1", "cam_a", 1, "cam_b", 2, 1.0, 6.0, 5.0, 0.60),
+                ],
+                journeys=[
+                    ("jr_1", 1, ["cam_a", "cam_b"], 1.0, 6.0, 5.0, 0.60),
+                ],
+            )
+
+            snap_a = load_run_snapshot(run_a)
+            self.assertEqual(snap_a.cross_camera_transitions_count, 3)
+            self.assertEqual(snap_a.cross_camera_journeys_count, 2)
+            self.assertAlmostEqual(snap_a.mean_transit_seconds, 8.0 / 3.0, places=3)
+            self.assertAlmostEqual(snap_a.mean_transition_confidence, 0.85, places=3)
+
+            snap_a_cam_c = load_run_snapshot(run_a, camera_id="cam_c")
+            self.assertEqual(snap_a_cam_c.cross_camera_transitions_count, 1)
+            self.assertEqual(snap_a_cam_c.cross_camera_journeys_count, 1)
+
+            pair_deltas = compute_pair_flow_deltas(run_a, run_b)
+            self.assertEqual(len(pair_deltas), 2)
+            ab = next(
+                d
+                for d in pair_deltas
+                if d.from_camera == "cam_a" and d.to_camera == "cam_b"
+            )
+            self.assertEqual(ab.baseline_transitions, 2)
+            self.assertEqual(ab.candidate_transitions, 1)
+            self.assertEqual(ab.delta_transitions, -1)
+            self.assertAlmostEqual(ab.delta_avg_transit_seconds, 2.0, places=3)
+            self.assertAlmostEqual(ab.delta_avg_confidence, -0.25, places=3)
+
+            bc = next(
+                d
+                for d in pair_deltas
+                if d.from_camera == "cam_b" and d.to_camera == "cam_c"
+            )
+            self.assertEqual(bc.delta_transitions, -1)
+
+            # Legacy DB without correlation tables returns 0 / empty safely
+            legacy_dir = root / "legacy_run"
+            legacy_dir.mkdir()
+            legacy_db = legacy_dir / "intelligence.db"
+            with closing(sqlite3.connect(str(legacy_db))) as conn:
+                conn.execute(
+                    "CREATE TABLE tracks (track_id INTEGER, duration_seconds REAL, path_length_px REAL)"
+                )
+                conn.commit()
+            legacy_snap = load_run_snapshot(legacy_dir)
+            self.assertEqual(legacy_snap.cross_camera_transitions_count, 0)
+            self.assertEqual(legacy_snap.cross_camera_journeys_count, 0)
+            self.assertEqual(compute_pair_flow_deltas(legacy_dir, legacy_dir), [])
 
 
 if __name__ == "__main__":
