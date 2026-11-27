@@ -24,6 +24,10 @@ class RunSnapshot:
     mean_track_duration_seconds: float
     mean_path_length_px: float
     config_snapshot: dict[str, Any] = field(default_factory=dict)
+    cross_camera_transitions_count: int = 0
+    cross_camera_journeys_count: int = 0
+    mean_transit_seconds: float = 0.0
+    mean_transition_confidence: float = 0.0
 
     def __post_init__(self) -> None:
         if not self.run_id.strip():
@@ -36,6 +40,8 @@ class RunSnapshot:
             ("events_count", self.events_count),
             ("insights_count", self.insights_count),
             ("high_critical_insights_count", self.high_critical_insights_count),
+            ("cross_camera_transitions_count", self.cross_camera_transitions_count),
+            ("cross_camera_journeys_count", self.cross_camera_journeys_count),
         ):
             if val < 0:
                 raise ValueError(f"{name} must be >= 0, got {val}")
@@ -45,6 +51,10 @@ class RunSnapshot:
             raise ValueError("mean_track_duration_seconds must be >= 0.0")
         if self.mean_path_length_px < 0.0:
             raise ValueError("mean_path_length_px must be >= 0.0")
+        if self.mean_transit_seconds < 0.0:
+            raise ValueError("mean_transit_seconds must be >= 0.0")
+        if not (0.0 <= self.mean_transition_confidence <= 1.0):
+            raise ValueError("mean_transition_confidence must be in [0.0, 1.0]")
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -61,6 +71,10 @@ class RunSnapshot:
             "total_dwell_seconds": round(self.total_dwell_seconds, 4),
             "mean_track_duration_seconds": round(self.mean_track_duration_seconds, 4),
             "mean_path_length_px": round(self.mean_path_length_px, 2),
+            "cross_camera_transitions_count": self.cross_camera_transitions_count,
+            "cross_camera_journeys_count": self.cross_camera_journeys_count,
+            "mean_transit_seconds": round(self.mean_transit_seconds, 4),
+            "mean_transition_confidence": round(self.mean_transition_confidence, 4),
             "config_snapshot": dict(self.config_snapshot),
         }
 
