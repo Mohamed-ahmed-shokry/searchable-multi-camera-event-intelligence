@@ -283,3 +283,66 @@ class MultiCameraCorrelationReport:
                 window.to_dict() for window in self.co_activity_windows
             ],
         }
+
+
+@dataclass(frozen=True)
+class TopologyValidationIssue:
+    """Single structural or database cross-check finding for a CameraTopology."""
+
+    severity: str
+    code: str
+    message: str
+    camera_id: str | None = None
+    zone_id: str | None = None
+
+    def __post_init__(self) -> None:
+        if self.severity not in {"error", "warning"}:
+            raise ValueError(
+                f"severity must be 'error' or 'warning', got {self.severity!r}"
+            )
+        if not self.code.strip():
+            raise ValueError("code must be non-empty")
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "severity": self.severity,
+            "code": self.code,
+            "message": self.message,
+            "camera_id": self.camera_id,
+            "zone_id": self.zone_id,
+        }
+
+
+@dataclass(frozen=True)
+class TopologyValidationReport:
+    """Outcome of validating a CameraTopology structurally and against intelligence.db."""
+
+    topology_name: str
+    db_path: str | None
+    db_cameras: tuple[str, ...]
+    db_zones_by_camera: dict[str, tuple[str, ...]]
+    valid: bool
+    issues: tuple[TopologyValidationIssue, ...] = ()
+
+    @property
+    def error_count(self) -> int:
+        return sum(1 for item in self.issues if item.severity == "error")
+
+    @property
+    def warning_count(self) -> int:
+        return sum(1 for item in self.issues if item.severity == "warning")
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "topology_name": self.topology_name,
+            "db_path": self.db_path,
+            "db_cameras": list(self.db_cameras),
+            "db_zones_by_camera": {
+                cam: list(zones)
+                for cam, zones in sorted(self.db_zones_by_camera.items())
+            },
+            "valid": self.valid,
+            "error_count": self.error_count,
+            "warning_count": self.warning_count,
+            "issues": [item.to_dict() for item in self.issues],
+        }
