@@ -17,14 +17,17 @@ from event_intelligence.insights import generate_intelligence_report_markdown
 from event_intelligence.multicam.__main__ import main as multicam_main
 from event_intelligence.multicam.engine import (
     analyze_multi_camera_correlation,
+    apply_calibrated_offsets,
     build_cross_camera_journeys,
     compute_co_activity_windows,
     correlate_cross_camera_transitions,
+    estimate_camera_clock_offsets,
     extract_track_endpoints,
     infer_default_topology,
     load_camera_topology,
     save_camera_topology,
     summarize_camera_pair_flows,
+    validate_camera_topology,
 )
 from event_intelligence.multicam.report import (
     generate_correlation_markdown,
@@ -996,6 +999,230 @@ class TestJourneyDossierAndBundles(unittest.TestCase):
             self.assertIn("### Correlated Transitions", md)
             self.assertIn("### Stitched Multi-Hop Journeys", md)
             self.assertIn("lobby -> corridor -> exit_hall", md)
+
+
+class TestTopologyValidationAndClockCalibration(unittest.TestCase):
+    """Tests for Phase 11n topology validation and automated clock-skew calibration."""
+
+    def test_validate_camera_topology_structural_and_db_checks(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            db_path = _build_multicam_db(Path(tmp) / "intelligence.db")
+
+            # Clean valid topology against DB
+            valid_topo = CameraTopology(
+                name="valid_site",
+                camera_time_offsets={"lobby": 0.0, "corridor": 0.5},
+                transitions=(
+                    CameraTransitionRule(
+                        from_camera="lobby",
+                        to_camera="corridor",
+                        min_transit_seconds=0.0,
+                        max_transit_seconds=10.0,
+                        expected_transit_seconds=2.0,
+                        from_zone="lobby_exit",
+                        to_zone="corridor_entry",
+                    ),
+                ),
+            )
+            ok_report = validate_camera_topology(valid_topo, db_path)
+            self.assertTrue(ok_report.valid)
+            self.assertEqual(ok_report.error_count, 0)
+            self.assertEqual(ok_report.warning_count, 0)
+            self.assertEqual(ok_report.db_cameras, ("corridor", "exit_hall", "lobby"))
+            self.assertIn("lobby_exit", ok_report.db_zones_by_camera["lobby"])
+
+            # Broken topology exercising all structural + DB error/warning codes
+            broken_topo = CameraTopology(
+                name="broken_site",
+                camera_time_offsets={"ghost_cam": 1.0},
+                max_matches_per_track=0,
+                transitions=(
+                    CameraTransitionRule(
+                        from_camera="lobby",
+                        to_camera="lobby",
+                        min_transit_seconds=5.0,
+                        max_transit_seconds=2.0,
+                        expected_transit_seconds=10.0,
+                        from_zone="nonexistent_zone",
+                    ),
+                    CameraTransitionRule(
+                        from_camera="lobby",
+                        to_camera="missing_cam",
+                        min_transit_seconds=0.0,
+                        max_transit_seconds=10.0,
+                    ),
+                    CameraTransitionRule(
+                        from_camera="lobby",
+                        to_camera="missing_cam",
+                        min_transit_seconds=0.0,
+                        max_transit_seconds=10.0,
+                    ),
+                ),
+            )
+            bad_report = validate_camera_topology(broken_topo, db_path)
+            self.assertFalse(bad_report.valid)
+            codes = {item.code for item in bad_report.issues}
+            self.assertIn("invalid_max_matches", codes)
+            self.assertIn("self_loop_transition", codes)
+            self.assertIn("invalid_transit_window", codes)
+            self.assertIn("expected_transit_out_of_bounds", codes)
+            self.assertIn("duplicate_transition_rule", codes)
+            self.assertIn("unknown_camera", codes)
+            self.assertIn("unknown_zone", codes)
+            self.assertIn("orphan_camera_offset", codes)
+            payload = bad_report.to_dict()
+            self.assertFalse(payload["valid"])
+            self.assertGreaterEqual(payload["error_count"], 4)
+
+    def test_estimate_camera_clock_offsets_and_apply_calibrated_offsets(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            db_path = root / "skewed.db"
+            with closing(sqlite3.connect(str(db_path))) as conn:
+                conn.executescript(SCHEMA_DDL)
+                conn.executemany(
+                    "INSERT INTO cameras VALUES (?, ?, ?, ?, ?, ?, ?)",
+                    [
+                        ("cam_ref", "ref.mp4", 10.0, 640, 480, 300, ""),
+                        ("cam_behind", "b.mp4", 10.0, 640, 480, 300, ""),
+                        ("cam_ahead", "a.mp4", 10.0, 640, 480, 300, ""),
+                    ],
+                )
+                # Two distinct activity bursts on cam_ref: [5.0..7.0s] and [14.0..16.0s]
+                ref_times = [5.0, 5.5, 6.0, 6.5, 7.0, 14.0, 14.5, 15.0, 15.5, 16.0]
+                rows = []
+                for idx, t in enumerate(ref_times):
+                    trk = 1 if t < 10.0 else 2
+                    rows.append((trk, "cam_ref", idx, t, 100.0, 100.0))
+                    # cam_behind clock is 4.0s behind -> needs +4.0s offset
+                    rows.append((trk, "cam_behind", idx, t - 4.0, 100.0, 100.0))
+                    # cam_ahead clock is 3.0s ahead -> needs -3.0s offset
+                    rows.append((trk, "cam_ahead", idx, t + 3.0, 100.0, 100.0))
+                conn.executemany(
+                    "INSERT INTO trajectories VALUES (?, ?, ?, ?, ?, ?)", rows
+                )
+                conn.commit()
+
+            cal = estimate_camera_clock_offsets(
+                db_path,
+                reference_camera="cam_ref",
+                max_lag_seconds=10.0,
+                step_seconds=0.5,
+                bin_seconds=0.5,
+            )
+            self.assertEqual(cal.reference_camera, "cam_ref")
+            self.assertAlmostEqual(cal.recommended_offsets["cam_ref"], 0.0, places=3)
+            self.assertAlmostEqual(cal.recommended_offsets["cam_behind"], 4.0, places=3)
+            self.assertAlmostEqual(cal.recommended_offsets["cam_ahead"], -3.0, places=3)
+            by_cam = {est.camera_id: est for est in cal.estimates}
+            self.assertAlmostEqual(
+                by_cam["cam_behind"].correlation_score, 1.0, places=3
+            )
+            self.assertAlmostEqual(by_cam["cam_ahead"].correlation_score, 1.0, places=3)
+
+            base_topo = infer_default_topology(["cam_ref", "cam_behind", "cam_ahead"])
+            updated = apply_calibrated_offsets(base_topo, cal)
+            saved_path = save_camera_topology(updated, root / "calibrated.yaml")
+            reloaded = load_camera_topology(saved_path)
+            self.assertAlmostEqual(
+                reloaded.camera_time_offsets["cam_behind"], 4.0, places=3
+            )
+            self.assertAlmostEqual(
+                reloaded.camera_time_offsets["cam_ahead"], -3.0, places=3
+            )
+
+    def test_cli_validate_topology_and_calibrate_clocks(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            db_path = _build_multicam_db(root / "intelligence.db")
+
+            good_topo_path = save_camera_topology(
+                CameraTopology(
+                    name="good_cli_topo",
+                    transitions=(
+                        CameraTransitionRule(
+                            from_camera="lobby",
+                            to_camera="corridor",
+                            min_transit_seconds=0.0,
+                            max_transit_seconds=10.0,
+                        ),
+                    ),
+                ),
+                root / "good.yaml",
+            )
+            bad_topo_path = save_camera_topology(
+                CameraTopology(
+                    name="bad_cli_topo",
+                    transitions=(
+                        CameraTransitionRule(
+                            from_camera="lobby",
+                            to_camera="unknown_cam",
+                            min_transit_seconds=0.0,
+                            max_transit_seconds=10.0,
+                        ),
+                    ),
+                ),
+                root / "bad.yaml",
+            )
+
+            buf_ok = io.StringIO()
+            with redirect_stdout(buf_ok):
+                rc_ok = multicam_main(
+                    [
+                        "--db",
+                        str(db_path),
+                        "--topology",
+                        str(good_topo_path),
+                        "--validate-topology",
+                        "--json",
+                    ]
+                )
+            self.assertEqual(rc_ok, 0)
+            ok_data = json.loads(buf_ok.getvalue())
+            self.assertTrue(ok_data["valid"])
+
+            buf_bad = io.StringIO()
+            with redirect_stdout(buf_bad):
+                rc_bad = multicam_main(
+                    [
+                        "--db",
+                        str(db_path),
+                        "--topology",
+                        str(bad_topo_path),
+                        "--validate-topology",
+                    ]
+                )
+            self.assertEqual(rc_bad, 2)
+            self.assertIn("INVALID", buf_bad.getvalue())
+            self.assertIn("unknown_camera", buf_bad.getvalue())
+
+            out_cal_yaml = root / "calibrated_out.yaml"
+            buf_cal = io.StringIO()
+            with redirect_stdout(buf_cal):
+                rc_cal = multicam_main(
+                    [
+                        "--db",
+                        str(db_path),
+                        "--topology",
+                        str(good_topo_path),
+                        "--calibrate-clocks",
+                        "--reference-camera",
+                        "lobby",
+                        "--max-lag",
+                        "12.0",
+                        "--write-topology",
+                        str(out_cal_yaml),
+                        "--json",
+                    ]
+                )
+            self.assertEqual(rc_cal, 0)
+            cal_data = json.loads(buf_cal.getvalue())
+            self.assertEqual(cal_data["reference_camera"], "lobby")
+            self.assertEqual(cal_data["written_topology_path"], str(out_cal_yaml))
+            self.assertTrue(out_cal_yaml.is_file())
+            reloaded = load_camera_topology(out_cal_yaml)
+            self.assertIn("lobby", reloaded.camera_time_offsets)
+            self.assertIn("corridor", reloaded.camera_time_offsets)
 
 
 if __name__ == "__main__":

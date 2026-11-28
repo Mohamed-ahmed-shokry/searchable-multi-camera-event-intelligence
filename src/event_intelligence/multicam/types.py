@@ -283,3 +283,113 @@ class MultiCameraCorrelationReport:
                 window.to_dict() for window in self.co_activity_windows
             ],
         }
+
+
+@dataclass(frozen=True)
+class TopologyValidationIssue:
+    """Single structural or database cross-check finding for a CameraTopology."""
+
+    severity: str
+    code: str
+    message: str
+    camera_id: str | None = None
+    zone_id: str | None = None
+
+    def __post_init__(self) -> None:
+        if self.severity not in {"error", "warning"}:
+            raise ValueError(
+                f"severity must be 'error' or 'warning', got {self.severity!r}"
+            )
+        if not self.code.strip():
+            raise ValueError("code must be non-empty")
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "severity": self.severity,
+            "code": self.code,
+            "message": self.message,
+            "camera_id": self.camera_id,
+            "zone_id": self.zone_id,
+        }
+
+
+@dataclass(frozen=True)
+class TopologyValidationReport:
+    """Outcome of validating a CameraTopology structurally and against intelligence.db."""
+
+    topology_name: str
+    db_path: str | None
+    db_cameras: tuple[str, ...]
+    db_zones_by_camera: dict[str, tuple[str, ...]]
+    valid: bool
+    issues: tuple[TopologyValidationIssue, ...] = ()
+
+    @property
+    def error_count(self) -> int:
+        return sum(1 for item in self.issues if item.severity == "error")
+
+    @property
+    def warning_count(self) -> int:
+        return sum(1 for item in self.issues if item.severity == "warning")
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "topology_name": self.topology_name,
+            "db_path": self.db_path,
+            "db_cameras": list(self.db_cameras),
+            "db_zones_by_camera": {
+                cam: list(zones)
+                for cam, zones in sorted(self.db_zones_by_camera.items())
+            },
+            "valid": self.valid,
+            "error_count": self.error_count,
+            "warning_count": self.warning_count,
+            "issues": [item.to_dict() for item in self.issues],
+        }
+
+
+@dataclass(frozen=True)
+class CameraClockOffsetEstimate:
+    """Estimated clock-skew offset aligning a camera with a reference camera."""
+
+    camera_id: str
+    reference_camera: str
+    estimated_offset_seconds: float
+    correlation_score: float
+    matched_pairs_count: int
+    sample_lags_evaluated: int
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "camera_id": self.camera_id,
+            "reference_camera": self.reference_camera,
+            "estimated_offset_seconds": round(self.estimated_offset_seconds, 4),
+            "correlation_score": round(self.correlation_score, 4),
+            "matched_pairs_count": self.matched_pairs_count,
+            "sample_lags_evaluated": self.sample_lags_evaluated,
+        }
+
+
+@dataclass(frozen=True)
+class ClockCalibrationReport:
+    """Result of automated inter-camera clock-skew estimation across intelligence.db."""
+
+    db_path: str
+    reference_camera: str
+    max_lag_seconds: float
+    step_seconds: float
+    estimates: tuple[CameraClockOffsetEstimate, ...] = ()
+    recommended_offsets: dict[str, float] = field(default_factory=dict)
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "db_path": self.db_path,
+            "reference_camera": self.reference_camera,
+            "max_lag_seconds": round(self.max_lag_seconds, 4),
+            "step_seconds": round(self.step_seconds, 4),
+            "recommended_offsets": {
+                cam: round(val, 4)
+                for cam, val in sorted(self.recommended_offsets.items())
+            },
+            "estimates": [est.to_dict() for est in self.estimates],
+        }
