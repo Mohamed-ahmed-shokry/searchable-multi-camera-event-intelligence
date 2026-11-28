@@ -12,9 +12,11 @@ from pathlib import Path
 import yaml
 
 from event_intelligence.multicam.types import (
+    CameraClockOffsetEstimate,
     CameraPairFlow,
     CameraTopology,
     CameraTransitionRule,
+    ClockCalibrationReport,
     CoActivityWindow,
     CrossCameraJourney,
     CrossCameraTransition,
@@ -792,6 +794,172 @@ def validate_camera_topology(
         db_zones_by_camera=db_zones,
         valid=is_valid,
         issues=tuple(issues),
+    )
+
+
+def estimate_camera_clock_offsets(
+    db_path: Path | str,
+    *,
+    reference_camera: str | None = None,
+    max_lag_seconds: float = 15.0,
+    step_seconds: float = 0.5,
+    bin_seconds: float = 0.5,
+) -> ClockCalibrationReport:
+    """Estimate inter-camera clock-skew offsets via normalized temporal cross-correlation."""
+    resolved = Path(db_path)
+    if not resolved.exists():
+        raise FileNotFoundError(f"SQLite intelligence DB not found: {resolved}")
+    if max_lag_seconds < 0.0:
+        raise ValueError(f"max_lag_seconds must be >= 0.0, got {max_lag_seconds}")
+    if step_seconds <= 0.0:
+        raise ValueError(f"step_seconds must be > 0.0, got {step_seconds}")
+    if bin_seconds <= 0.0:
+        raise ValueError(f"bin_seconds must be > 0.0, got {bin_seconds}")
+
+    cameras = _discover_db_cameras(resolved)
+    if not cameras:
+        raise ValueError(f"No cameras discovered in {resolved}")
+
+    ref_cam = reference_camera.strip() if reference_camera else cameras[0]
+    if ref_cam not in cameras:
+        raise ValueError(
+            f"reference_camera {ref_cam!r} not found in DB cameras {list(cameras)}"
+        )
+
+    # Build sparse per-camera activity histograms (unique active tracks per time bin)
+    bins_by_cam: dict[str, dict[int, set[int]]] = defaultdict(lambda: defaultdict(set))
+    with closing(sqlite3.connect(str(resolved))) as conn:
+        conn.row_factory = sqlite3.Row
+        try:
+            for row in conn.execute(
+                "SELECT camera_id, track_id, timestamp FROM trajectories"
+            ):
+                cam_id = str(row["camera_id"])
+                b_idx = math.floor(float(row["timestamp"]) / bin_seconds)
+                bins_by_cam[cam_id][b_idx].add(int(row["track_id"]))
+        except sqlite3.OperationalError:
+            pass
+
+        # Fallback to events if a camera has no trajectory points
+        try:
+            for row in conn.execute(
+                "SELECT camera_id, track_id, start_time FROM events"
+            ):
+                cam_id = str(row["camera_id"])
+                if cam_id not in bins_by_cam:
+                    b_idx = math.floor(float(row["start_time"]) / bin_seconds)
+                    bins_by_cam[cam_id][b_idx].add(int(row["track_id"]))
+        except sqlite3.OperationalError:
+            pass
+
+    counts_by_cam: dict[str, dict[int, float]] = {
+        cam: {b_idx: float(len(trks)) for b_idx, trks in bmap.items()}
+        for cam, bmap in bins_by_cam.items()
+    }
+    endpoints = extract_track_endpoints(resolved)
+    eps_by_cam: dict[str, list[TrackEndpoint]] = defaultdict(list)
+    for ep in endpoints:
+        eps_by_cam[ep.camera_id].append(ep)
+
+    ref_counts = counts_by_cam.get(ref_cam, {})
+    ref_norm = math.sqrt(sum(v * v for v in ref_counts.values()))
+    ref_eps = eps_by_cam.get(ref_cam, [])
+
+    num_steps = round(max_lag_seconds / step_seconds)
+    candidate_lags = [
+        round(k * step_seconds, 6) for k in range(-num_steps, num_steps + 1)
+    ]
+
+    estimates: list[CameraClockOffsetEstimate] = []
+    recommended: dict[str, float] = {ref_cam: 0.0}
+
+    for cam in cameras:
+        if cam == ref_cam:
+            continue
+        cam_counts = counts_by_cam.get(cam, {})
+        cam_norm = math.sqrt(sum(v * v for v in cam_counts.values()))
+        cam_eps = eps_by_cam.get(cam, [])
+
+        best_offset = 0.0
+        best_score = -1.0
+        best_pairs = 0
+
+        for lag in candidate_lags:
+            shift_bins = round(lag / bin_seconds)
+            if ref_norm > 0.0 and cam_norm > 0.0:
+                dot = sum(
+                    ref_counts.get(b_idx + shift_bins, 0.0) * cnt
+                    for b_idx, cnt in cam_counts.items()
+                )
+                score = dot / (ref_norm * cam_norm)
+            else:
+                score = 0.0
+
+            pairs = 0
+            for cep in cam_eps:
+                adj_start = cep.start_time + lag
+                adj_end = cep.end_time + lag
+                if any(
+                    adj_end >= (rep.start_time - 2.0)
+                    and adj_start <= (rep.end_time + 2.0)
+                    for rep in ref_eps
+                ):
+                    pairs += 1
+
+            is_better = score > best_score + 1e-9 or (
+                abs(score - best_score) <= 1e-9
+                and (
+                    pairs > best_pairs
+                    or (pairs == best_pairs and abs(lag) < abs(best_offset))
+                )
+            )
+            if is_better:
+                best_offset = lag
+                best_score = score
+                best_pairs = pairs
+
+        best_score = max(best_score, 0.0)
+        # Normalize -0.0 to 0.0
+        if abs(best_offset) < 1e-9:
+            best_offset = 0.0
+
+        recommended[cam] = round(best_offset, 4)
+        estimates.append(
+            CameraClockOffsetEstimate(
+                camera_id=cam,
+                reference_camera=ref_cam,
+                estimated_offset_seconds=round(best_offset, 4),
+                correlation_score=round(min(1.0, max(0.0, best_score)), 4),
+                matched_pairs_count=best_pairs,
+                sample_lags_evaluated=len(candidate_lags),
+            )
+        )
+
+    return ClockCalibrationReport(
+        db_path=str(resolved),
+        reference_camera=ref_cam,
+        max_lag_seconds=max_lag_seconds,
+        step_seconds=step_seconds,
+        estimates=tuple(estimates),
+        recommended_offsets=recommended,
+    )
+
+
+def apply_calibrated_offsets(
+    topology: CameraTopology,
+    calibration: ClockCalibrationReport,
+) -> CameraTopology:
+    """Return a new CameraTopology with camera_time_offsets updated from calibration."""
+    merged_offsets = dict(topology.camera_time_offsets)
+    merged_offsets.update(calibration.recommended_offsets)
+    return CameraTopology(
+        name=topology.name,
+        description=topology.description,
+        camera_time_offsets=merged_offsets,
+        transitions=topology.transitions,
+        default_min_transit_seconds=topology.default_min_transit_seconds,
+        default_max_transit_seconds=topology.default_max_transit_seconds,
+        max_matches_per_track=topology.max_matches_per_track,
     )
 
 
