@@ -346,3 +346,50 @@ class TopologyValidationReport:
             "warning_count": self.warning_count,
             "issues": [item.to_dict() for item in self.issues],
         }
+
+
+@dataclass(frozen=True)
+class CameraClockOffsetEstimate:
+    """Estimated clock-skew offset aligning a camera with a reference camera."""
+
+    camera_id: str
+    reference_camera: str
+    estimated_offset_seconds: float
+    correlation_score: float
+    matched_pairs_count: int
+    sample_lags_evaluated: int
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "camera_id": self.camera_id,
+            "reference_camera": self.reference_camera,
+            "estimated_offset_seconds": round(self.estimated_offset_seconds, 4),
+            "correlation_score": round(self.correlation_score, 4),
+            "matched_pairs_count": self.matched_pairs_count,
+            "sample_lags_evaluated": self.sample_lags_evaluated,
+        }
+
+
+@dataclass(frozen=True)
+class ClockCalibrationReport:
+    """Result of automated inter-camera clock-skew estimation across intelligence.db."""
+
+    db_path: str
+    reference_camera: str
+    max_lag_seconds: float
+    step_seconds: float
+    estimates: tuple[CameraClockOffsetEstimate, ...] = ()
+    recommended_offsets: dict[str, float] = field(default_factory=dict)
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "db_path": self.db_path,
+            "reference_camera": self.reference_camera,
+            "max_lag_seconds": round(self.max_lag_seconds, 4),
+            "step_seconds": round(self.step_seconds, 4),
+            "recommended_offsets": {
+                cam: round(val, 4)
+                for cam, val in sorted(self.recommended_offsets.items())
+            },
+            "estimates": [est.to_dict() for est in self.estimates],
+        }
