@@ -9,7 +9,12 @@ from pathlib import Path
 
 from event_intelligence.multicam.engine import (
     analyze_multi_camera_correlation,
+    apply_calibrated_offsets,
+    estimate_camera_clock_offsets,
+    infer_default_topology,
     load_camera_topology,
+    save_camera_topology,
+    validate_camera_topology,
 )
 from event_intelligence.multicam.report import (
     generate_correlation_markdown,
@@ -139,6 +144,57 @@ def main(argv: Sequence[str] | None = None) -> int:
         parser.error(f"SQLite database not found: {db_path}")
 
     topology = load_camera_topology(args.topology) if args.topology else None
+
+    if args.validate_topology:
+        if topology is None:
+            parser.error("--validate-topology requires --topology <yaml>")
+        val_report = validate_camera_topology(topology, db_path)
+        if args.as_json:
+            print(json.dumps(val_report.to_dict(), indent=2))
+        else:
+            status = "VALID" if val_report.valid else "INVALID"
+            print(
+                f"Topology Validation [{val_report.topology_name}]: {status} "
+                f"({val_report.error_count} error(s), {val_report.warning_count} warning(s))"
+            )
+            for issue in val_report.issues:
+                print(f"  - [{issue.severity.upper()}] {issue.code}: {issue.message}")
+        return 0 if val_report.valid else 2
+
+    if args.calibrate_clocks:
+        cal_report = estimate_camera_clock_offsets(
+            db_path,
+            reference_camera=args.reference_camera,
+            max_lag_seconds=args.max_lag,
+        )
+        written_topo_path: str | None = None
+        if args.write_topology is not None:
+            base_topo = topology or infer_default_topology(
+                list(cal_report.recommended_offsets.keys())
+            )
+            calibrated_topo = apply_calibrated_offsets(base_topo, cal_report)
+            written_topo_path = str(
+                save_camera_topology(calibrated_topo, args.write_topology)
+            )
+        if args.as_json:
+            payload = cal_report.to_dict()
+            if written_topo_path is not None:
+                payload["written_topology_path"] = written_topo_path
+            print(json.dumps(payload, indent=2))
+        else:
+            print(
+                f"Clock Calibration (reference={cal_report.reference_camera}, "
+                f"max_lag=±{cal_report.max_lag_seconds:.1f}s):"
+            )
+            for est in cal_report.estimates:
+                print(
+                    f"  - {est.camera_id}: offset={est.estimated_offset_seconds:+.2f}s "
+                    f"(corr={est.correlation_score:.3f}, pairs={est.matched_pairs_count})"
+                )
+            if written_topo_path is not None:
+                print(f"Calibrated topology written to: {written_topo_path}")
+        return 0
+
     report = analyze_multi_camera_correlation(
         db_path,
         topology=topology,
