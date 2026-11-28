@@ -25,6 +25,7 @@ from event_intelligence.multicam.engine import (
     load_camera_topology,
     save_camera_topology,
     summarize_camera_pair_flows,
+    validate_camera_topology,
 )
 from event_intelligence.multicam.report import (
     generate_correlation_markdown,
@@ -996,6 +997,80 @@ class TestJourneyDossierAndBundles(unittest.TestCase):
             self.assertIn("### Correlated Transitions", md)
             self.assertIn("### Stitched Multi-Hop Journeys", md)
             self.assertIn("lobby -> corridor -> exit_hall", md)
+
+
+class TestTopologyValidationAndClockCalibration(unittest.TestCase):
+    """Tests for Phase 11n topology validation and automated clock-skew calibration."""
+
+    def test_validate_camera_topology_structural_and_db_checks(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            db_path = _build_multicam_db(Path(tmp) / "intelligence.db")
+
+            # Clean valid topology against DB
+            valid_topo = CameraTopology(
+                name="valid_site",
+                camera_time_offsets={"lobby": 0.0, "corridor": 0.5},
+                transitions=(
+                    CameraTransitionRule(
+                        from_camera="lobby",
+                        to_camera="corridor",
+                        min_transit_seconds=0.0,
+                        max_transit_seconds=10.0,
+                        expected_transit_seconds=2.0,
+                        from_zone="lobby_exit",
+                        to_zone="corridor_entry",
+                    ),
+                ),
+            )
+            ok_report = validate_camera_topology(valid_topo, db_path)
+            self.assertTrue(ok_report.valid)
+            self.assertEqual(ok_report.error_count, 0)
+            self.assertEqual(ok_report.warning_count, 0)
+            self.assertEqual(ok_report.db_cameras, ("corridor", "exit_hall", "lobby"))
+            self.assertIn("lobby_exit", ok_report.db_zones_by_camera["lobby"])
+
+            # Broken topology exercising all structural + DB error/warning codes
+            broken_topo = CameraTopology(
+                name="broken_site",
+                camera_time_offsets={"ghost_cam": 1.0},
+                max_matches_per_track=0,
+                transitions=(
+                    CameraTransitionRule(
+                        from_camera="lobby",
+                        to_camera="lobby",
+                        min_transit_seconds=5.0,
+                        max_transit_seconds=2.0,
+                        expected_transit_seconds=10.0,
+                        from_zone="nonexistent_zone",
+                    ),
+                    CameraTransitionRule(
+                        from_camera="lobby",
+                        to_camera="missing_cam",
+                        min_transit_seconds=0.0,
+                        max_transit_seconds=10.0,
+                    ),
+                    CameraTransitionRule(
+                        from_camera="lobby",
+                        to_camera="missing_cam",
+                        min_transit_seconds=0.0,
+                        max_transit_seconds=10.0,
+                    ),
+                ),
+            )
+            bad_report = validate_camera_topology(broken_topo, db_path)
+            self.assertFalse(bad_report.valid)
+            codes = {item.code for item in bad_report.issues}
+            self.assertIn("invalid_max_matches", codes)
+            self.assertIn("self_loop_transition", codes)
+            self.assertIn("invalid_transit_window", codes)
+            self.assertIn("expected_transit_out_of_bounds", codes)
+            self.assertIn("duplicate_transition_rule", codes)
+            self.assertIn("unknown_camera", codes)
+            self.assertIn("unknown_zone", codes)
+            self.assertIn("orphan_camera_offset", codes)
+            payload = bad_report.to_dict()
+            self.assertFalse(payload["valid"])
+            self.assertGreaterEqual(payload["error_count"], 4)
 
 
 if __name__ == "__main__":
