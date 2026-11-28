@@ -19,6 +19,8 @@ from event_intelligence.multicam.types import (
     CrossCameraJourney,
     CrossCameraTransition,
     MultiCameraCorrelationReport,
+    TopologyValidationIssue,
+    TopologyValidationReport,
     TrackEndpoint,
 )
 
@@ -611,6 +613,186 @@ def _discover_db_cameras(db_path: Path) -> tuple[str, ...]:
             except sqlite3.OperationalError:
                 continue
     return tuple(sorted(cams))
+
+
+def _discover_db_zones_by_camera(db_path: Path) -> dict[str, tuple[str, ...]]:
+    """Return sorted unique zone_ids per camera_id present in zone_counts and events."""
+    zones_map: dict[str, set[str]] = defaultdict(set)
+    with closing(sqlite3.connect(str(db_path))) as conn:
+        for table in ("zone_counts", "events"):
+            try:
+                for cam_id, zone_id in conn.execute(
+                    f"SELECT DISTINCT camera_id, zone_id FROM {table}"
+                ):
+                    if cam_id and zone_id:
+                        zones_map[str(cam_id)].add(str(zone_id))
+            except sqlite3.OperationalError:
+                continue
+    return {cam: tuple(sorted(zset)) for cam, zset in sorted(zones_map.items())}
+
+
+def validate_camera_topology(
+    topology: CameraTopology,
+    db_path: Path | str | None = None,
+) -> TopologyValidationReport:
+    """Validate a CameraTopology structurally and optionally cross-check against intelligence.db."""
+    issues: list[TopologyValidationIssue] = []
+
+    if topology.max_matches_per_track < 1:
+        issues.append(
+            TopologyValidationIssue(
+                severity="error",
+                code="invalid_max_matches",
+                message=(
+                    f"max_matches_per_track must be >= 1, got {topology.max_matches_per_track}"
+                ),
+            )
+        )
+
+    db_resolved: Path | None = None
+    db_cameras: tuple[str, ...] = ()
+    db_zones: dict[str, tuple[str, ...]] = {}
+    if db_path is not None:
+        db_resolved = Path(db_path)
+        if not db_resolved.exists():
+            raise FileNotFoundError(f"SQLite intelligence DB not found: {db_resolved}")
+        db_cameras = _discover_db_cameras(db_resolved)
+        db_zones = _discover_db_zones_by_camera(db_resolved)
+
+    cam_set = set(db_cameras)
+    seen_rules: set[tuple[str, str, str | None, str | None]] = set()
+
+    for idx, rule in enumerate(topology.transitions):
+        if rule.from_camera == rule.to_camera:
+            issues.append(
+                TopologyValidationIssue(
+                    severity="error",
+                    code="self_loop_transition",
+                    camera_id=rule.from_camera,
+                    message=(
+                        f"Transition rule #{idx} has identical from_camera and to_camera "
+                        f"({rule.from_camera!r})"
+                    ),
+                )
+            )
+        if (
+            rule.min_transit_seconds < 0.0
+            or rule.max_transit_seconds < rule.min_transit_seconds
+        ):
+            issues.append(
+                TopologyValidationIssue(
+                    severity="error",
+                    code="invalid_transit_window",
+                    camera_id=rule.from_camera,
+                    message=(
+                        f"Transition rule #{idx} ({rule.from_camera} -> {rule.to_camera}) "
+                        f"has invalid transit window [{rule.min_transit_seconds}, "
+                        f"{rule.max_transit_seconds}]"
+                    ),
+                )
+            )
+        if rule.expected_transit_seconds is not None and not (
+            rule.min_transit_seconds
+            <= rule.expected_transit_seconds
+            <= rule.max_transit_seconds
+        ):
+            issues.append(
+                TopologyValidationIssue(
+                    severity="warning",
+                    code="expected_transit_out_of_bounds",
+                    camera_id=rule.from_camera,
+                    message=(
+                        f"Transition rule #{idx} ({rule.from_camera} -> {rule.to_camera}) "
+                        f"expected_transit_seconds={rule.expected_transit_seconds} lies "
+                        f"outside [{rule.min_transit_seconds}, {rule.max_transit_seconds}]"
+                    ),
+                )
+            )
+
+        sig = (rule.from_camera, rule.to_camera, rule.from_zone, rule.to_zone)
+        if sig in seen_rules:
+            issues.append(
+                TopologyValidationIssue(
+                    severity="warning",
+                    code="duplicate_transition_rule",
+                    camera_id=rule.from_camera,
+                    message=(
+                        f"Duplicate transition rule for {rule.from_camera} -> "
+                        f"{rule.to_camera} (zones {rule.from_zone} -> {rule.to_zone})"
+                    ),
+                )
+            )
+        seen_rules.add(sig)
+
+        if db_resolved is not None:
+            for cam in (rule.from_camera, rule.to_camera):
+                if cam not in cam_set:
+                    issues.append(
+                        TopologyValidationIssue(
+                            severity="error",
+                            code="unknown_camera",
+                            camera_id=cam,
+                            message=(
+                                f"Transition rule #{idx} references camera {cam!r} "
+                                f"which is not present in {db_resolved.name}"
+                            ),
+                        )
+                    )
+            if rule.from_zone and rule.from_camera in cam_set:
+                known_zones = db_zones.get(rule.from_camera, ())
+                if rule.from_zone not in known_zones:
+                    issues.append(
+                        TopologyValidationIssue(
+                            severity="warning",
+                            code="unknown_zone",
+                            camera_id=rule.from_camera,
+                            zone_id=rule.from_zone,
+                            message=(
+                                f"Transition rule #{idx} references from_zone {rule.from_zone!r} "
+                                f"not observed for camera {rule.from_camera!r}"
+                            ),
+                        )
+                    )
+            if rule.to_zone and rule.to_camera in cam_set:
+                known_zones = db_zones.get(rule.to_camera, ())
+                if rule.to_zone not in known_zones:
+                    issues.append(
+                        TopologyValidationIssue(
+                            severity="warning",
+                            code="unknown_zone",
+                            camera_id=rule.to_camera,
+                            zone_id=rule.to_zone,
+                            message=(
+                                f"Transition rule #{idx} references to_zone {rule.to_zone!r} "
+                                f"not observed for camera {rule.to_camera!r}"
+                            ),
+                        )
+                    )
+
+    if db_resolved is not None:
+        for cam in sorted(topology.camera_time_offsets.keys()):
+            if cam not in cam_set:
+                issues.append(
+                    TopologyValidationIssue(
+                        severity="warning",
+                        code="orphan_camera_offset",
+                        camera_id=cam,
+                        message=(
+                            f"camera_time_offsets specifies camera {cam!r} which is not "
+                            f"present in {db_resolved.name}"
+                        ),
+                    )
+                )
+
+    is_valid = not any(item.severity == "error" for item in issues)
+    return TopologyValidationReport(
+        topology_name=topology.name,
+        db_path=str(db_resolved) if db_resolved is not None else None,
+        db_cameras=db_cameras,
+        db_zones_by_camera=db_zones,
+        valid=is_valid,
+        issues=tuple(issues),
+    )
 
 
 def analyze_multi_camera_correlation(
