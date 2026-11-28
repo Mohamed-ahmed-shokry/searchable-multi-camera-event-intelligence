@@ -1131,6 +1131,99 @@ class TestTopologyValidationAndClockCalibration(unittest.TestCase):
                 reloaded.camera_time_offsets["cam_ahead"], -3.0, places=3
             )
 
+    def test_cli_validate_topology_and_calibrate_clocks(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            db_path = _build_multicam_db(root / "intelligence.db")
+
+            good_topo_path = save_camera_topology(
+                CameraTopology(
+                    name="good_cli_topo",
+                    transitions=(
+                        CameraTransitionRule(
+                            from_camera="lobby",
+                            to_camera="corridor",
+                            min_transit_seconds=0.0,
+                            max_transit_seconds=10.0,
+                        ),
+                    ),
+                ),
+                root / "good.yaml",
+            )
+            bad_topo_path = save_camera_topology(
+                CameraTopology(
+                    name="bad_cli_topo",
+                    transitions=(
+                        CameraTransitionRule(
+                            from_camera="lobby",
+                            to_camera="unknown_cam",
+                            min_transit_seconds=0.0,
+                            max_transit_seconds=10.0,
+                        ),
+                    ),
+                ),
+                root / "bad.yaml",
+            )
+
+            buf_ok = io.StringIO()
+            with redirect_stdout(buf_ok):
+                rc_ok = multicam_main(
+                    [
+                        "--db",
+                        str(db_path),
+                        "--topology",
+                        str(good_topo_path),
+                        "--validate-topology",
+                        "--json",
+                    ]
+                )
+            self.assertEqual(rc_ok, 0)
+            ok_data = json.loads(buf_ok.getvalue())
+            self.assertTrue(ok_data["valid"])
+
+            buf_bad = io.StringIO()
+            with redirect_stdout(buf_bad):
+                rc_bad = multicam_main(
+                    [
+                        "--db",
+                        str(db_path),
+                        "--topology",
+                        str(bad_topo_path),
+                        "--validate-topology",
+                    ]
+                )
+            self.assertEqual(rc_bad, 2)
+            self.assertIn("INVALID", buf_bad.getvalue())
+            self.assertIn("unknown_camera", buf_bad.getvalue())
+
+            out_cal_yaml = root / "calibrated_out.yaml"
+            buf_cal = io.StringIO()
+            with redirect_stdout(buf_cal):
+                rc_cal = multicam_main(
+                    [
+                        "--db",
+                        str(db_path),
+                        "--topology",
+                        str(good_topo_path),
+                        "--calibrate-clocks",
+                        "--reference-camera",
+                        "lobby",
+                        "--max-lag",
+                        "12.0",
+                        "--write-topology",
+                        str(out_cal_yaml),
+                        "--json",
+                    ]
+                )
+            self.assertEqual(rc_cal, 0)
+            cal_data = json.loads(buf_cal.getvalue())
+            self.assertEqual(cal_data["reference_camera"], "lobby")
+            self.assertEqual(cal_data["written_topology_path"], str(out_cal_yaml))
+            self.assertTrue(out_cal_yaml.is_file())
+            reloaded = load_camera_topology(out_cal_yaml)
+            self.assertIn("lobby", reloaded.camera_time_offsets)
+            self.assertIn("corridor", reloaded.camera_time_offsets)
+
 
 if __name__ == "__main__":
     unittest.main()
