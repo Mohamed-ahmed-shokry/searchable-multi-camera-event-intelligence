@@ -17,9 +17,11 @@ from event_intelligence.insights import generate_intelligence_report_markdown
 from event_intelligence.multicam.__main__ import main as multicam_main
 from event_intelligence.multicam.engine import (
     analyze_multi_camera_correlation,
+    apply_calibrated_offsets,
     build_cross_camera_journeys,
     compute_co_activity_windows,
     correlate_cross_camera_transitions,
+    estimate_camera_clock_offsets,
     extract_track_endpoints,
     infer_default_topology,
     load_camera_topology,
@@ -1071,6 +1073,63 @@ class TestTopologyValidationAndClockCalibration(unittest.TestCase):
             payload = bad_report.to_dict()
             self.assertFalse(payload["valid"])
             self.assertGreaterEqual(payload["error_count"], 4)
+
+    def test_estimate_camera_clock_offsets_and_apply_calibrated_offsets(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            db_path = root / "skewed.db"
+            with closing(sqlite3.connect(str(db_path))) as conn:
+                conn.executescript(SCHEMA_DDL)
+                conn.executemany(
+                    "INSERT INTO cameras VALUES (?, ?, ?, ?, ?, ?, ?)",
+                    [
+                        ("cam_ref", "ref.mp4", 10.0, 640, 480, 300, ""),
+                        ("cam_behind", "b.mp4", 10.0, 640, 480, 300, ""),
+                        ("cam_ahead", "a.mp4", 10.0, 640, 480, 300, ""),
+                    ],
+                )
+                # Two distinct activity bursts on cam_ref: [5.0..7.0s] and [14.0..16.0s]
+                ref_times = [5.0, 5.5, 6.0, 6.5, 7.0, 14.0, 14.5, 15.0, 15.5, 16.0]
+                rows = []
+                for idx, t in enumerate(ref_times):
+                    trk = 1 if t < 10.0 else 2
+                    rows.append((trk, "cam_ref", idx, t, 100.0, 100.0))
+                    # cam_behind clock is 4.0s behind -> needs +4.0s offset
+                    rows.append((trk, "cam_behind", idx, t - 4.0, 100.0, 100.0))
+                    # cam_ahead clock is 3.0s ahead -> needs -3.0s offset
+                    rows.append((trk, "cam_ahead", idx, t + 3.0, 100.0, 100.0))
+                conn.executemany(
+                    "INSERT INTO trajectories VALUES (?, ?, ?, ?, ?, ?)", rows
+                )
+                conn.commit()
+
+            cal = estimate_camera_clock_offsets(
+                db_path,
+                reference_camera="cam_ref",
+                max_lag_seconds=10.0,
+                step_seconds=0.5,
+                bin_seconds=0.5,
+            )
+            self.assertEqual(cal.reference_camera, "cam_ref")
+            self.assertAlmostEqual(cal.recommended_offsets["cam_ref"], 0.0, places=3)
+            self.assertAlmostEqual(cal.recommended_offsets["cam_behind"], 4.0, places=3)
+            self.assertAlmostEqual(cal.recommended_offsets["cam_ahead"], -3.0, places=3)
+            by_cam = {est.camera_id: est for est in cal.estimates}
+            self.assertAlmostEqual(
+                by_cam["cam_behind"].correlation_score, 1.0, places=3
+            )
+            self.assertAlmostEqual(by_cam["cam_ahead"].correlation_score, 1.0, places=3)
+
+            base_topo = infer_default_topology(["cam_ref", "cam_behind", "cam_ahead"])
+            updated = apply_calibrated_offsets(base_topo, cal)
+            saved_path = save_camera_topology(updated, root / "calibrated.yaml")
+            reloaded = load_camera_topology(saved_path)
+            self.assertAlmostEqual(
+                reloaded.camera_time_offsets["cam_behind"], 4.0, places=3
+            )
+            self.assertAlmostEqual(
+                reloaded.camera_time_offsets["cam_ahead"], -3.0, places=3
+            )
 
 
 if __name__ == "__main__":
