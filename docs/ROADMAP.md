@@ -2779,6 +2779,75 @@ uv run --locked pytest -v
 | `uv run --locked python -m event_intelligence.compare --baseline outputs/runs/phase11l_verify --candidate outputs/runs/phase11l_verify --policy configs/regression_policy.yaml --fail-on-regression --no-heatmap-diff --output-dir outputs/comparisons/verify_11m_pass` | ✅ exit 0 (`PASS`) | 10 checks evaluated, 0 errors |
 | `uv run --locked python -m event_intelligence.compare --baseline outputs/runs/phase11l_verify --candidate outputs/runs/phase11m_degraded --policy configs/regression_policy.yaml --fail-on-regression --no-heatmap-diff --output-dir outputs/comparisons/verify_11m_fail` | ✅ exit 2 (`FAIL`) | caught `max_transitions_drop_pct` & `max_journeys_drop_pct`, exported `pair_flow_deltas.csv` and Markdown cross-camera diff |
 
+---
+
+## Active Phase: 11n — Multi-Camera Topology Validation & Automated Clock-Skew Calibration (2026-11-28)
+
+### Objective
+
+Multi-camera spatial-temporal correlation (`event_intelligence.multicam`) depends heavily on accurate `camera_topology.yaml` definitions (matching camera IDs, zone names, and valid transit windows) and synchronized inter-camera clock offsets (`camera_time_offsets`), yet the repository currently has **no automated topology validator** and **no clock-skew calibration tool** to estimate inter-camera time offsets from SQLite activity signals.
+
+Demonstrable end-to-end outcome:
+1. Running `python -m event_intelligence.multicam --db <intelligence.db> --topology <yaml> --validate-topology` validates structural topology rules and cross-checks camera IDs, zone IDs, and clock-offset keys against `intelligence.db`, returning exit `0` when valid or exit `2` on errors.
+2. Running `python -m event_intelligence.multicam --db <intelligence.db> --calibrate-clocks [--reference-camera <cam>] [--max-lag 15.0] [--write-topology <out.yaml>]` estimates per-camera clock offsets via normalized temporal cross-correlation and optionally writes a calibrated `camera_topology.yaml` ready for correlation runs.
+
+### Scope
+
+1. **Validation & calibration data models (`src/event_intelligence/multicam/types.py`):**
+   - `TopologyValidationIssue`, `TopologyValidationReport`, `CameraClockOffsetEstimate`, `ClockCalibrationReport`.
+2. **Topology validation engine (`src/event_intelligence/multicam/engine.py`):**
+   - `validate_camera_topology(topology, db_path=None)` performing structural checks (self-loops, invalid transit windows, out-of-bounds expected transit, duplicate rules, invalid `max_matches_per_track`) and SQLite DB cross-checks (unknown cameras, unknown zones, orphan camera offsets).
+3. **Automated clock-skew calibration (`src/event_intelligence/multicam/engine.py`):**
+   - `estimate_camera_clock_offsets(db_path, *, reference_camera=None, max_lag_seconds=15.0, step_seconds=0.5, bin_seconds=0.5)` using normalized temporal activity cross-correlation + endpoint alignment counts.
+   - `apply_calibrated_offsets(topology, calibration)` returning an updated `CameraTopology`.
+4. **CLI & public exports (`src/event_intelligence/multicam/__main__.py`, `__init__.py`):**
+   - Add `--validate-topology`, `--calibrate-clocks`, `--reference-camera`, `--max-lag`, and `--write-topology` flags (text and `--json`).
+5. **Comprehensive unit & CLI integration tests (`tests/test_multicam.py`)** + real E2E execution on `outputs/runs/phase11l_verify/intelligence.db`.
+6. **Documentation:** `README.md` and `docs/ROADMAP.md` updates.
+
+### Acceptance Criteria
+
+| # | Criterion | Status | Evidence |
+|---|-----------|--------|----------|
+| 1 | `validate_camera_topology()` detects structural errors/warnings and cross-checks camera IDs, zones, and offset keys against SQLite `intelligence.db` | ⬜ | — |
+| 2 | `estimate_camera_clock_offsets()` accurately recovers synthetic positive and negative inter-camera clock skews across multiple cameras | ⬜ | — |
+| 3 | `apply_calibrated_offsets()` produces a calibrated `CameraTopology` that round-trips cleanly through `save_camera_topology()` / `load_camera_topology()` | ⬜ | — |
+| 4 | `python -m event_intelligence.multicam --validate-topology` returns exit `0` on valid topologies and exit `2` on invalid topologies (text and `--json`) | ⬜ | — |
+| 5 | `python -m event_intelligence.multicam --calibrate-clocks --write-topology <yaml>` runs cleanly in text and `--json` modes and writes a valid topology YAML | ⬜ | — |
+| 6 | Real E2E execution on `outputs/runs/phase11l_verify/intelligence.db` verifies `--validate-topology` (pass & fail) and `--calibrate-clocks --write-topology` | ⬜ | — |
+| 7 | All local CI-parity checks (`uv sync --locked`, `ruff check .`, `ruff format --check .`, `pytest -v`) and remote GitHub Actions CI workflow runs pass 100% | ⬜ | — |
+
+### Validation & CI Plan
+
+```bash
+uv sync --locked
+uv run --locked ruff check .
+uv run --locked ruff format --check .
+uv run --locked pytest -v
+```
+
+### Exclusions (deferred)
+
+- **Appearance-based Re-ID neural embeddings (OSNet/CLIP):** Deferred per Phase 11j–11m.
+- **Phase 12 Productization (FastAPI, React dashboard, auth, RTSP, cloud):** Deferred per `AGENTS.md`.
+
+### Micro-Task Breakdown
+
+- [ ] 1. `docs(roadmap): define Phase 11n topology validation and clock calibration scope`
+- [ ] 2. `types(multicam): add TopologyValidationIssue and TopologyValidationReport dataclasses`
+- [ ] 3. `types(multicam): add CameraClockOffsetEstimate and ClockCalibrationReport dataclasses`
+- [ ] 4. `feat(multicam): implement validate_camera_topology with structural and SQLite DB cross-checks`
+- [ ] 5. `test(multicam): add unit tests for validate_camera_topology structural and DB checks`
+- [ ] 6. `feat(multicam): implement estimate_camera_clock_offsets and apply_calibrated_offsets`
+- [ ] 7. `test(multicam): add unit tests for clock-skew estimation and apply_calibrated_offsets`
+- [ ] 8. `feat(multicam): export validation and calibration symbols in multicam/__init__.py`
+- [ ] 9. `feat(multicam): register --validate-topology and --calibrate-clocks CLI flags in build_parser`
+- [ ] 10. `feat(multicam): handle --validate-topology and --calibrate-clocks modes in multicam CLI main`
+- [ ] 11. `test(multicam): add CLI integration tests for --validate-topology and --calibrate-clocks`
+- [ ] 12. `docs(readme): document --validate-topology and --calibrate-clocks CLI workflows`
+- [ ] 13. `docs(roadmap): complete Phase 11n criteria, decision log, and CI log`
+
+
 
 
 
