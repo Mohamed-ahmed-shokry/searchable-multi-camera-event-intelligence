@@ -2781,7 +2781,7 @@ uv run --locked pytest -v
 
 ---
 
-## Active Phase: 11n — Multi-Camera Topology Validation & Automated Clock-Skew Calibration (2026-11-28)
+## Completed Phase: 11n — Multi-Camera Topology Validation & Automated Clock-Skew Calibration (2026-11-28)
 
 ### Objective
 
@@ -2809,13 +2809,13 @@ Demonstrable end-to-end outcome:
 
 | # | Criterion | Status | Evidence |
 |---|-----------|--------|----------|
-| 1 | `validate_camera_topology()` detects structural errors/warnings and cross-checks camera IDs, zones, and offset keys against SQLite `intelligence.db` | ⬜ | — |
-| 2 | `estimate_camera_clock_offsets()` accurately recovers synthetic positive and negative inter-camera clock skews across multiple cameras | ⬜ | — |
-| 3 | `apply_calibrated_offsets()` produces a calibrated `CameraTopology` that round-trips cleanly through `save_camera_topology()` / `load_camera_topology()` | ⬜ | — |
-| 4 | `python -m event_intelligence.multicam --validate-topology` returns exit `0` on valid topologies and exit `2` on invalid topologies (text and `--json`) | ⬜ | — |
-| 5 | `python -m event_intelligence.multicam --calibrate-clocks --write-topology <yaml>` runs cleanly in text and `--json` modes and writes a valid topology YAML | ⬜ | — |
-| 6 | Real E2E execution on `outputs/runs/phase11l_verify/intelligence.db` verifies `--validate-topology` (pass & fail) and `--calibrate-clocks --write-topology` | ⬜ | — |
-| 7 | All local CI-parity checks (`uv sync --locked`, `ruff check .`, `ruff format --check .`, `pytest -v`) and remote GitHub Actions CI workflow runs pass 100% | ⬜ | — |
+| 1 | `validate_camera_topology()` detects structural errors/warnings and cross-checks camera IDs, zones, and offset keys against SQLite `intelligence.db` | ✅ | `3a66b89`, `d72bd68`, `9c05214` (`test_validate_camera_topology_structural_and_db_checks` passed) |
+| 2 | `estimate_camera_clock_offsets()` accurately recovers synthetic positive and negative inter-camera clock skews across multiple cameras | ✅ | `1f5c077`, `9b08be9`, `d1bf5b1` (`test_estimate_camera_clock_offsets_and_apply_calibrated_offsets` recovered `+4.0s` & `-3.0s`, `corr=1.0`) |
+| 3 | `apply_calibrated_offsets()` produces a calibrated `CameraTopology` that round-trips cleanly through `save_camera_topology()` / `load_camera_topology()` | ✅ | `9b08be9`, `d1bf5b1` |
+| 4 | `python -m event_intelligence.multicam --validate-topology` returns exit `0` on valid topologies and exit `2` on invalid topologies (text and `--json`) | ✅ | `0b47db6`, `7bfe0c2`, `8a88d3a` (`test_cli_validate_topology_and_calibrate_clocks` passed) |
+| 5 | `python -m event_intelligence.multicam --calibrate-clocks --write-topology <yaml>` runs cleanly in text and `--json` modes and writes a valid topology YAML | ✅ | `0b47db6`, `7bfe0c2`, `8a88d3a` |
+| 6 | Real E2E execution on `outputs/runs/phase11l_verify/intelligence.db` verifies `--validate-topology` (pass & fail) and `--calibrate-clocks --write-topology` | ✅ | `VAL_OK_EXIT=0`, `VAL_BAD_EXIT=2` (`unknown_camera`), `CAL_EXIT=0` (`corr=1.000`, wrote `phase11n_calibrated_topology.yaml`) |
+| 7 | All local CI-parity checks (`uv sync --locked`, `ruff check .`, `ruff format --check .`, `pytest -v`) and remote GitHub Actions CI workflow runs pass 100% | ✅ | `279 passed, 56 subtests passed`, `ruff check` & `format` clean, remote CI green on `HEAD` |
 
 ### Validation & CI Plan
 
@@ -2833,19 +2833,39 @@ uv run --locked pytest -v
 
 ### Micro-Task Breakdown
 
-- [ ] 1. `docs(roadmap): define Phase 11n topology validation and clock calibration scope`
-- [ ] 2. `types(multicam): add TopologyValidationIssue and TopologyValidationReport dataclasses`
-- [ ] 3. `types(multicam): add CameraClockOffsetEstimate and ClockCalibrationReport dataclasses`
-- [ ] 4. `feat(multicam): implement validate_camera_topology with structural and SQLite DB cross-checks`
-- [ ] 5. `test(multicam): add unit tests for validate_camera_topology structural and DB checks`
-- [ ] 6. `feat(multicam): implement estimate_camera_clock_offsets and apply_calibrated_offsets`
-- [ ] 7. `test(multicam): add unit tests for clock-skew estimation and apply_calibrated_offsets`
-- [ ] 8. `feat(multicam): export validation and calibration symbols in multicam/__init__.py`
-- [ ] 9. `feat(multicam): register --validate-topology and --calibrate-clocks CLI flags in build_parser`
-- [ ] 10. `feat(multicam): handle --validate-topology and --calibrate-clocks modes in multicam CLI main`
-- [ ] 11. `test(multicam): add CLI integration tests for --validate-topology and --calibrate-clocks`
-- [ ] 12. `docs(readme): document --validate-topology and --calibrate-clocks CLI workflows`
-- [ ] 13. `docs(roadmap): complete Phase 11n criteria, decision log, and CI log`
+- [x] 1. `docs(roadmap): define Phase 11n topology validation and clock calibration scope` (`1e9713a`)
+- [x] 2. `types(multicam): add TopologyValidationIssue and TopologyValidationReport dataclasses` (`3a66b89`)
+- [x] 3. `types(multicam): add CameraClockOffsetEstimate and ClockCalibrationReport dataclasses` (`1f5c077`)
+- [x] 4. `feat(multicam): implement validate_camera_topology with structural and SQLite DB cross-checks` (`d72bd68`)
+- [x] 5. `test(multicam): add unit tests for validate_camera_topology structural and DB checks` (`9c05214`)
+- [x] 6. `feat(multicam): implement estimate_camera_clock_offsets and apply_calibrated_offsets` (`9b08be9`)
+- [x] 7. `test(multicam): add unit tests for clock-skew estimation and apply_calibrated_offsets` (`d1bf5b1`)
+- [x] 8. `feat(multicam): export validation and calibration symbols in multicam/__init__.py` (`afa17f1`)
+- [x] 9. `feat(multicam): register --validate-topology and --calibrate-clocks CLI flags in build_parser` (`0b47db6`)
+- [x] 10. `feat(multicam): handle --validate-topology and --calibrate-clocks modes in multicam CLI main` (`7bfe0c2`)
+- [x] 11. `test(multicam): add CLI integration tests for --validate-topology and --calibrate-clocks` (`8a88d3a`)
+- [x] 12. `docs(readme): document --validate-topology and --calibrate-clocks CLI workflows` (`43efeed`)
+- [x] 13. `docs(roadmap): complete Phase 11n criteria, decision log, and CI log`
+
+### Decision Log (Phase 11n)
+
+| Decision | Options Considered | Chosen & Rationale |
+|----------|-------------------|--------------------|
+| Clock-skew estimation algorithm | (a) Dense FFT cross-correlation over full video arrays; (b) Sparse time-binned cosine cross-correlation with endpoint-overlap tie-breaking | **(b) Sparse cosine cross-correlation** — zero extra dependencies, memory-efficient on long recordings, and deterministic tie-breaking favoring smallest `|offset|`. |
+| Exit code for `--validate-topology` failure | (a) Exit `1` (same as CLI parse/IO errors); (b) Exit `2` on validation errors (matching `compare --fail-on-regression`) | **(b) Exit code `2`** — consistent with `event_intelligence.compare --fail-on-regression` so CI scripts distinguish policy/validation failures from runtime errors. |
+| Severity split for DB cross-checks | (a) Treat missing zones and orphan offsets as hard errors; (b) Missing cameras = `error`, missing zones / orphan offsets = `warning` | **(b) Cameras = `error`, zones/offsets = `warning`** — a zone may legitimately have zero events in a short clip, whereas a nonexistent camera guarantees zero matches. |
+
+### CI & Validation Log (Phase 11n)
+
+| Command | Result | Notes |
+|---------|--------|-------|
+| `uv sync --locked` | ✅ exit 0 | clean locked environment (`152 packages`) |
+| `uv run --locked ruff check .` | ✅ `All checks passed!` | repo-wide lint gate (`124` Python files clean) |
+| `uv run --locked ruff format --check .` | ✅ `124 files already formatted` | repo-wide format gate |
+| `uv run --locked pytest -q` | ✅ `279 passed, 56 subtests passed` | full test suite (`3` new test suites added in `tests/test_multicam.py`) |
+| `uv run --locked python -m event_intelligence.multicam --db outputs/runs/phase11l_verify/intelligence.db --topology configs/camera_topology.yaml --validate-topology` | ✅ exit 0 (`VALID`) | `0 error(s), 0 warning(s)` |
+| `uv run --locked python -m event_intelligence.multicam --db outputs/runs/phase11l_verify/intelligence.db --topology outputs/runs/phase11n_bad_topology.yaml --validate-topology` | ✅ exit 2 (`INVALID`) | caught `unknown_camera` (`cam_ghost`) |
+| `uv run --locked python -m event_intelligence.multicam --db outputs/runs/phase11l_verify/intelligence.db --topology configs/camera_topology.yaml --calibrate-clocks --reference-camera cam_entrance --write-topology outputs/runs/phase11n_calibrated_topology.yaml` | ✅ exit 0 | `cam_aisle: offset=+0.00s (corr=1.000, pairs=1)`, wrote valid calibrated YAML |
 
 
 
