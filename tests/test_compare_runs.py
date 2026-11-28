@@ -4,9 +4,10 @@ from __future__ import annotations
 
 import io
 import json
+import sqlite3
 import tempfile
 import unittest
-from contextlib import redirect_stdout
+from contextlib import closing, redirect_stdout
 from pathlib import Path
 from typing import Any
 
@@ -30,6 +31,7 @@ from event_intelligence.compare import (
     write_trends_artifacts,
 )
 from event_intelligence.compare.__main__ import main as compare_main
+from event_intelligence.compare.engine import compute_pair_flow_deltas
 from event_intelligence.compare.types import (
     ConfigDiffEntry,
     InsightTypeDelta,
@@ -995,6 +997,326 @@ class TestCompareEngine(unittest.TestCase):
                 )
             self.assertEqual(rc_fail, 2)
             self.assertIn("Regression Gate: FAIL", buf_fail.getvalue())
+
+
+def _seed_multicam_correlation(
+    run_dir: Path,
+    *,
+    transitions: list[tuple[str, str, int, str, int, float, float, float, float]],
+    journeys: list[tuple[str, int, list[str], float, float, float, float]],
+) -> None:
+    """Seed cross_camera_transitions and cross_camera_journeys rows into a run DB."""
+    db_path = run_dir / "intelligence.db"
+    with closing(sqlite3.connect(str(db_path))) as conn:
+        conn.executemany(
+            "INSERT INTO cross_camera_transitions ("
+            "transition_id, topology_name, from_camera, from_track_id, "
+            "to_camera, to_track_id, exit_time, entry_time, transit_seconds, "
+            "confidence, rule_label, from_zone, to_zone, evidence_reason"
+            ") VALUES (?, 'site_topo', ?, ?, ?, ?, ?, ?, ?, ?, 'rule', NULL, NULL, 'test')",
+            transitions,
+        )
+        conn.executemany(
+            "INSERT INTO cross_camera_journeys ("
+            "journey_id, topology_name, hop_count, cameras_visited_json, "
+            "start_time, end_time, total_span_seconds, avg_confidence, hops_json"
+            ") VALUES (?, 'site_topo', ?, ?, ?, ?, ?, ?, '[]')",
+            [
+                (jid, hops, json.dumps(cams), st, et, span, conf)
+                for jid, hops, cams, st, et, span, conf in journeys
+            ],
+        )
+        conn.commit()
+
+
+class TestMultiCameraComparisonAndGates(unittest.TestCase):
+    """Tests for Phase 11m multi-camera correlation comparison and regression gates."""
+
+    def test_snapshot_and_pair_flow_deltas_with_legacy_fallback(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            root = Path(tmpdir)
+            run_a = _create_synthetic_run(
+                root / "run_a",
+                trajectories_rows=[(1, 0, 0.0, 50.0, 50.0)],
+            )
+            run_b = _create_synthetic_run(
+                root / "run_b",
+                trajectories_rows=[(1, 0, 0.0, 50.0, 50.0)],
+            )
+            _seed_multicam_correlation(
+                run_a,
+                transitions=[
+                    ("tr_1", "cam_a", 1, "cam_b", 2, 1.0, 3.0, 2.0, 0.90),
+                    ("tr_2", "cam_a", 3, "cam_b", 4, 4.0, 8.0, 4.0, 0.80),
+                    ("tr_3", "cam_b", 2, "cam_c", 5, 5.0, 7.0, 2.0, 0.85),
+                ],
+                journeys=[
+                    ("jr_1", 2, ["cam_a", "cam_b", "cam_c"], 1.0, 7.0, 6.0, 0.875),
+                    ("jr_2", 1, ["cam_a", "cam_b"], 4.0, 8.0, 4.0, 0.80),
+                ],
+            )
+            _seed_multicam_correlation(
+                run_b,
+                transitions=[
+                    ("tr_1", "cam_a", 1, "cam_b", 2, 1.0, 6.0, 5.0, 0.60),
+                ],
+                journeys=[
+                    ("jr_1", 1, ["cam_a", "cam_b"], 1.0, 6.0, 5.0, 0.60),
+                ],
+            )
+
+            snap_a = load_run_snapshot(run_a)
+            self.assertEqual(snap_a.cross_camera_transitions_count, 3)
+            self.assertEqual(snap_a.cross_camera_journeys_count, 2)
+            self.assertAlmostEqual(snap_a.mean_transit_seconds, 8.0 / 3.0, places=3)
+            self.assertAlmostEqual(snap_a.mean_transition_confidence, 0.85, places=3)
+
+            snap_a_cam_c = load_run_snapshot(run_a, camera_id="cam_c")
+            self.assertEqual(snap_a_cam_c.cross_camera_transitions_count, 1)
+            self.assertEqual(snap_a_cam_c.cross_camera_journeys_count, 1)
+
+            pair_deltas = compute_pair_flow_deltas(run_a, run_b)
+            self.assertEqual(len(pair_deltas), 2)
+            ab = next(
+                d
+                for d in pair_deltas
+                if d.from_camera == "cam_a" and d.to_camera == "cam_b"
+            )
+            self.assertEqual(ab.baseline_transitions, 2)
+            self.assertEqual(ab.candidate_transitions, 1)
+            self.assertEqual(ab.delta_transitions, -1)
+            self.assertAlmostEqual(ab.delta_avg_transit_seconds, 2.0, places=3)
+            self.assertAlmostEqual(ab.delta_avg_confidence, -0.25, places=3)
+
+            bc = next(
+                d
+                for d in pair_deltas
+                if d.from_camera == "cam_b" and d.to_camera == "cam_c"
+            )
+            self.assertEqual(bc.delta_transitions, -1)
+
+            # Legacy DB without correlation tables returns 0 / empty safely
+            legacy_dir = root / "legacy_run"
+            legacy_dir.mkdir()
+            legacy_db = legacy_dir / "intelligence.db"
+            with closing(sqlite3.connect(str(legacy_db))) as conn:
+                conn.execute(
+                    "CREATE TABLE tracks (track_id INTEGER, duration_seconds REAL, path_length_px REAL)"
+                )
+                conn.commit()
+            legacy_snap = load_run_snapshot(legacy_dir)
+            self.assertEqual(legacy_snap.cross_camera_transitions_count, 0)
+            self.assertEqual(legacy_snap.cross_camera_journeys_count, 0)
+            self.assertEqual(compute_pair_flow_deltas(legacy_dir, legacy_dir), [])
+
+    def test_cross_camera_regression_gate_rules_and_single_camera_safety(self) -> None:
+        from event_intelligence.compare import (
+            RegressionPolicy,
+            evaluate_regression_gate,
+            load_regression_policy,
+        )
+
+        repo_policy = load_regression_policy(
+            Path(__file__).resolve().parents[1] / "configs" / "regression_policy.yaml"
+        )
+        self.assertEqual(repo_policy.max_transitions_drop_pct, 30.0)
+        self.assertEqual(repo_policy.max_journeys_drop_pct, 30.0)
+        self.assertEqual(repo_policy.max_mean_transit_increase_seconds, 5.0)
+        self.assertEqual(repo_policy.min_mean_transition_confidence, 0.35)
+
+        base_snap = RunSnapshot(
+            run_id="base_mc",
+            run_dir="/tmp/base_mc",
+            db_path="/tmp/base_mc/intelligence.db",
+            cameras_count=2,
+            detections_count=100,
+            tracks_count=10,
+            trajectories_count=200,
+            events_count=20,
+            insights_count=4,
+            high_critical_insights_count=1,
+            total_dwell_seconds=40.0,
+            mean_track_duration_seconds=4.0,
+            mean_path_length_px=120.0,
+            cross_camera_transitions_count=10,
+            cross_camera_journeys_count=5,
+            mean_transit_seconds=2.5,
+            mean_transition_confidence=0.85,
+        )
+        degraded_cand = RunSnapshot(
+            run_id="cand_mc",
+            run_dir="/tmp/cand_mc",
+            db_path="/tmp/cand_mc/intelligence.db",
+            cameras_count=2,
+            detections_count=100,
+            tracks_count=10,
+            trajectories_count=200,
+            events_count=20,
+            insights_count=4,
+            high_critical_insights_count=1,
+            total_dwell_seconds=40.0,
+            mean_track_duration_seconds=4.0,
+            mean_path_length_px=120.0,
+            cross_camera_transitions_count=4,
+            cross_camera_journeys_count=2,
+            mean_transit_seconds=9.0,
+            mean_transition_confidence=0.25,
+        )
+        report_fail = RunComparisonReport(baseline=base_snap, candidate=degraded_cand)
+        gate_fail = evaluate_regression_gate(report_fail, repo_policy)
+        self.assertFalse(gate_fail.passed)
+        violated_rules = {v.rule_name for v in gate_fail.violations}
+        self.assertEqual(
+            violated_rules,
+            {
+                "max_transitions_drop_pct",
+                "max_journeys_drop_pct",
+                "max_mean_transit_increase_seconds",
+                "min_mean_transition_confidence",
+            },
+        )
+
+        # Single-camera runs (0 transitions/journeys) must pass without false positives
+        single_snap = RunSnapshot(
+            run_id="single",
+            run_dir="/tmp/single",
+            db_path="/tmp/single/intelligence.db",
+            cameras_count=1,
+            detections_count=100,
+            tracks_count=10,
+            trajectories_count=200,
+            events_count=20,
+            insights_count=4,
+            high_critical_insights_count=1,
+            total_dwell_seconds=40.0,
+            mean_track_duration_seconds=4.0,
+            mean_path_length_px=120.0,
+        )
+        gate_single = evaluate_regression_gate(
+            RunComparisonReport(baseline=single_snap, candidate=single_snap),
+            repo_policy,
+        )
+        self.assertTrue(gate_single.passed)
+        self.assertEqual(gate_single.violations, [])
+
+        # Validation guards on invalid thresholds
+        with self.assertRaises(ValueError):
+            RegressionPolicy(max_transitions_drop_pct=150.0)
+        with self.assertRaises(ValueError):
+            RegressionPolicy(min_mean_transition_confidence=1.5)
+
+    def test_multicam_comparison_artifacts_trends_and_cli_gate(self) -> None:
+        import csv
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            root = Path(tmpdir)
+            run_base = _create_synthetic_run(
+                root / "runs" / "run_base",
+                trajectories_rows=[(1, 0, 0.0, 50.0, 50.0)],
+            )
+            run_good = _create_synthetic_run(
+                root / "runs" / "run_good",
+                trajectories_rows=[(1, 0, 0.0, 50.0, 50.0)],
+            )
+            run_bad = _create_synthetic_run(
+                root / "runs" / "run_bad",
+                trajectories_rows=[(1, 0, 0.0, 50.0, 50.0)],
+            )
+            _seed_multicam_correlation(
+                run_base,
+                transitions=[
+                    ("tr_1", "cam_a", 1, "cam_b", 2, 1.0, 3.0, 2.0, 0.90),
+                    ("tr_2", "cam_b", 2, "cam_c", 3, 4.0, 6.0, 2.0, 0.85),
+                ],
+                journeys=[
+                    ("jr_1", 2, ["cam_a", "cam_b", "cam_c"], 1.0, 6.0, 5.0, 0.875),
+                ],
+            )
+            _seed_multicam_correlation(
+                run_good,
+                transitions=[
+                    ("tr_1", "cam_a", 1, "cam_b", 2, 1.0, 3.5, 2.5, 0.88),
+                    ("tr_2", "cam_b", 2, "cam_c", 3, 4.0, 6.5, 2.5, 0.82),
+                ],
+                journeys=[
+                    ("jr_1", 2, ["cam_a", "cam_b", "cam_c"], 1.0, 6.5, 5.5, 0.85),
+                ],
+            )
+            _seed_multicam_correlation(
+                run_bad,
+                transitions=[
+                    ("tr_1", "cam_a", 1, "cam_b", 2, 1.0, 12.0, 11.0, 0.20),
+                ],
+                journeys=[],
+            )
+
+            policy_path = (
+                Path(__file__).resolve().parents[1]
+                / "configs"
+                / "regression_policy.yaml"
+            )
+            out_dir = root / "diff_bad"
+
+            # Degraded multi-camera candidate -> exit 2 + pair_flow_deltas.csv + Markdown section
+            buf_fail = io.StringIO()
+            with redirect_stdout(buf_fail):
+                rc_fail = compare_main(
+                    [
+                        "--baseline",
+                        str(run_base),
+                        "--candidate",
+                        str(run_bad),
+                        "--policy",
+                        str(policy_path),
+                        "--fail-on-regression",
+                        "--no-heatmap-diff",
+                        "--output-dir",
+                        str(out_dir),
+                    ]
+                )
+            self.assertEqual(rc_fail, 2)
+            self.assertTrue((out_dir / "pair_flow_deltas.csv").is_file())
+            with (out_dir / "pair_flow_deltas.csv").open("r", encoding="utf-8") as f:
+                pf_rows = list(csv.DictReader(f))
+            self.assertEqual(len(pf_rows), 2)
+
+            md_text = (out_dir / "comparison_report.md").read_text(encoding="utf-8")
+            self.assertIn("Cross-Camera Transitions", md_text)
+            self.assertIn("## Cross-Camera Pair Flow Deltas", md_text)
+            self.assertIn("max_transitions_drop_pct", md_text)
+
+            # Healthy multi-camera candidate -> exit 0
+            buf_pass = io.StringIO()
+            with redirect_stdout(buf_pass):
+                rc_pass = compare_main(
+                    [
+                        "--baseline",
+                        str(run_base),
+                        "--candidate",
+                        str(run_good),
+                        "--policy",
+                        str(policy_path),
+                        "--fail-on-regression",
+                        "--no-heatmap-diff",
+                        "--json",
+                    ]
+                )
+            self.assertEqual(rc_pass, 0)
+            pass_data = json.loads(buf_pass.getvalue())
+            self.assertTrue(pass_data["regression_gate"]["passed"])
+            self.assertEqual(len(pass_data["pair_flow_deltas"]), 2)
+
+            # Multi-run trends track cross-camera counts and export them to runs_catalog.csv
+            trends = analyze_multi_run_trends([run_base, run_good, run_bad])
+            self.assertIn("cross_camera_transitions_count", trends.metric_baselines)
+            self.assertIn("cross_camera_journeys_count", trends.metric_baselines)
+            trends_dir = root / "trends_out"
+            write_trends_artifacts(trends, trends_dir)
+            with (trends_dir / "runs_catalog.csv").open("r", encoding="utf-8") as f:
+                cat_rows = list(csv.DictReader(f))
+            self.assertEqual(len(cat_rows), 3)
+            self.assertIn("cross_camera_transitions_count", cat_rows[0])
+            self.assertIn("cross_camera_journeys_count", cat_rows[0])
 
 
 if __name__ == "__main__":

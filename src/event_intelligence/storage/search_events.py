@@ -10,9 +10,10 @@ import json
 import math
 import shutil
 import sqlite3
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 from contextlib import closing
 from dataclasses import dataclass, field
+from datetime import UTC, datetime
 from itertools import pairwise
 from pathlib import Path
 from typing import Any
@@ -677,6 +678,128 @@ class IncidentBundleManifest:
             "missing_media": list(self.missing_media),
             "related_events_count": self.related_events_count,
             "related_insights_count": self.related_insights_count,
+        }
+
+
+@dataclass(frozen=True, slots=True)
+class JourneyHopDossier:
+    """Per-camera-track segment inside a stitched cross-camera journey dossier."""
+
+    hop_index: int
+    camera_id: str
+    track_id: int
+    start_frame: int | None
+    end_frame: int | None
+    start_time: float
+    end_time: float
+    duration_seconds: float
+    path_length_px: float
+    incoming_transition_id: str | None = None
+    incoming_transit_seconds: float | None = None
+    incoming_confidence: float | None = None
+    events: list[EventSearchResult] = field(default_factory=list)
+    insights: list[InsightSearchResult] = field(default_factory=list)
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "hop_index": self.hop_index,
+            "camera_id": self.camera_id,
+            "track_id": self.track_id,
+            "start_frame": self.start_frame,
+            "end_frame": self.end_frame,
+            "start_time": round(self.start_time, 4),
+            "end_time": round(self.end_time, 4),
+            "duration_seconds": round(self.duration_seconds, 4),
+            "path_length_px": round(self.path_length_px, 2),
+            "incoming_transition_id": self.incoming_transition_id,
+            "incoming_transit_seconds": (
+                round(self.incoming_transit_seconds, 4)
+                if self.incoming_transit_seconds is not None
+                else None
+            ),
+            "incoming_confidence": (
+                round(self.incoming_confidence, 4)
+                if self.incoming_confidence is not None
+                else None
+            ),
+            "events": [e.to_dict() for e in self.events],
+            "insights": [i.to_dict() for i in self.insights],
+        }
+
+
+@dataclass(frozen=True, slots=True)
+class CrossCameraJourneyDossier:
+    """Unified chronological multi-camera dossier for a stitched journey_id."""
+
+    journey_id: str
+    topology_name: str
+    cameras_visited: tuple[str, ...]
+    hop_count: int
+    start_time: float
+    end_time: float
+    total_span_seconds: float
+    avg_confidence: float
+    hops: list[JourneyHopDossier] = field(default_factory=list)
+    transitions: list[dict[str, Any]] = field(default_factory=list)
+    total_events: int = 0
+    total_insights: int = 0
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "journey_id": self.journey_id,
+            "topology_name": self.topology_name,
+            "cameras_visited": list(self.cameras_visited),
+            "hop_count": self.hop_count,
+            "start_time": round(self.start_time, 4),
+            "end_time": round(self.end_time, 4),
+            "total_span_seconds": round(self.total_span_seconds, 4),
+            "avg_confidence": round(self.avg_confidence, 4),
+            "total_events": self.total_events,
+            "total_insights": self.total_insights,
+            "hops": [h.to_dict() for h in self.hops],
+            "transitions": [dict(t) for t in self.transitions],
+        }
+
+
+@dataclass(frozen=True, slots=True)
+class JourneyBundleManifest:
+    """Manifest summarizing an exported self-contained cross-camera journey bundle."""
+
+    journey_id: str
+    topology_name: str
+    bundle_dir: str
+    manifest_path: str
+    report_path: str
+    hops_csv_path: str
+    transitions_csv_path: str
+    cameras_visited: tuple[str, ...]
+    hop_count: int
+    total_span_seconds: float
+    avg_confidence: float
+    total_events: int
+    total_insights: int
+    copied_media: dict[str, str] = field(default_factory=dict)
+    missing_media: list[str] = field(default_factory=list)
+    created_at: str = ""
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "journey_id": self.journey_id,
+            "topology_name": self.topology_name,
+            "bundle_dir": self.bundle_dir,
+            "manifest_path": self.manifest_path,
+            "report_path": self.report_path,
+            "hops_csv_path": self.hops_csv_path,
+            "transitions_csv_path": self.transitions_csv_path,
+            "cameras_visited": list(self.cameras_visited),
+            "hop_count": self.hop_count,
+            "total_span_seconds": round(self.total_span_seconds, 4),
+            "avg_confidence": round(self.avg_confidence, 4),
+            "total_events": self.total_events,
+            "total_insights": self.total_insights,
+            "copied_media": dict(self.copied_media),
+            "missing_media": list(self.missing_media),
+            "created_at": self.created_at,
         }
 
 
@@ -1923,6 +2046,395 @@ def query_cross_camera_journeys(
         if len(results) >= int(limit):
             break
     return results
+
+
+def query_journey_dossier(
+    db_path: Path | str,
+    journey_id: str,
+) -> CrossCameraJourneyDossier:
+    """Build a chronological multi-camera dossier joining per-hop tracks, events, and insights."""
+    target_id = journey_id.strip()
+    if not target_id:
+        raise ValueError("journey_id must be non-empty")
+    path = Path(db_path)
+    if not path.is_file():
+        raise FileNotFoundError(f"SQLite intelligence database not found: {path}")
+
+    with closing(sqlite3.connect(path)) as conn:
+        conn.row_factory = sqlite3.Row
+        try:
+            row = conn.execute(
+                "SELECT journey_id, topology_name, hop_count, cameras_visited_json, "
+                "start_time, end_time, total_span_seconds, avg_confidence, hops_json "
+                "FROM cross_camera_journeys WHERE journey_id = ?",
+                (target_id,),
+            ).fetchone()
+        except sqlite3.OperationalError as exc:
+            raise KeyError(
+                f"Journey ID {target_id!r} not found in {path} (correlation tables absent)"
+            ) from exc
+
+        if row is None:
+            raise KeyError(f"Journey ID {target_id!r} not found in {path}")
+
+        cams = tuple(str(c) for c in json.loads(row["cameras_visited_json"] or "[]"))
+        hops_raw: list[dict[str, Any]] = list(json.loads(row["hops_json"] or "[]"))
+
+        segments: list[tuple[str, int, dict[str, Any] | None]] = []
+        if hops_raw:
+            first = hops_raw[0]
+            segments.append(
+                (str(first["from_camera"]), int(first["from_track_id"]), None)
+            )
+            for tr in hops_raw:
+                segments.append((str(tr["to_camera"]), int(tr["to_track_id"]), tr))
+
+        hop_dossiers: list[JourneyHopDossier] = []
+        for idx, (cam_id, trk_id, incoming) in enumerate(segments):
+            trk_row = conn.execute(
+                "SELECT start_frame, end_frame, duration_seconds, path_length_px "
+                "FROM tracks WHERE camera_id = ? AND track_id = ?",
+                (cam_id, trk_id),
+            ).fetchone()
+            traj_bounds = conn.execute(
+                "SELECT MIN(timestamp) AS min_t, MAX(timestamp) AS max_t "
+                "FROM trajectories WHERE camera_id = ? AND track_id = ?",
+                (cam_id, trk_id),
+            ).fetchone()
+
+            start_frame = int(trk_row["start_frame"]) if trk_row is not None else None
+            end_frame = int(trk_row["end_frame"]) if trk_row is not None else None
+            duration_sec = (
+                float(trk_row["duration_seconds"]) if trk_row is not None else 0.0
+            )
+            path_len = float(trk_row["path_length_px"]) if trk_row is not None else 0.0
+
+            if traj_bounds is not None and traj_bounds["min_t"] is not None:
+                seg_start = float(traj_bounds["min_t"])
+                seg_end = float(traj_bounds["max_t"])
+            elif incoming is not None:
+                seg_start = float(incoming.get("entry_time", row["start_time"]))
+                seg_end = seg_start + duration_sec
+            elif idx < len(hops_raw):
+                seg_end = float(hops_raw[idx].get("exit_time", row["end_time"]))
+                seg_start = max(0.0, seg_end - duration_sec)
+            else:
+                seg_start = float(row["start_time"])
+                seg_end = float(row["end_time"])
+
+            evs = query_events(path, camera_id=cam_id, track_id=trk_id, limit=1000)
+            ins = query_insights(path, camera_id=cam_id, track_id=trk_id, limit=1000)
+
+            hop_dossiers.append(
+                JourneyHopDossier(
+                    hop_index=idx,
+                    camera_id=cam_id,
+                    track_id=trk_id,
+                    start_frame=start_frame,
+                    end_frame=end_frame,
+                    start_time=seg_start,
+                    end_time=seg_end,
+                    duration_seconds=duration_sec,
+                    path_length_px=path_len,
+                    incoming_transition_id=(
+                        str(incoming["transition_id"])
+                        if incoming is not None and incoming.get("transition_id")
+                        else None
+                    ),
+                    incoming_transit_seconds=(
+                        float(incoming["transit_seconds"])
+                        if incoming is not None
+                        and incoming.get("transit_seconds") is not None
+                        else None
+                    ),
+                    incoming_confidence=(
+                        float(incoming["confidence"])
+                        if incoming is not None
+                        and incoming.get("confidence") is not None
+                        else None
+                    ),
+                    events=evs,
+                    insights=ins,
+                )
+            )
+
+    return CrossCameraJourneyDossier(
+        journey_id=str(row["journey_id"]),
+        topology_name=str(row["topology_name"]),
+        cameras_visited=cams,
+        hop_count=int(row["hop_count"]),
+        start_time=float(row["start_time"]),
+        end_time=float(row["end_time"]),
+        total_span_seconds=float(row["total_span_seconds"]),
+        avg_confidence=float(row["avg_confidence"]),
+        hops=hop_dossiers,
+        transitions=hops_raw,
+        total_events=sum(len(h.events) for h in hop_dossiers),
+        total_insights=sum(len(h.insights) for h in hop_dossiers),
+    )
+
+
+def _render_journey_dossier_markdown(
+    dossier: CrossCameraJourneyDossier,
+    copied_media: Mapping[str, str],
+    missing_media: Sequence[str],
+) -> str:
+    """Render a self-contained forensic Markdown report for a cross-camera journey."""
+    path_str = " -> ".join(dossier.cameras_visited) if dossier.cameras_visited else "—"
+    lines: list[str] = [
+        f"# Cross-Camera Journey Forensic Dossier — `{dossier.journey_id}`",
+        "",
+        "## Overview",
+        "",
+        f"- **Journey ID:** `{dossier.journey_id}`",
+        f"- **Topology:** `{dossier.topology_name}`",
+        f"- **Camera Path:** `{path_str}`",
+        f"- **Hops:** `{dossier.hop_count}` ({len(dossier.hops)} camera segment(s))",
+        f"- **Time Span:** `{dossier.start_time:.2f}s` – `{dossier.end_time:.2f}s` (`{dossier.total_span_seconds:.2f}s`)",
+        f"- **Average Handoff Confidence:** `{dossier.avg_confidence:.2f}`",
+        f"- **Total Events / Insights:** `{dossier.total_events}` events, `{dossier.total_insights}` insights",
+        "",
+        "## Chronological Camera Segments",
+        "",
+        "| Segment | Camera | Track | Frames | Time (s) | Duration (s) | Path (px) | Incoming Handoff | Events | Insights |",
+        "|---:|---|---:|---|---|---:|---:|---|---:|---:|",
+    ]
+    for hop in dossier.hops:
+        frames_str = (
+            f"{hop.start_frame}..{hop.end_frame}"
+            if hop.start_frame is not None and hop.end_frame is not None
+            else "—"
+        )
+        handoff_str = (
+            f"`{hop.incoming_transition_id}` (dt={hop.incoming_transit_seconds:.2f}s, conf={hop.incoming_confidence:.2f})"
+            if hop.incoming_transition_id
+            and hop.incoming_transit_seconds is not None
+            and hop.incoming_confidence is not None
+            else "origin"
+        )
+        lines.append(
+            f"| {hop.hop_index} | `{hop.camera_id}` | `{hop.track_id}` | {frames_str} | "
+            f"{hop.start_time:.2f}–{hop.end_time:.2f} | {hop.duration_seconds:.2f} | "
+            f"{hop.path_length_px:.1f} | {handoff_str} | {len(hop.events)} | {len(hop.insights)} |"
+        )
+    lines.append("")
+
+    if dossier.transitions:
+        lines.extend(
+            [
+                "## Cross-Camera Transitions",
+                "",
+                "| Transition ID | From | To | Exit (s) | Entry (s) | Transit (s) | Confidence | Rule |",
+                "|---|---|---|---:|---:|---:|---:|---|",
+            ]
+        )
+        for tr in dossier.transitions:
+            lines.append(
+                f"| `{tr.get('transition_id', '')}` | "
+                f"`{tr.get('from_camera', '')}#{tr.get('from_track_id', '')}` | "
+                f"`{tr.get('to_camera', '')}#{tr.get('to_track_id', '')}` | "
+                f"{float(tr.get('exit_time', 0.0)):.2f} | {float(tr.get('entry_time', 0.0)):.2f} | "
+                f"{float(tr.get('transit_seconds', 0.0)):.2f} | {float(tr.get('confidence', 0.0)):.2f} | "
+                f"{tr.get('rule_label', '')} |"
+            )
+        lines.append("")
+
+    lines.extend(["## Per-Segment Events & Insights", ""])
+    for hop in dossier.hops:
+        lines.append(f"### Segment {hop.hop_index}: `{hop.camera_id}#{hop.track_id}`")
+        lines.append("")
+        if hop.events:
+            for ev in hop.events:
+                lines.append(
+                    f"- **Event `{ev.event_id}`** (`{ev.event_type}`, zone=`{ev.zone_id}`, "
+                    f"`{ev.start_time:.2f}s–{ev.end_time:.2f}s`, dur=`{ev.duration_seconds:.2f}s`)"
+                )
+        else:
+            lines.append("- _No events recorded for this segment._")
+        if hop.insights:
+            for ins in hop.insights:
+                lines.append(
+                    f"- **Insight `{ins.insight_id}`** (`{ins.insight_type}`, severity=`{ins.severity}`, "
+                    f"`{ins.start_time:.2f}s–{ins.end_time:.2f}s`): {ins.description}"
+                )
+        lines.append("")
+
+    lines.extend(["## Packaged Visual Evidence", ""])
+    if copied_media:
+        for label, rel_path in sorted(copied_media.items()):
+            lines.append(f"- `{label}`: [{rel_path}]({rel_path})")
+    else:
+        lines.append("_No evidence media files were available to package._")
+    if missing_media:
+        lines.append("")
+        lines.append(
+            f"_Missing/unresolved evidence references ({len(missing_media)}):_"
+        )
+        for m in missing_media:
+            lines.append(f"- `{m}`")
+    lines.append("")
+    return "\n".join(lines)
+
+
+def export_journey_bundle(
+    db_path: Path | str,
+    journey_id: str,
+    output_dir: Path | str,
+    *,
+    evidence_root: Path | str | None = None,
+) -> JourneyBundleManifest:
+    """Export a self-contained forensic bundle for a stitched cross-camera journey."""
+    dossier = query_journey_dossier(db_path, journey_id)
+    path = Path(db_path)
+    ev_root = Path(evidence_root) if evidence_root is not None else None
+
+    bundle_dir = Path(output_dir).resolve()
+    media_dir = bundle_dir / "media"
+    bundle_dir.mkdir(parents=True, exist_ok=True)
+    media_dir.mkdir(parents=True, exist_ok=True)
+
+    copied_media: dict[str, str] = {}
+    missing_media: list[str] = []
+
+    def _package_media(label: str, raw_path: str | None, cam_id: str) -> None:
+        if not raw_path or not str(raw_path).strip():
+            return
+        resolved = _resolve_evidence_file(
+            raw_path, db_path=path, camera_id=cam_id, evidence_root=ev_root
+        )
+        if resolved is not None and resolved.is_file():
+            safe_label = label.replace("/", "_").replace("\\", "_").replace(":", "_")
+            dest_name = f"{safe_label}{resolved.suffix or '.bin'}"
+            dest_path = media_dir / dest_name
+            shutil.copy2(resolved, dest_path)
+            copied_media[label] = f"media/{dest_name}"
+        else:
+            missing_media.append(f"{label}:{raw_path}")
+
+    for hop in dossier.hops:
+        for ev in hop.events:
+            prefix = f"{hop.camera_id}_{ev.event_id}"
+            _package_media(f"{prefix}_snapshot", ev.snapshot_path, hop.camera_id)
+            _package_media(f"{prefix}_crop", ev.crop_path, hop.camera_id)
+            _package_media(f"{prefix}_clip", ev.video_clip_path, hop.camera_id)
+            _package_media(f"{prefix}_storyboard", ev.storyboard_path, hop.camera_id)
+        for ins in hop.insights:
+            prefix = f"{hop.camera_id}_{ins.insight_id}"
+            _package_media(
+                f"{prefix}_snapshot", ins.evidence_snapshot_path, hop.camera_id
+            )
+            _package_media(f"{prefix}_crop", ins.evidence_crop_path, hop.camera_id)
+            _package_media(f"{prefix}_clip", ins.video_clip_path, hop.camera_id)
+            _package_media(f"{prefix}_storyboard", ins.storyboard_path, hop.camera_id)
+
+    hops_csv_path = bundle_dir / "hops.csv"
+    with hops_csv_path.open("w", encoding="utf-8", newline="") as f:
+        writer = csv.DictWriter(
+            f,
+            fieldnames=[
+                "hop_index",
+                "camera_id",
+                "track_id",
+                "start_frame",
+                "end_frame",
+                "start_time",
+                "end_time",
+                "duration_seconds",
+                "path_length_px",
+                "incoming_transition_id",
+                "incoming_transit_seconds",
+                "incoming_confidence",
+                "events_count",
+                "insights_count",
+            ],
+        )
+        writer.writeheader()
+        for hop in dossier.hops:
+            writer.writerow(
+                {
+                    "hop_index": hop.hop_index,
+                    "camera_id": hop.camera_id,
+                    "track_id": hop.track_id,
+                    "start_frame": hop.start_frame,
+                    "end_frame": hop.end_frame,
+                    "start_time": round(hop.start_time, 4),
+                    "end_time": round(hop.end_time, 4),
+                    "duration_seconds": round(hop.duration_seconds, 4),
+                    "path_length_px": round(hop.path_length_px, 2),
+                    "incoming_transition_id": hop.incoming_transition_id or "",
+                    "incoming_transit_seconds": (
+                        round(hop.incoming_transit_seconds, 4)
+                        if hop.incoming_transit_seconds is not None
+                        else ""
+                    ),
+                    "incoming_confidence": (
+                        round(hop.incoming_confidence, 4)
+                        if hop.incoming_confidence is not None
+                        else ""
+                    ),
+                    "events_count": len(hop.events),
+                    "insights_count": len(hop.insights),
+                }
+            )
+
+    transitions_csv_path = bundle_dir / "transitions.csv"
+    with transitions_csv_path.open("w", encoding="utf-8", newline="") as f:
+        writer = csv.DictWriter(
+            f,
+            fieldnames=[
+                "transition_id",
+                "from_camera",
+                "from_track_id",
+                "to_camera",
+                "to_track_id",
+                "exit_time",
+                "entry_time",
+                "transit_seconds",
+                "confidence",
+                "rule_label",
+                "from_zone",
+                "to_zone",
+                "evidence_reason",
+            ],
+            extrasaction="ignore",
+        )
+        writer.writeheader()
+        for tr in dossier.transitions:
+            writer.writerow(tr)
+
+    report_path = bundle_dir / "journey_dossier.md"
+    report_path.write_text(
+        _render_journey_dossier_markdown(dossier, copied_media, missing_media),
+        encoding="utf-8",
+    )
+
+    manifest_path = bundle_dir / "manifest.json"
+    manifest = JourneyBundleManifest(
+        journey_id=dossier.journey_id,
+        topology_name=dossier.topology_name,
+        bundle_dir=str(bundle_dir),
+        manifest_path=str(manifest_path),
+        report_path=str(report_path),
+        hops_csv_path=str(hops_csv_path),
+        transitions_csv_path=str(transitions_csv_path),
+        cameras_visited=dossier.cameras_visited,
+        hop_count=dossier.hop_count,
+        total_span_seconds=dossier.total_span_seconds,
+        avg_confidence=dossier.avg_confidence,
+        total_events=dossier.total_events,
+        total_insights=dossier.total_insights,
+        copied_media=copied_media,
+        missing_media=missing_media,
+        created_at=datetime.now(UTC).isoformat(),
+    )
+    manifest_payload = {
+        **manifest.to_dict(),
+        "dossier": dossier.to_dict(),
+    }
+    manifest_path.write_text(
+        json.dumps(manifest_payload, indent=2) + "\n", encoding="utf-8"
+    )
+    return manifest
 
 
 def query_insights(
@@ -3212,6 +3724,18 @@ def build_parser() -> argparse.ArgumentParser:
         help="Minimum hop count filter for --journeys.",
     )
     parser.add_argument(
+        "--journey-dossier",
+        type=str,
+        default=None,
+        help="Build a chronological multi-camera dossier for a persisted journey_id.",
+    )
+    parser.add_argument(
+        "--export-journey",
+        type=str,
+        default=None,
+        help="Export a self-contained forensic bundle for a persisted journey_id.",
+    )
+    parser.add_argument(
         "--evidence-event-id",
         type=str,
         default=None,
@@ -3410,6 +3934,61 @@ def main(argv: list[str] | None = None) -> int:
                     f"  [{j.journey_id}] {path_str} hops={j.hop_count} "
                     f"span={j.total_span_seconds:.2f}s avg_conf={j.avg_confidence:.2f}"
                 )
+        return 0
+
+    if args.journey_dossier is not None:
+        dossier = query_journey_dossier(db_path, args.journey_dossier)
+        if args.json:
+            print(json.dumps(dossier.to_dict(), indent=2))
+        else:
+            path_str = " -> ".join(dossier.cameras_visited)
+            print(
+                f"=== Cross-Camera Journey Dossier: {dossier.journey_id} ===\n"
+                f"  Path: {path_str} ({dossier.hop_count} hop(s), "
+                f"span={dossier.total_span_seconds:.2f}s, avg_conf={dossier.avg_confidence:.2f})\n"
+                f"  Totals: {dossier.total_events} event(s), {dossier.total_insights} insight(s)"
+            )
+            for hop in dossier.hops:
+                handoff = (
+                    f" <- {hop.incoming_transition_id} (dt={hop.incoming_transit_seconds:.2f}s, "
+                    f"conf={hop.incoming_confidence:.2f})"
+                    if hop.incoming_transition_id
+                    and hop.incoming_transit_seconds is not None
+                    and hop.incoming_confidence is not None
+                    else " (origin)"
+                )
+                print(
+                    f"  [{hop.hop_index}] {hop.camera_id}#{hop.track_id} "
+                    f"t={hop.start_time:.2f}..{hop.end_time:.2f}s "
+                    f"dur={hop.duration_seconds:.2f}s path={hop.path_length_px:.1f}px "
+                    f"events={len(hop.events)} insights={len(hop.insights)}{handoff}"
+                )
+        return 0
+
+    if args.export_journey is not None:
+        target_bundle = (
+            args.bundle_dir
+            if args.bundle_dir is not None
+            else (db_path.resolve().parent / "journey_bundles" / args.export_journey)
+        )
+        manifest = export_journey_bundle(
+            db_path,
+            args.export_journey,
+            target_bundle,
+            evidence_root=args.evidence_root,
+        )
+        if args.json:
+            print(json.dumps(manifest.to_dict(), indent=2))
+        else:
+            path_str = " -> ".join(manifest.cameras_visited)
+            print(
+                f"Exported cross-camera journey bundle '{manifest.journey_id}' "
+                f"({path_str}) -> {manifest.bundle_dir} "
+                f"(hops={manifest.hop_count}, events={manifest.total_events}, "
+                f"insights={manifest.total_insights}, "
+                f"media={len(manifest.copied_media)} copied, "
+                f"{len(manifest.missing_media)} missing)"
+            )
         return 0
 
     if args.camera_summary:

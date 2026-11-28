@@ -20,6 +20,7 @@ from event_intelligence.analytics import (
 )
 from event_intelligence.compare.report import write_comparison_artifacts
 from event_intelligence.compare.types import (
+    CameraPairFlowDelta,
     ConfigDiffEntry,
     InsightTypeDelta,
     LineMetricDelta,
@@ -178,6 +179,46 @@ def load_run_snapshot(
             insights_count = 0
             high_crit_count = 0
 
+        if _table_exists(conn, "cross_camera_transitions"):
+            if cam_filter:
+                cc_row = conn.execute(
+                    "SELECT count(*), coalesce(avg(transit_seconds), 0.0), "
+                    "coalesce(avg(confidence), 0.0) FROM cross_camera_transitions "
+                    "WHERE from_camera = ? OR to_camera = ?",
+                    (cam_filter, cam_filter),
+                ).fetchone()
+            else:
+                cc_row = conn.execute(
+                    "SELECT count(*), coalesce(avg(transit_seconds), 0.0), "
+                    "coalesce(avg(confidence), 0.0) FROM cross_camera_transitions"
+                ).fetchone()
+            cc_transitions_count = int(cc_row[0])
+            mean_transit_sec = max(0.0, float(cc_row[1]))
+            mean_trans_conf = min(1.0, max(0.0, float(cc_row[2])))
+        else:
+            cc_transitions_count = 0
+            mean_transit_sec = 0.0
+            mean_trans_conf = 0.0
+
+        if _table_exists(conn, "cross_camera_journeys"):
+            if cam_filter:
+                jr_rows = conn.execute(
+                    "SELECT cameras_visited_json FROM cross_camera_journeys"
+                ).fetchall()
+                cc_journeys_count = sum(
+                    1
+                    for (cj,) in jr_rows
+                    if cam_filter in (json.loads(cj) if cj else [])
+                )
+            else:
+                cc_journeys_count = int(
+                    conn.execute(
+                        "SELECT count(*) FROM cross_camera_journeys"
+                    ).fetchone()[0]
+                )
+        else:
+            cc_journeys_count = 0
+
     return RunSnapshot(
         run_id=resolved_run_id,
         run_dir=str(run_dir),
@@ -193,6 +234,10 @@ def load_run_snapshot(
         mean_track_duration_seconds=round(mean_track_dur, 4),
         mean_path_length_px=round(mean_path_len, 2),
         config_snapshot=config_snapshot,
+        cross_camera_transitions_count=cc_transitions_count,
+        cross_camera_journeys_count=cc_journeys_count,
+        mean_transit_seconds=round(mean_transit_sec, 4),
+        mean_transition_confidence=round(mean_trans_conf, 4),
     )
 
 
@@ -269,6 +314,67 @@ def compute_zone_deltas(
                 candidate_dwell_seconds=cr.total_dwell_seconds if cr else 0.0,
                 baseline_peak_occupancy=br.peak_occupancy if br else 0,
                 candidate_peak_occupancy=cr.peak_occupancy if cr else 0,
+            )
+        )
+    return deltas
+
+
+def compute_pair_flow_deltas(
+    baseline_db: Path | str,
+    candidate_db: Path | str,
+    *,
+    camera_id: str | None = None,
+) -> list[CameraPairFlowDelta]:
+    """Compute signed per-(from_camera, to_camera) transition flow deltas between two DBs."""
+    _, b_db = _resolve_run_and_db_paths(baseline_db)
+    _, c_db = _resolve_run_and_db_paths(candidate_db)
+    cam_filter = camera_id.strip() if camera_id and camera_id.strip() else None
+
+    def _load_pairs(db: Path) -> dict[tuple[str, str], tuple[int, float, float]]:
+        out: dict[tuple[str, str], tuple[int, float, float]] = {}
+        with closing(sqlite3.connect(db)) as conn:
+            if not _table_exists(conn, "cross_camera_transitions"):
+                return out
+            if cam_filter:
+                rows = conn.execute(
+                    "SELECT from_camera, to_camera, count(*), "
+                    "coalesce(avg(transit_seconds), 0.0), coalesce(avg(confidence), 0.0) "
+                    "FROM cross_camera_transitions "
+                    "WHERE from_camera = ? OR to_camera = ? "
+                    "GROUP BY from_camera, to_camera",
+                    (cam_filter, cam_filter),
+                ).fetchall()
+            else:
+                rows = conn.execute(
+                    "SELECT from_camera, to_camera, count(*), "
+                    "coalesce(avg(transit_seconds), 0.0), coalesce(avg(confidence), 0.0) "
+                    "FROM cross_camera_transitions "
+                    "GROUP BY from_camera, to_camera"
+                ).fetchall()
+            for fcam, tcam, cnt, avg_dt, avg_conf in rows:
+                out[(str(fcam), str(tcam))] = (
+                    int(cnt),
+                    float(avg_dt),
+                    float(avg_conf),
+                )
+        return out
+
+    b_map = _load_pairs(b_db)
+    c_map = _load_pairs(c_db)
+    deltas: list[CameraPairFlowDelta] = []
+    for pair in sorted(set(b_map.keys()) | set(c_map.keys())):
+        b_cnt, b_dt, b_conf = b_map.get(pair, (0, 0.0, 0.0))
+        c_cnt, c_dt, c_conf = c_map.get(pair, (0, 0.0, 0.0))
+        deltas.append(
+            CameraPairFlowDelta(
+                from_camera=pair[0],
+                to_camera=pair[1],
+                baseline_transitions=b_cnt,
+                candidate_transitions=c_cnt,
+                baseline_avg_transit_seconds=b_dt,
+                candidate_avg_transit_seconds=c_dt,
+                baseline_avg_confidence=b_conf,
+                candidate_avg_confidence=c_conf,
             )
         )
     return deltas
@@ -599,6 +705,8 @@ _TREND_METRICS: tuple[str, ...] = (
     "insights_count",
     "high_critical_insights_count",
     "total_dwell_seconds",
+    "cross_camera_transitions_count",
+    "cross_camera_journeys_count",
 )
 
 
@@ -708,6 +816,9 @@ def compare_runs(
         bucket_seconds=bucket_seconds,
         camera_id=camera_id,
     )
+    pair_flow_deltas = compute_pair_flow_deltas(
+        base_snap.db_path, cand_snap.db_path, camera_id=camera_id
+    )
 
     out_path = Path(output_dir).resolve() if output_dir is not None else None
     diff_img_path = (
@@ -733,6 +844,7 @@ def compare_runs(
         line_deltas=line_deltas,
         insight_deltas=insight_deltas,
         temporal_deltas=temporal_deltas,
+        pair_flow_deltas=pair_flow_deltas,
         spatial_shift=spatial_shift,
     )
     if policy is not None:
@@ -746,6 +858,7 @@ def compare_runs(
             line_deltas=report.line_deltas,
             insight_deltas=report.insight_deltas,
             temporal_deltas=report.temporal_deltas,
+            pair_flow_deltas=report.pair_flow_deltas,
             spatial_shift=report.spatial_shift,
             regression_gate=gate_res,
         )
@@ -803,6 +916,19 @@ def load_regression_policy(path: Path | str | None = None) -> RegressionPolicy:
         ),
         allow_config_drift=bool(
             raw.get("allow_config_drift", defaults.allow_config_drift)
+        ),
+        max_transitions_drop_pct=_opt_float(
+            "max_transitions_drop_pct", defaults.max_transitions_drop_pct
+        ),
+        max_journeys_drop_pct=_opt_float(
+            "max_journeys_drop_pct", defaults.max_journeys_drop_pct
+        ),
+        max_mean_transit_increase_seconds=_opt_float(
+            "max_mean_transit_increase_seconds",
+            defaults.max_mean_transit_increase_seconds,
+        ),
+        min_mean_transition_confidence=_opt_float(
+            "min_mean_transition_confidence", defaults.min_mean_transition_confidence
         ),
     )
 
@@ -974,6 +1100,105 @@ def evaluate_regression_gate(
                     message=(
                         f"Config drift disallowed but {len(report.config_diffs)} "
                         f"parameter(s) changed: {changed_keys}"
+                    ),
+                )
+            )
+
+    if pol.max_transitions_drop_pct is not None:
+        checks += 1
+        if base.cross_camera_transitions_count > 0:
+            drop_pct = (
+                (
+                    base.cross_camera_transitions_count
+                    - cand.cross_camera_transitions_count
+                )
+                / base.cross_camera_transitions_count
+            ) * 100.0
+            if drop_pct > pol.max_transitions_drop_pct:
+                violations.append(
+                    RegressionViolation(
+                        rule_name="max_transitions_drop_pct",
+                        severity="error",
+                        metric_name="cross_camera_transitions_count",
+                        baseline_value=float(base.cross_camera_transitions_count),
+                        candidate_value=float(cand.cross_camera_transitions_count),
+                        threshold=pol.max_transitions_drop_pct,
+                        message=(
+                            f"Cross-camera transitions dropped by {drop_pct:.1f}% "
+                            f"({base.cross_camera_transitions_count} -> "
+                            f"{cand.cross_camera_transitions_count}, "
+                            f"max allowed {pol.max_transitions_drop_pct:.1f}%)"
+                        ),
+                    )
+                )
+
+    if pol.max_journeys_drop_pct is not None:
+        checks += 1
+        if base.cross_camera_journeys_count > 0:
+            drop_pct = (
+                (base.cross_camera_journeys_count - cand.cross_camera_journeys_count)
+                / base.cross_camera_journeys_count
+            ) * 100.0
+            if drop_pct > pol.max_journeys_drop_pct:
+                violations.append(
+                    RegressionViolation(
+                        rule_name="max_journeys_drop_pct",
+                        severity="error",
+                        metric_name="cross_camera_journeys_count",
+                        baseline_value=float(base.cross_camera_journeys_count),
+                        candidate_value=float(cand.cross_camera_journeys_count),
+                        threshold=pol.max_journeys_drop_pct,
+                        message=(
+                            f"Cross-camera journeys dropped by {drop_pct:.1f}% "
+                            f"({base.cross_camera_journeys_count} -> "
+                            f"{cand.cross_camera_journeys_count}, "
+                            f"max allowed {pol.max_journeys_drop_pct:.1f}%)"
+                        ),
+                    )
+                )
+
+    if pol.max_mean_transit_increase_seconds is not None:
+        checks += 1
+        if (
+            base.cross_camera_transitions_count > 0
+            and cand.cross_camera_transitions_count > 0
+        ):
+            inc_sec = cand.mean_transit_seconds - base.mean_transit_seconds
+            if inc_sec > pol.max_mean_transit_increase_seconds:
+                violations.append(
+                    RegressionViolation(
+                        rule_name="max_mean_transit_increase_seconds",
+                        severity="error",
+                        metric_name="mean_transit_seconds",
+                        baseline_value=base.mean_transit_seconds,
+                        candidate_value=cand.mean_transit_seconds,
+                        threshold=pol.max_mean_transit_increase_seconds,
+                        message=(
+                            f"Mean cross-camera transit latency increased by +{inc_sec:.2f}s "
+                            f"({base.mean_transit_seconds:.2f}s -> {cand.mean_transit_seconds:.2f}s, "
+                            f"max allowed +{pol.max_mean_transit_increase_seconds:.2f}s)"
+                        ),
+                    )
+                )
+
+    if pol.min_mean_transition_confidence is not None:
+        checks += 1
+        if (
+            cand.cross_camera_transitions_count > 0
+            and cand.mean_transition_confidence < pol.min_mean_transition_confidence
+        ):
+            violations.append(
+                RegressionViolation(
+                    rule_name="min_mean_transition_confidence",
+                    severity="error",
+                    metric_name="mean_transition_confidence",
+                    baseline_value=base.mean_transition_confidence,
+                    candidate_value=cand.mean_transition_confidence,
+                    threshold=pol.min_mean_transition_confidence,
+                    message=(
+                        f"Mean cross-camera transition confidence "
+                        f"{cand.mean_transition_confidence:.3f} fell below "
+                        f"minimum {pol.min_mean_transition_confidence:.3f}"
                     ),
                 )
             )

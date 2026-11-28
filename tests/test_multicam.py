@@ -13,6 +13,7 @@ from pathlib import Path
 
 from helpers import make_video
 
+from event_intelligence.insights import generate_intelligence_report_markdown
 from event_intelligence.multicam.__main__ import main as multicam_main
 from event_intelligence.multicam.engine import (
     analyze_multi_camera_correlation,
@@ -41,9 +42,11 @@ from event_intelligence.search import main as search_main
 from event_intelligence.spatial import SceneConfig, ZoneSpec, save_scene_config
 from event_intelligence.storage.search_events import (
     SCHEMA_DDL,
+    export_journey_bundle,
     insert_cross_camera_correlation,
     query_cross_camera_journeys,
     query_cross_camera_transitions,
+    query_journey_dossier,
 )
 from event_intelligence.tracking import FrameTracks, TrackDetection, write_tracks_csv
 
@@ -736,6 +739,263 @@ class TestCrossCameraCorrelationPersistence(unittest.TestCase):
                 persisted_jr[0].cameras_visited,
                 ("cam_entrance", "cam_aisle"),
             )
+
+            master_md = (Path(res.run_dir) / "intelligence_report.md").read_text(
+                encoding="utf-8"
+            )
+            self.assertIn("## Cross-Camera Transitions & Stitched Journeys", master_md)
+            self.assertIn("multicam/multicam_correlation_report.md", master_md)
+            self.assertIn("cam_entrance -> cam_aisle", master_md)
+
+            multicam_md = (multicam_dir / "multicam_correlation_report.md").read_text(
+                encoding="utf-8"
+            )
+            self.assertIn("flowchart LR", multicam_md)
+
+
+class TestJourneyDossierAndBundles(unittest.TestCase):
+    """Tests for Phase 11l cross-camera journey dossiers and forensic bundle exports."""
+
+    def test_query_journey_dossier_happy_path_and_errors(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            db_path = _build_multicam_db(Path(tmp) / "intelligence.db")
+            # Insert an insight on corridor track 10 to verify per-hop insight joining
+            with closing(sqlite3.connect(str(db_path))) as conn:
+                conn.execute(
+                    "INSERT INTO insights VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                    (
+                        "ins_c10",
+                        "corridor",
+                        "loitering",
+                        "high",
+                        10,
+                        "corridor_entry",
+                        6.5,
+                        10.5,
+                        4.0,
+                        "Track 10 loitering in corridor_entry",
+                        "",
+                        "",
+                        "",
+                        "",
+                        "{}",
+                    ),
+                )
+                conn.commit()
+
+            report = analyze_multi_camera_correlation(db_path)
+            insert_cross_camera_correlation(db_path, report)
+            journeys = query_cross_camera_journeys(db_path)
+            self.assertEqual(len(journeys), 1)
+            jid = journeys[0].journey_id
+
+            dossier = query_journey_dossier(db_path, jid)
+            self.assertEqual(dossier.journey_id, jid)
+            self.assertEqual(
+                dossier.cameras_visited, ("lobby", "corridor", "exit_hall")
+            )
+            self.assertEqual(dossier.hop_count, 2)
+            self.assertEqual(len(dossier.hops), 3)
+            self.assertEqual(dossier.hops[0].camera_id, "lobby")
+            self.assertEqual(dossier.hops[0].track_id, 1)
+            self.assertIsNone(dossier.hops[0].incoming_transition_id)
+            self.assertEqual(len(dossier.hops[0].events), 1)
+            self.assertEqual(dossier.hops[1].camera_id, "corridor")
+            self.assertEqual(dossier.hops[1].track_id, 10)
+            self.assertIsNotNone(dossier.hops[1].incoming_transition_id)
+            self.assertEqual(len(dossier.hops[1].insights), 1)
+            self.assertEqual(dossier.hops[2].camera_id, "exit_hall")
+            self.assertEqual(dossier.hops[2].track_id, 20)
+            self.assertEqual(dossier.total_insights, 1)
+            self.assertGreaterEqual(dossier.total_events, 2)
+            payload = dossier.to_dict()
+            self.assertEqual(payload["journey_id"], jid)
+            self.assertEqual(len(payload["hops"]), 3)
+
+            # Missing journey raises KeyError
+            with self.assertRaises(KeyError):
+                query_journey_dossier(db_path, "journey_does_not_exist")
+
+            # Empty journey_id raises ValueError
+            with self.assertRaises(ValueError):
+                query_journey_dossier(db_path, "   ")
+
+            # Legacy DB without correlation tables raises KeyError
+            legacy_db = Path(tmp) / "legacy.db"
+            with closing(sqlite3.connect(str(legacy_db))) as conn:
+                conn.execute("CREATE TABLE tracks (track_id INTEGER)")
+                conn.commit()
+            with self.assertRaises(KeyError):
+                query_journey_dossier(legacy_db, jid)
+
+    def test_export_journey_bundle_artifacts_and_cross_camera_media(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            db_path = _build_multicam_db(root / "intelligence.db")
+
+            # Create colliding relative filenames under cameras/lobby and cameras/corridor
+            lobby_snap = root / "cameras" / "lobby" / "snapshots" / "shared.jpg"
+            corridor_snap = root / "cameras" / "corridor" / "snapshots" / "shared.jpg"
+            lobby_snap.parent.mkdir(parents=True, exist_ok=True)
+            corridor_snap.parent.mkdir(parents=True, exist_ok=True)
+            lobby_snap.write_bytes(b"lobby-jpeg-bytes")
+            corridor_snap.write_bytes(b"corridor-jpeg-bytes")
+
+            with closing(sqlite3.connect(str(db_path))) as conn:
+                conn.execute(
+                    "UPDATE events SET snapshot_path = ?, crop_path = ? WHERE event_id = 'ev_l1'",
+                    ("snapshots/shared.jpg", "crops/missing_crop.jpg"),
+                )
+                conn.execute(
+                    "UPDATE events SET snapshot_path = ? WHERE event_id = 'ev_c10'",
+                    ("snapshots/shared.jpg",),
+                )
+                conn.commit()
+
+            report = analyze_multi_camera_correlation(db_path)
+            insert_cross_camera_correlation(db_path, report)
+            jid = query_cross_camera_journeys(db_path)[0].journey_id
+
+            bundle_dir = root / "bundles" / jid
+            manifest = export_journey_bundle(db_path, jid, bundle_dir)
+
+            self.assertEqual(manifest.journey_id, jid)
+            self.assertEqual(
+                manifest.cameras_visited, ("lobby", "corridor", "exit_hall")
+            )
+            self.assertEqual(manifest.hop_count, 2)
+            self.assertTrue(Path(manifest.manifest_path).is_file())
+            self.assertTrue(Path(manifest.report_path).is_file())
+            self.assertTrue(Path(manifest.hops_csv_path).is_file())
+            self.assertTrue(Path(manifest.transitions_csv_path).is_file())
+
+            # Both colliding snapshots copied under distinct camera-prefixed names
+            self.assertIn("lobby_ev_l1_snapshot", manifest.copied_media)
+            self.assertIn("corridor_ev_c10_snapshot", manifest.copied_media)
+            self.assertEqual(
+                (
+                    bundle_dir / manifest.copied_media["lobby_ev_l1_snapshot"]
+                ).read_bytes(),
+                b"lobby-jpeg-bytes",
+            )
+            self.assertEqual(
+                (
+                    bundle_dir / manifest.copied_media["corridor_ev_c10_snapshot"]
+                ).read_bytes(),
+                b"corridor-jpeg-bytes",
+            )
+            self.assertEqual(len(manifest.missing_media), 1)
+            self.assertIn("missing_crop.jpg", manifest.missing_media[0])
+
+            # Verify CSV row counts and Markdown headings
+            with Path(manifest.hops_csv_path).open("r", encoding="utf-8") as f:
+                hop_rows = list(csv.DictReader(f))
+            self.assertEqual(len(hop_rows), 3)
+            with Path(manifest.transitions_csv_path).open("r", encoding="utf-8") as f:
+                tr_rows = list(csv.DictReader(f))
+            self.assertEqual(len(tr_rows), 2)
+
+            md_text = Path(manifest.report_path).read_text(encoding="utf-8")
+            self.assertIn("Cross-Camera Journey Forensic Dossier", md_text)
+            self.assertIn("Chronological Camera Segments", md_text)
+            self.assertIn("Packaged Visual Evidence", md_text)
+
+            manifest_json = json.loads(
+                Path(manifest.manifest_path).read_text(encoding="utf-8")
+            )
+            self.assertEqual(manifest_json["journey_id"], jid)
+            self.assertEqual(len(manifest_json["dossier"]["hops"]), 3)
+
+    def test_search_cli_journey_dossier_and_export_journey(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            db_path = _build_multicam_db(root / "intelligence.db")
+            report = analyze_multi_camera_correlation(db_path)
+            insert_cross_camera_correlation(db_path, report)
+            jid = query_cross_camera_journeys(db_path)[0].journey_id
+
+            buf_json = io.StringIO()
+            with redirect_stdout(buf_json):
+                rc = search_main(
+                    ["--db", str(db_path), "--journey-dossier", jid, "--json"]
+                )
+            self.assertEqual(rc, 0)
+            dossier_data = json.loads(buf_json.getvalue())
+            self.assertEqual(dossier_data["journey_id"], jid)
+            self.assertEqual(len(dossier_data["hops"]), 3)
+
+            buf_text = io.StringIO()
+            with redirect_stdout(buf_text):
+                rc = search_main(["--db", str(db_path), "--journey-dossier", jid])
+            self.assertEqual(rc, 0)
+            self.assertIn("Cross-Camera Journey Dossier", buf_text.getvalue())
+            self.assertIn("lobby -> corridor -> exit_hall", buf_text.getvalue())
+
+            out_bundle = root / "cli_bundle"
+            buf_exp_json = io.StringIO()
+            with redirect_stdout(buf_exp_json):
+                rc = search_main(
+                    [
+                        "--db",
+                        str(db_path),
+                        "--export-journey",
+                        jid,
+                        "--bundle-dir",
+                        str(out_bundle),
+                        "--json",
+                    ]
+                )
+            self.assertEqual(rc, 0)
+            exp_data = json.loads(buf_exp_json.getvalue())
+            self.assertEqual(exp_data["journey_id"], jid)
+            self.assertTrue((out_bundle / "manifest.json").is_file())
+            self.assertTrue((out_bundle / "journey_dossier.md").is_file())
+
+            buf_exp_text = io.StringIO()
+            with redirect_stdout(buf_exp_text):
+                rc = search_main(
+                    [
+                        "--db",
+                        str(db_path),
+                        "--export-journey",
+                        jid,
+                        "--bundle-dir",
+                        str(root / "cli_bundle_text"),
+                    ]
+                )
+            self.assertEqual(rc, 0)
+            self.assertIn(
+                "Exported cross-camera journey bundle", buf_exp_text.getvalue()
+            )
+
+    def test_correlation_markdown_includes_mermaid_flow_graph(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            db_path = _build_multicam_db(Path(tmp) / "intelligence.db")
+            report = analyze_multi_camera_correlation(db_path)
+            md = generate_correlation_markdown(report)
+            self.assertIn("## Camera Transition Flow Graph", md)
+            self.assertIn("```mermaid", md)
+            self.assertIn("flowchart LR", md)
+            self.assertIn('lobby["lobby"]', md)
+            self.assertIn('corridor["corridor"]', md)
+            self.assertIn('exit_hall["exit_hall"]', md)
+
+    def test_executive_intelligence_report_includes_cross_camera_section(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            db_path = _build_multicam_db(Path(tmp) / "intelligence.db")
+            corr = analyze_multi_camera_correlation(db_path)
+            md = generate_intelligence_report_markdown(
+                [],
+                run_id="exec_multicam_test",
+                cross_camera_transitions=corr.transitions,
+                cross_camera_journeys=corr.journeys,
+                multicam_report_path="multicam/multicam_correlation_report.md",
+            )
+            self.assertIn("## Cross-Camera Transitions & Stitched Journeys", md)
+            self.assertIn("multicam/multicam_correlation_report.md", md)
+            self.assertIn("### Correlated Transitions", md)
+            self.assertIn("### Stitched Multi-Hop Journeys", md)
+            self.assertIn("lobby -> corridor -> exit_hall", md)
 
 
 if __name__ == "__main__":

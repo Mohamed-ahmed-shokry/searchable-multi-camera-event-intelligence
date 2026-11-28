@@ -20,6 +20,9 @@ def generate_intelligence_report_markdown(
     zone_counts: Sequence[Any] | None = None,
     line_counts: Sequence[Any] | None = None,
     zone_occupancy_profiles: Sequence[Any] | None = None,
+    cross_camera_transitions: Sequence[Any] | None = None,
+    cross_camera_journeys: Sequence[Any] | None = None,
+    multicam_report_path: str | None = None,
 ) -> str:
     """Generate a GitHub Flavored Markdown executive intelligence report."""
     src = dict(source_info or {})
@@ -199,6 +202,74 @@ def generate_intelligence_report_markdown(
             tot = getattr(l, "total", 0)
             lines.append(f"| `{lid}` | {ab} | {ba} | {tot} |")
         lines.append("")
+
+    if cross_camera_transitions or cross_camera_journeys or multicam_report_path:
+        tr_list = list(cross_camera_transitions or ())
+        jr_list = list(cross_camera_journeys or ())
+        lines.extend(
+            [
+                "## Cross-Camera Transitions & Stitched Journeys",
+                "",
+                (
+                    f"- **Correlated Cross-Camera Transitions:** `{len(tr_list)}` | "
+                    f"**Stitched Multi-Hop Journeys:** `{len(jr_list)}`"
+                ),
+            ]
+        )
+        if multicam_report_path:
+            lines.append(
+                f"- **Detailed Correlation Report:** [{multicam_report_path}]({multicam_report_path})"
+            )
+        lines.append("")
+
+        if tr_list:
+            lines.extend(
+                [
+                    "### Correlated Transitions",
+                    "",
+                    "| ID | Source Track | Target Track | Exit (s) | Entry (s) | Transit (s) | Confidence | Rule |",
+                    "|---|---|---|---:|---:|---:|---:|---|",
+                ]
+            )
+            for tr in tr_list[:20]:
+                tid = getattr(tr, "transition_id", "")
+                fcam = getattr(tr, "from_camera", "")
+                ftrk = getattr(tr, "from_track_id", "")
+                tcam = getattr(tr, "to_camera", "")
+                ttrk = getattr(tr, "to_track_id", "")
+                ex_t = float(getattr(tr, "exit_time", 0.0))
+                en_t = float(getattr(tr, "entry_time", 0.0))
+                dt = float(getattr(tr, "transit_seconds", 0.0))
+                conf = float(getattr(tr, "confidence", 0.0))
+                rule = getattr(tr, "rule_label", "")
+                lines.append(
+                    f"| `{tid}` | `{fcam}#{ftrk}` | `{tcam}#{ttrk}` | "
+                    f"{ex_t:.2f} | {en_t:.2f} | {dt:.2f} | {conf:.2f} | {rule} |"
+                )
+            lines.append("")
+
+        if jr_list:
+            lines.extend(
+                [
+                    "### Stitched Multi-Hop Journeys",
+                    "",
+                    "| Journey ID | Camera Path | Hops | Span (s) | Avg Confidence |",
+                    "|---|---|---:|---:|---:|",
+                ]
+            )
+            for jr in jr_list[:15]:
+                jid = getattr(jr, "journey_id", "")
+                cams_v = getattr(jr, "cameras_visited", ())
+                path_str = " -> ".join(str(c) for c in cams_v)
+                hop_cnt = getattr(jr, "hop_count", None)
+                if hop_cnt is None:
+                    hop_cnt = len(getattr(jr, "hops", ()))
+                span = float(getattr(jr, "total_span_seconds", 0.0))
+                avg_c = float(getattr(jr, "avg_confidence", 0.0))
+                lines.append(
+                    f"| `{jid}` | `{path_str}` | {hop_cnt} | {span:.2f} | {avg_c:.2f} |"
+                )
+            lines.append("")
 
     return "\n".join(lines)
 

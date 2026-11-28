@@ -4,9 +4,18 @@ from __future__ import annotations
 
 import csv
 import json
+import re
 from pathlib import Path
 
 from event_intelligence.multicam.types import MultiCameraCorrelationReport
+
+
+def _mermaid_node_id(name: str) -> str:
+    """Sanitize a camera identifier into a valid Mermaid node ID."""
+    cleaned = re.sub(r"[^A-Za-z0-9_]", "_", name)
+    if not cleaned or cleaned[0].isdigit():
+        return f"cam_{cleaned}"
+    return cleaned
 
 
 def generate_correlation_markdown(report: MultiCameraCorrelationReport) -> str:
@@ -45,6 +54,24 @@ def generate_correlation_markdown(report: MultiCameraCorrelationReport) -> str:
                 f"{flow.min_transit_seconds:.2f} / {flow.max_transit_seconds:.2f} | "
                 f"{flow.avg_confidence:.2f} |"
             )
+        lines.extend(
+            [
+                "",
+                "## Camera Transition Flow Graph",
+                "",
+                "```mermaid",
+                "flowchart LR",
+            ]
+        )
+        for flow in report.pair_flows:
+            src_id = _mermaid_node_id(flow.from_camera)
+            dst_id = _mermaid_node_id(flow.to_camera)
+            lines.append(
+                f'    {src_id}["{flow.from_camera}"] '
+                f'-->|"{flow.transition_count}x / avg {flow.avg_transit_seconds:.1f}s"| '
+                f'{dst_id}["{flow.to_camera}"]'
+            )
+        lines.append("```")
     else:
         lines.append(
             "_No cross-camera transitions detected under the active topology._"
