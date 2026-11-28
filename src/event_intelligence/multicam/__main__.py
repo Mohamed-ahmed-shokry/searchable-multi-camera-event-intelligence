@@ -81,6 +81,40 @@ def build_parser() -> argparse.ArgumentParser:
         ),
     )
     parser.add_argument(
+        "--validate-topology",
+        action="store_true",
+        help=(
+            "Validate --topology structurally and against cameras/zones in --db; "
+            "exits with code 2 if validation errors are found."
+        ),
+    )
+    parser.add_argument(
+        "--calibrate-clocks",
+        action="store_true",
+        help=(
+            "Estimate inter-camera clock-skew offsets via temporal cross-correlation "
+            "across intelligence.db."
+        ),
+    )
+    parser.add_argument(
+        "--reference-camera",
+        type=str,
+        default=None,
+        help="Optional reference camera_id (offset=0.0s) for --calibrate-clocks.",
+    )
+    parser.add_argument(
+        "--max-lag",
+        type=float,
+        default=15.0,
+        help="Maximum clock-skew search radius in seconds for --calibrate-clocks (default: 15.0).",
+    )
+    parser.add_argument(
+        "--write-topology",
+        type=Path,
+        default=None,
+        help="Optional output YAML path to save calibrated camera_time_offsets.",
+    )
+    parser.add_argument(
         "--json",
         dest="as_json",
         action="store_true",
